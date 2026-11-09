@@ -96,14 +96,55 @@ resume:
   language_order_default: ["Java", "Rust", "Python", "TypeScript", "JavaScript", "C++", "C", "SQL", "Bash"]
 
 # ── ATS Company Lists ──
-# Add company slugs as you discover them
+# Verified slugs — leave empty to use built-in KNOWN_* lists from discover.py
 ats:
-  greenhouse: []
-    # Example: ["stripe", "figma", "notion", "ramp", "plaid"]
-  ashby: []
-    # Example: ["linear", "vercel"]
-  lever: []
-    # Example: ["coinbase"]
+  greenhouse:
+    - "stripe"
+    - "airbnb"
+    - "anthropic"
+    - "discord"
+    - "gitlab"
+    - "reddit"
+    - "asana"
+    - "figma"
+    - "plaid"
+    - "brex"
+    - "databricks"
+    - "datadog"
+    - "cloudflare"
+    - "hashicorp"
+    - "rippling"
+    - "duolingo"
+    - "grammarly"
+    - "instacart"
+    - "doordash"
+    - "scale"
+    - "anduril"
+    - "robinhood"
+    - "dropbox"
+    - "hubspot"
+    - "twilio"
+    - "crowdstrike"
+    - "coinbase"
+  ashby:
+    - "openai"
+    - "notion"
+    - "ramp"
+    - "linear"
+    - "cursor"
+    - "elevenlabs"
+    - "replit"
+    - "supabase"
+    - "docker"
+    - "posthog"
+    - "substack"
+    - "mercury"
+    - "vercel"
+    - "deel"
+  lever:
+    - "spotify"
+    - "palantir"
+    - "netflix"
 
 # ── Sponsorship Filter Toggle ──
 # Set to false to disable sponsorship filtering entirely

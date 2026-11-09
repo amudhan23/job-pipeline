@@ -70,21 +70,37 @@ async def detect_ats(company_slug: str) -> str | None:
     return None
 
 
-# ── Known startup lists ──
-# These are well-known companies that use each ATS.
-# Start with these, then grow the list via probing.
+# ── Known company lists ──
+# Verified against public ATS APIs.
+# Slugs = the board token in the API URL.
+# Sources: Apify verified lists, JobsPipe July 2026, web search.
 
 KNOWN_GREENHOUSE = [
-    "stripe", "figma", "notion", "ramp", "plaid", "brex", "airtable",
-    "gitlab", "cloudflare", "cockroachlabs", "hashicorp", "databricks",
-    "gusto", "lattice", "mercury", "navan", "reddit", "rippling",
-    "snyk", "squarespace", "watershed", "webflow",
+    # Big tech
+    "stripe", "airbnb", "anthropic", "discord", "gitlab", "reddit",
+    "samsara", "asana",
+    # Growth-stage / unicorns
+    "figma", "plaid", "brex", "airtable", "databricks", "datadog",
+    "cloudflare", "cockroachlabs", "hashicorp", "gusto",
+    "lattice", "navan", "rippling", "snyk", "squarespace",
+    "watershed", "webflow", "duolingo", "grammarly", "toast",
+    "instacart", "doordash", "scale", "anduril", "flexport",
+    "pinterest", "snap", "robinhood", "dropbox",
+    "hubspot", "docusign", "twilio",
+    "crowdstrike", "paloaltonetworks", "zscaler",
+    # Fintech
+    "coinbase", "block",
 ]
 
 KNOWN_ASHBY = [
-    "linear", "vercel", "replit", "railway", "resend",
+    # Verified via JobsPipe / Ashby endpoint July 2026
+    "openai", "notion", "ramp", "linear", "cursor", "elevenlabs",
+    "replit", "supabase", "docker", "posthog", "substack",
+    "mercury", "vercel", "deel", "clerk",
 ]
 
 KNOWN_LEVER = [
-    "coinbase", "netflix",
+    # Verified via JobsPipe / Lever endpoint July 2026
+    "spotify", "palantir", "netflix", "zoox", "whoop",
+    "gopuff", "ro", "aircall",
 ]
