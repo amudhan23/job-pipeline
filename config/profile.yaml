@@ -1,0 +1,111 @@
+# ── Applicant Profile ──
+profile:
+  full_name: "Amudhan Muthaiah"
+  email: "am15241@nyu.edu"
+  phone: ""
+  linkedin: ""
+  github: ""
+  website: ""
+  university: "New York University"
+  degree: "Master of Science in Computer Science"
+  graduation: "May 2026"
+  work_authorized: true
+  needs_sponsorship: true
+  years_experience: 3
+  willing_to_relocate: true
+  locations:
+    - "New York, NY"
+    - "San Francisco, CA"
+    - "Remote"
+
+# ── Search Filters ──
+filters:
+  role_keywords:
+    - "software engineer"
+    - "backend engineer"
+    - "infrastructure engineer"
+    - "systems engineer"
+    - "platform engineer"
+    - "security engineer"
+  locations:
+    - "New York"
+    - "NYC"
+    - "San Francisco"
+    - "SF"
+    - "Bay Area"
+    - "Remote"
+  exclude_keywords:
+    - "senior"
+    - "staff"
+    - "principal"
+    - "director"
+    - "manager"
+    - "intern"
+    - "co-op"
+    - "PhD"
+  min_experience: 0
+  max_experience: 4
+
+# ── Stack for Scoring ──
+stack:
+  languages:
+    primary: ["Java", "Rust", "TypeScript", "Python"]
+    secondary: ["C++", "JavaScript", "C", "SQL", "Bash"]
+  frameworks: ["Spring Boot", "React", "Node.js", "Express"]
+  databases: ["PostgreSQL", "MySQL", "Redis", "SQLite"]
+  cloud: ["Azure", "AWS", "GCP", "Docker", "Kubernetes"]
+  tools: ["Jenkins", "Git", "Linux", "Terraform"]
+
+# ── Scoring Weights ──
+scoring:
+  stack_match: 0.30
+  experience_alignment: 0.15
+  sponsorship_likelihood: 0.25
+  location_match: 0.15
+  role_type_match: 0.15
+
+# ── Resume Components ──
+resume:
+  ibm_bullets:
+    own: "Owned development of 3 backend services and REST APIs processing 10K+ daily requests using Java and Spring Boot"
+    mig: "Led migration of 50,000-line monolith to Spring Boot microservices on Azure achieving zero downtime and 30% maintenance reduction"
+    dbg: "Drove root-cause debugging across application, infrastructure, and data layers cutting production incidents by 40%"
+    ci: "Implemented Jenkins CI/CD pipelines with centralized logging and real-time observability dashboards"
+    db: "Tuned PostgreSQL and MySQL query plans and introduced Redis caching reducing API response times by 40%"
+  sahara_bullets:
+    ship: "Shipped end-to-end features across React frontend and Node.js backend in fast-paced sprint cycles"
+    int: "Architected third-party integration layer with circuit breakers and failure recovery handling 5K+ daily API calls"
+    tx: "Built transaction validation and consistency checks across distributed services ensuring data integrity at scale"
+  projects:
+    req-guard:
+      name: "req-guard"
+      tags: ["rust", "async", "security", "http", "middleware"]
+      desc: "Rust async HTTP middleware, privilege-escalation filtering, concurrent request processing"
+    AccessMint:
+      name: "AccessMint"
+      tags: ["typescript", "react", "node", "postgresql", "blockchain", "identity"]
+      desc: "TypeScript, React, Node, PostgreSQL, ETHGlobal NYC 2026, identity verification, audit logging"
+    two-pass-linker:
+      name: "Two-Pass Linker"
+      tags: ["c++", "systems", "elf", "linker"]
+      desc: "C++ ELF linker, symbol resolution, relocation"
+    commentator:
+      name: "Commentator"
+      tags: ["typescript", "node", "ai", "voice", "real-time"]
+      desc: "TypeScript, Node.js, Gemini AI, ElevenLabs voice, real-time sports commentary, 15 languages"
+  language_order_default: ["Java", "Rust", "Python", "TypeScript", "JavaScript", "C++", "C", "SQL", "Bash"]
+
+# ── ATS Company Lists ──
+# Add company slugs as you discover them
+ats:
+  greenhouse: []
+    # Example: ["stripe", "figma", "notion", "ramp", "plaid"]
+  ashby: []
+    # Example: ["linear", "vercel"]
+  lever: []
+    # Example: ["coinbase"]
+
+# ── Sponsorship Blocklist ──
+# Companies confirmed to not sponsor
+sponsorship_blocklist:
+  - "palantir"  # Example — verify before adding

@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "job-pipeline"
+version = "0.1.0"
+description = "Automated job application pipeline with H-1B sponsorship filtering and LaTeX resume generation"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "Amudhan Muthaiah", email = "am15241@nyu.edu"}]
+
+dependencies = [
+    "httpx>=0.27",
+    "beautifulsoup4>=4.12",
+    "pydantic>=2.5",
+    "rich>=13.0",
+    "click>=8.1",
+    "jinja2>=3.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.4", "mypy>=1.10"]
+
+[project.scripts]
+jobpipe = "pipeline.cli:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
