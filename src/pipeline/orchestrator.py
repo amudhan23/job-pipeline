@@ -27,7 +27,8 @@ class Pipeline:
         self.ashby = AshbyScraper(config)
         self.lever = LeverScraper(config)
         self.sponsorship = SponsorshipFilter(
-            blocklist=config.get("sponsorship_blocklist", [])
+            blocklist=config.get("sponsorship_blocklist", []),
+            enabled=config.get("sponsorship_filter_enabled", True),
         )
         self.scorer = FitScorer(config)
 
@@ -67,9 +68,10 @@ class Pipeline:
             logger.warning("No jobs found")
             return []
 
-        # Stage 2: Sponsorship filter
+        # Stage 2: Sponsorship — enrich all jobs, then filter out JD-blocked ones
         jobs = self.sponsorship.enrich_jobs(jobs)
-        logger.info("Sponsorship data enriched")
+        jobs = self.sponsorship.filter_blocked(jobs)
+        logger.info(f"After sponsorship: {len(jobs)} eligible jobs")
 
         # Stage 3: Score and rank
         jobs = self.scorer.score_jobs(jobs)

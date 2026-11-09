@@ -44,8 +44,8 @@ class FitScorer:
         # Experience alignment (0-100)
         breakdown["experience_alignment"] = self._score_experience(job.description, job.title)
 
-        # Sponsorship likelihood (0-100)
-        breakdown["sponsorship_likelihood"] = self._score_sponsorship(job.sponsorship)
+        # Sponsorship likelihood (0-100) — JD-first, H-1B data supplementary
+        breakdown["sponsorship_likelihood"] = self._score_sponsorship(job)
 
         # Location match (0-100)
         breakdown["location_match"] = self._score_location(job.location)
@@ -119,14 +119,22 @@ class FitScorer:
             return 95.0  # Sweet spot
         return 70.0  # Wide range, we're on the low end
 
-    def _score_sponsorship(self, likelihood: SponsorshipLikelihood) -> float:
-        """Score based on sponsorship likelihood."""
+    def _score_sponsorship(self, job: Job) -> float:
+        """Score based on sponsorship signals.
+
+        JD-first: if the JD explicitly blocks sponsorship → 0.
+        Otherwise, use H-1B filing data as a positive signal.
+        """
+        if job.jd_blocks_sponsorship:
+            return 0.0  # JD explicitly says no sponsorship
+
+        # H-1B data is supplementary — boosts confidence, doesn't block
         return {
             SponsorshipLikelihood.HIGH: 100.0,
-            SponsorshipLikelihood.MEDIUM: 70.0,
-            SponsorshipLikelihood.UNKNOWN: 50.0,
-            SponsorshipLikelihood.LOW: 15.0,
-        }[likelihood]
+            SponsorshipLikelihood.MEDIUM: 80.0,
+            SponsorshipLikelihood.UNKNOWN: 60.0,  # No data = neutral-positive
+            SponsorshipLikelihood.LOW: 40.0,       # Low filings but JD didn't block
+        }[job.sponsorship]
 
     def _score_location(self, location: str) -> float:
         """Score location match."""

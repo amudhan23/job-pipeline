@@ -105,7 +105,11 @@ ats:
   lever: []
     # Example: ["coinbase"]
 
+# ── Sponsorship Filter Toggle ──
+# Set to false to disable sponsorship filtering entirely
+sponsorship_filter_enabled: true
+
 # ── Sponsorship Blocklist ──
-# Companies confirmed to not sponsor
+# Companies confirmed to not sponsor (supplementary info, not a blocker)
 sponsorship_blocklist:
   - "palantir"  # Example — verify before adding

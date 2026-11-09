@@ -53,6 +53,7 @@ class Job:
     # Enriched fields (filled by later stages)
     sponsorship: SponsorshipLikelihood = SponsorshipLikelihood.UNKNOWN
     h1b_filings_count: int = 0
+    jd_blocks_sponsorship: bool = False  # True if JD explicitly says "no sponsorship"
     fit_score: float = 0.0
     fit_breakdown: dict[str, float] = field(default_factory=dict)
     resume_path: str | None = None
