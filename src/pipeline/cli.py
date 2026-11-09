@@ -111,6 +111,23 @@ def export(ctx: click.Context, output: str) -> None:
 
 
 @main.command()
+@click.option("--file", "-f", default=None, help="Path to JSON file (default: data/h1b_seed.json)")
+@click.pass_context
+def seed_h1b(ctx: click.Context, file: str | None) -> None:
+    """Seed the H-1B database from a JSON file."""
+    from pipeline.filters.sponsorship import SponsorshipFilter
+
+    sf = SponsorshipFilter()
+    seed_path = Path(file) if file else Path(__file__).resolve().parents[2] / "data" / "h1b_seed.json"
+    if not seed_path.exists():
+        console.print(f"[red]File not found: {seed_path}[/red]")
+        return
+
+    count = sf.import_from_json(seed_path)
+    console.print(f"[bold green]Imported {count} H-1B records[/bold green]")
+
+
+@main.command()
 @click.argument("company_slug")
 @click.pass_context
 def probe(ctx: click.Context, company_slug: str) -> None:
@@ -134,12 +151,16 @@ def _jobs_table(jobs: list) -> Table:
     table.add_column("Platform", width=10)
 
     for j in jobs:
+        # Show JD block status alongside H-1B filing data
+        h1b_info = j.sponsorship.value
+        if j.jd_blocks_sponsorship:
+            h1b_info = "⛔ NO"
         table.add_row(
             f"{j.fit_score:.0f}",
             j.company[:20],
             j.title[:35],
             j.location[:15],
-            j.sponsorship.value,
+            h1b_info,
             j.platform.value,
         )
     return table

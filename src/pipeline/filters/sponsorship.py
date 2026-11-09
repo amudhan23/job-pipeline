@@ -106,13 +106,34 @@ class SponsorshipFilter:
         conn.close()
 
     def lookup_company(self, company_name: str) -> CompanyH1BRecord | None:
-        """Look up a company's H-1B filing history from the local cache."""
+        """Look up a company's H-1B filing history from the local cache.
+
+        Tries exact match first, then prefix/contains match as fallback.
+        This handles cases like "Notion" matching "Notion Labs" in the DB.
+        """
         normalized = normalize_company_name(company_name)
         conn = sqlite3.connect(self.db_path)
+
+        # Try exact match first
         row = conn.execute(
             "SELECT * FROM h1b_filings WHERE normalized_name = ?",
             (normalized,),
         ).fetchone()
+
+        # Fallback: prefix match (e.g., "notion" matches "notion labs")
+        if not row:
+            row = conn.execute(
+                "SELECT * FROM h1b_filings WHERE normalized_name LIKE ? ORDER BY recent_filings DESC LIMIT 1",
+                (f"{normalized}%",),
+            ).fetchone()
+
+        # Fallback: the DB name starts with our query (e.g., "jane street group" contains "jane street")
+        if not row:
+            row = conn.execute(
+                "SELECT * FROM h1b_filings WHERE normalized_name LIKE ? ORDER BY recent_filings DESC LIMIT 1",
+                (f"%{normalized}%",),
+            ).fetchone()
+
         conn.close()
 
         if not row:

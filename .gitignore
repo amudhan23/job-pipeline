@@ -13,8 +13,10 @@ venv/
 env/
 
 # Data (local databases, don't commit)
-data/
+data/*.db
 *.db
+# But track seed files
+!data/h1b_seed.json
 
 # Generated resumes
 output/
