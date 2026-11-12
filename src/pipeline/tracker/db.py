@@ -99,6 +99,14 @@ class Tracker:
         conn.commit()
         conn.close()
 
+    def get_job(self, job_id: str) -> dict[str, Any] | None:
+        """Get a single job by ID."""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        conn.close()
+        return dict(row) if row else None
+
     def get_top_jobs(self, limit: int = 20, status: str | None = None) -> list[dict[str, Any]]:
         """Get top-scored jobs, optionally filtered by status."""
         conn = sqlite3.connect(self.db_path)

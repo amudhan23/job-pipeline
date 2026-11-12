@@ -128,6 +128,47 @@ def seed_h1b(ctx: click.Context, file: str | None) -> None:
 
 
 @main.command()
+@click.option("--port", "-p", default=8050, help="Port to run on")
+@click.pass_context
+def dashboard(ctx: click.Context, port: int) -> None:
+    """Open the web dashboard for browsing jobs."""
+    from pipeline.dashboard.app import run_dashboard
+    run_dashboard(port=port)
+
+
+@main.command()
+@click.option("--job-id", "-j", required=True, help="Job ID to generate resume for")
+@click.option("--output-dir", "-o", default="output", help="Output directory for PDFs")
+@click.pass_context
+def resume(ctx: click.Context, job_id: str, output_dir: str) -> None:
+    """Generate a tailored resume for a tracked job."""
+    from pipeline.resume.generator import ResumeGenerator
+    from pipeline.models import Job
+
+    config = ctx.obj["config"]
+    template_path = Path(__file__).resolve().parents[2] / "templates" / "generic.tex"
+
+    if not template_path.exists():
+        console.print(f"[red]Template not found: {template_path}[/red]")
+        return
+
+    # Get job from tracker
+    tracker = Tracker()
+    job_data = tracker.get_job(job_id)
+    if not job_data:
+        console.print(f"[red]Job {job_id} not found in tracker[/red]")
+        return
+
+    gen = ResumeGenerator(template_path, config)
+    job = Job(**{k: v for k, v in job_data.items() if k in Job.__dataclass_fields__})
+    result = gen.build(job, Path(output_dir))
+    if result:
+        console.print(f"[bold green]Resume generated: {result}[/bold green]")
+    else:
+        console.print("[red]Resume generation failed — is pdflatex installed?[/red]")
+
+
+@main.command()
 @click.argument("company_slug")
 @click.pass_context
 def probe(ctx: click.Context, company_slug: str) -> None:

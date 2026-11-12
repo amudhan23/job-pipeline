@@ -194,24 +194,199 @@ class ResumeGenerator:
     def _apply_config(self, template: str, config: ResumeConfig) -> str:
         """Apply resume configuration to the LaTeX template.
 
-        This is a placeholder — the actual implementation depends on
-        the structure of your generic.tex template. It should:
-        1. Reorder IBM bullet \resumeItem{} entries
-        2. Reorder Sahara AI bullet entries
-        3. Select and reorder project \resumeProjectHeading entries
-        4. Rewrite the Languages line
+        Uses marker comments in the .tex to identify sections:
+          % IBM_BULLETS_START / % IBM_BULLETS_END
+          % SAHARA_BULLETS_START / % SAHARA_BULLETS_END
+          % PROJECTS_START / % PROJECTS_END
+          % LANGUAGES_LINE
+        And placeholder tokens for content:
+          [IBM_OWN], [IBM_MIG], [IBM_DBG], [IBM_CI], [IBM_DB]
+          [SAHARA_SHIP], [SAHARA_INT], [SAHARA_TX]
+          [REQGUARD_DESC], [ACCESSMINT_DESC], [LINKER_DESC], [COMMENTATOR_DESC]
+          [LANGUAGES]
         """
-        # For now, return the template as-is.
-        # TODO: Implement once we have the actual generic.tex template.
-        # The implementation will use regex or marker comments in the .tex
-        # to identify sections and reorder them.
-        #
-        # Expected markers in generic.tex:
-        #   % IBM_BULLETS_START / % IBM_BULLETS_END
-        #   % SAHARA_BULLETS_START / % SAHARA_BULLETS_END
-        #   % PROJECTS_START / % PROJECTS_END
-        #   % LANGUAGES_LINE
-        return template
+        result = template
+
+        # 1. Fill in bullet text from config
+        ibm_bullets = self.resume_config.get("ibm_bullets", {})
+        result = result.replace("[IBM_OWN]", ibm_bullets.get("own", ""))
+        result = result.replace("[IBM_MIG]", ibm_bullets.get("mig", ""))
+        result = result.replace("[IBM_DBG]", ibm_bullets.get("dbg", ""))
+        result = result.replace("[IBM_CI]", ibm_bullets.get("ci", ""))
+        result = result.replace("[IBM_DB]", ibm_bullets.get("db", ""))
+
+        sahara_bullets = self.resume_config.get("sahara_bullets", {})
+        result = result.replace("[SAHARA_SHIP]", sahara_bullets.get("ship", ""))
+        result = result.replace("[SAHARA_INT]", sahara_bullets.get("int", ""))
+        result = result.replace("[SAHARA_TX]", sahara_bullets.get("tx", ""))
+
+        # Fill project descriptions
+        projects_config = self.resume_config.get("projects", {})
+        for key, proj in projects_config.items():
+            desc = proj.get("desc", "") if isinstance(proj, dict) else ""
+            # Escape LaTeX special chars in descriptions
+            desc = self._escape_latex(desc)
+
+        result = result.replace("[REQGUARD_DESC]", self._escape_latex(
+            projects_config.get("req-guard", {}).get("desc", "")))
+        result = result.replace("[ACCESSMINT_DESC]", self._escape_latex(
+            projects_config.get("AccessMint", {}).get("desc", "")))
+        result = result.replace("[LINKER_DESC]", self._escape_latex(
+            projects_config.get("two-pass-linker", {}).get("desc", "")))
+        result = result.replace("[COMMENTATOR_DESC]", self._escape_latex(
+            projects_config.get("commentator", {}).get("desc", "")))
+
+        # 2. Reorder IBM bullets
+        result = self._reorder_section(
+            result,
+            "IBM_BULLETS_START", "IBM_BULLETS_END",
+            config.ibm_bullet_order,
+            prefix="IBM_",
+        )
+
+        # 3. Reorder Sahara bullets
+        result = self._reorder_section(
+            result,
+            "SAHARA_BULLETS_START", "SAHARA_BULLETS_END",
+            config.sahara_bullet_order,
+            prefix="SAHARA_",
+        )
+
+        # 4. Reorder projects (select top 3 from the 4 available)
+        result = self._reorder_projects(result, config.projects[:3])
+
+        # 5. Set language order
+        lang_line = ", ".join(config.language_order)
+        result = result.replace("[LANGUAGES]", lang_line)
+
+        return result
+
+    def _reorder_section(
+        self, text: str, start_marker: str, end_marker: str,
+        order: list[str], prefix: str,
+    ) -> str:
+        """Reorder \\resumeItem lines within a marked section.
+
+        Finds lines tagged with the marker (e.g., lines containing IBM_OWN)
+        and reorders them according to the given order.
+        """
+        start_pat = re.compile(rf"^% {start_marker}\s*$", re.MULTILINE)
+        end_pat = re.compile(rf"^% {end_marker}\s*$", re.MULTILINE)
+
+        start_match = start_pat.search(text)
+        end_match = end_pat.search(text)
+
+        if not start_match or not end_match:
+            logger.warning(f"Markers {start_marker}/{end_marker} not found in template")
+            return text
+
+        # Extract the section between markers
+        section = text[start_match.end():end_match.start()]
+        lines = section.strip().split("\n")
+
+        # Build a map: key → line (each resumeItem line)
+        key_map: dict[str, str] = {}
+        for line in lines:
+            line_stripped = line.strip()
+            if not line_stripped or line_stripped.startswith("%"):
+                continue
+            # Match by content — the bullet text tells us which key it is
+            for key in order:
+                marker_tag = f"{prefix}{key.upper()}"
+                # After substitution, check if the bullet content from that key is in this line
+                bullet_config = self.resume_config.get(
+                    start_marker.split("_")[0].lower() + "_bullets", {}
+                )
+                bullet_text = bullet_config.get(key, "")
+                if bullet_text and bullet_text[:30] in line:
+                    key_map[key] = line
+                    break
+
+        # Rebuild section in desired order
+        ordered_lines = []
+        for key in order:
+            if key in key_map:
+                ordered_lines.append(key_map[key])
+
+        # Include any lines not matched (safety net)
+        matched_lines = set(key_map.values())
+        for line in lines:
+            if line.strip() and not line.strip().startswith("%") and line not in matched_lines:
+                ordered_lines.append(line)
+
+        new_section = "\n".join(ordered_lines)
+        return (
+            text[:start_match.end()] + "\n" +
+            new_section + "\n" +
+            text[end_match.start():]
+        )
+
+    def _reorder_projects(self, text: str, projects: list[str]) -> str:
+        """Reorder project blocks between PROJECTS_START/PROJECTS_END markers.
+
+        Each project block starts with % PROJECT:<name> and runs until
+        the next % PROJECT: or % PROJECTS_END.
+        """
+        start_pat = re.compile(r"^% PROJECTS_START\s*$", re.MULTILINE)
+        end_pat = re.compile(r"^% PROJECTS_END\s*$", re.MULTILINE)
+
+        start_match = start_pat.search(text)
+        end_match = end_pat.search(text)
+
+        if not start_match or not end_match:
+            logger.warning("Project markers not found in template")
+            return text
+
+        section = text[start_match.end():end_match.start()]
+
+        # Parse project blocks
+        project_blocks: dict[str, str] = {}
+        current_name = None
+        current_lines: list[str] = []
+
+        for line in section.split("\n"):
+            proj_match = re.match(r"^% PROJECT:(.+)$", line.strip())
+            if proj_match:
+                if current_name:
+                    project_blocks[current_name] = "\n".join(current_lines)
+                current_name = proj_match.group(1).strip()
+                current_lines = [line]
+            elif current_name:
+                current_lines.append(line)
+
+        if current_name:
+            project_blocks[current_name] = "\n".join(current_lines)
+
+        # Rebuild in desired order (top 3)
+        ordered_blocks = []
+        for proj_name in projects:
+            if proj_name in project_blocks:
+                ordered_blocks.append(project_blocks[proj_name])
+
+        new_section = "\n".join(ordered_blocks)
+        return (
+            text[:start_match.end()] + "\n" +
+            new_section + "\n" +
+            text[end_match.start():]
+        )
+
+    @staticmethod
+    def _escape_latex(text: str) -> str:
+        """Escape special LaTeX characters."""
+        replacements = {
+            "&": r"\&",
+            "%": r"\%",
+            "$": r"\$",
+            "#": r"\#",
+            "_": r"\_",
+            "{": r"\{",
+            "}": r"\}",
+            "~": r"\textasciitilde{}",
+            "^": r"\^{}",
+        }
+        for char, escaped in replacements.items():
+            text = text.replace(char, escaped)
+        return text
 
     def _validate_pdf(self, pdf_path: Path) -> bool:
         """Validate PDF is exactly 1 page with 94-98% fill."""
