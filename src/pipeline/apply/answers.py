@@ -32,10 +32,20 @@ _RULES: list[tuple[str, str]] = [
     (r"^(full )?name\b|^your name|legal name", "full_name"),
     (r"e-?mail", "email"),
     (r"phone|mobile|telephone", "phone"),
+    # Specific immigration questions before the generic ones
+    (r"h-?1b (status|petition)|held h-?1b|h-?1b .*approved", "h1b_before"),
+    (r"permanent resident", "other_pr"),
     # Sponsorship before authorization: "authorized ... without sponsorship" is a sponsorship question
     (r"sponsor", "sponsorship"),
-    (r"(legally )?authori[sz]ed to work|eligib\w* to work|right to work|work authori[sz]ation", "authorized_us"),
-    (r"visa|immigration status|work status|citizenship status", "visa_status"),
+    (r"(legally )?authori[sz]ed to work|eligib\w* to (work|begin employment)|right to work|"
+     r"work authori[sz]ation|legally eligible", "authorized_us"),
+    (r"citizenship|citizen of|export (licens|control)", "citizenship"),
+    (r"visa|immigration status|work status", "visa_status"),
+    (r"non-?compet|restrictive covenant|agreement that would (prevent|restrict|limit)", "noncompete"),
+    (r"(future|other) (opportunit|roles?|positions?|openings)|considered for (other|future)", "future_roles"),
+    (r"\b(current(ly)?|presently)\b.*\b(employee|employed)\b", "current_employer"),
+    (r"\b(previously|ever|formerly|in the past)\b.*\b(employed|worked)\b", "past_employers"),
+    (r"^country\b|country of residence|country you live|\bcountry\b(?!.*citizen)", "country"),
     (r"veteran", "veteran"),
     (r"disabilit", "disability"),
     (r"gender|\bsex\b", "gender"),
@@ -61,11 +71,19 @@ def is_consent(label: str) -> bool:
     return bool(_CONSENT.search(label))
 
 
-def answer_for(label: str, details: dict[str, str]) -> Answer | None:
-    """Best answer for a question, or None if we shouldn't guess."""
+def answer_for(label: str, details: dict[str, str], company: str = "",
+               saved: dict[str, str] | None = None) -> Answer | None:
+    """Best answer for a question, or None if we shouldn't guess.
+
+    Your saved answers to specific questions win over the rules."""
+    from pipeline.applicant import normalize_question
     text = " ".join(label.lower().replace("*", " ").split())
     if not text or is_consent(text):
         return None
+    if saved:
+        q = normalize_question(label, company)
+        if q in saved:
+            return Answer(saved[q], "your saved answer")
     for pattern, field in _RULES:
         if not re.search(pattern, text):
             continue
@@ -76,9 +94,26 @@ def answer_for(label: str, details: dict[str, str]) -> Answer | None:
             return Answer(name, "first_name + last_name") if name else None
         if field == "sponsorship":
             return _sponsorship(text, details)
+        if field in ("current_employer", "past_employers"):
+            return _employer(text, field, details, company)
         value = details.get(field, "")
         return Answer(value, field) if value else None
     return None
+
+
+def _employer(text: str, field: str, details: dict[str, str], company: str) -> Answer | None:
+    """"Are you a current <X> employee?" / "Have you previously worked for <X>?"
+    Yes only if X (or this company) is in your saved employers."""
+    if not re.match(r"(are|have|do|did|were|is)\b", text):
+        return None                      # "Where are you currently employed?" wants a name
+    raw = details.get(field, "").strip()
+    if not raw:
+        return None                      # unknown — ask rather than guess
+    names = [n.strip().lower() for n in raw.split(",")
+             if n.strip() and n.strip().lower() not in ("none", "n/a", "no")]
+    mentioned = [n for n in names if re.search(rf"\b{re.escape(n)}\b", text)]
+    is_this_company = company and any(n == company.lower() for n in names)
+    return Answer("Yes" if mentioned or is_this_company else "No", field)
 
 
 def _sponsorship(text: str, details: dict[str, str]) -> Answer | None:

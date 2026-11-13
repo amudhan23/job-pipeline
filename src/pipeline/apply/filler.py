@@ -31,8 +31,14 @@ _ENUMERATE_JS = r"""
   const txt = s => (s || '').replace(/\s+/g, ' ').trim();
   const visible = el => {
     if (el.type === 'file') return true;           // file inputs are often hidden behind a button
+    // Hidden "shadow" inputs that dropdown widgets keep for form validation
+    // (Greenhouse's react-select) would otherwise count every question twice
+    if (el.closest('[aria-hidden="true"]')) return false;
     const r = el.getBoundingClientRect(), st = getComputedStyle(el);
-    return st.display !== 'none' && st.visibility !== 'hidden' && (r.width > 0 || r.height > 0);
+    if (st.display === 'none' || st.visibility === 'hidden') return false;
+    if (parseFloat(st.opacity) === 0 && el.getAttribute('role') !== 'combobox') return false;
+    if (el.tabIndex === -1 && r.width <= 2 && r.height <= 2) return false;
+    return r.width > 0 || r.height > 0;
   };
   const labelOf = el => {
     if (el.getAttribute('aria-labelledby')) {
@@ -62,6 +68,24 @@ _ENUMERATE_JS = r"""
   const out = []; let n = 0;
   const tag = el => { const id = 'jp' + (n++); el.setAttribute('data-jp', id); return id; };
   const seenRadio = new Set();
+  const seenBox = new Set();
+
+  // Group label for a set of controls: fieldset legend, else the nearest
+  // container holding all of them that has a label-like element
+  const groupLabel = group => {
+    const fs = group[0].closest('fieldset');
+    if (fs && group.every(g => fs.contains(g)) && fs.querySelector('legend'))
+      return txt(fs.querySelector('legend').innerText);
+    let c = group[0].parentElement;
+    for (let i = 0; i < 6 && c; i++, c = c.parentElement) {
+      if (group.every(g => c.contains(g))) {
+        const l = [...c.querySelectorAll('legend, [class*="label" i], [class*="question" i], label')]
+          .find(x => !group.some(g => x.contains(g)) && txt(x.innerText));
+        if (l) return txt(l.innerText);
+      }
+    }
+    return '';
+  };
 
   for (const el of document.querySelectorAll('input, textarea, select')) {
     const type = (el.type || el.tagName).toLowerCase();
@@ -94,7 +118,22 @@ _ENUMERATE_JS = r"""
       out.push({kind: 'select', id: tag(el), label, required: required(el, label),
                 options: [...el.options].map(o => txt(o.text))});
     } else if (type === 'checkbox') {
-      out.push({kind: 'checkbox', id: tag(el), label, required: required(el, label)});
+      if (seenBox.has(el)) continue;
+      // Several checkboxes answering one question ("Which platforms do you use?")
+      let group = el.name ? [...document.querySelectorAll(`input[type=checkbox][name="${CSS.escape(el.name)}"]`)] : [];
+      if (group.length < 2) {
+        const fs = el.closest('fieldset');
+        group = fs ? [...fs.querySelectorAll('input[type=checkbox]')] : [el];
+      }
+      group = group.filter(visible);
+      if (group.length >= 2) {
+        group.forEach(g => seenBox.add(g));
+        const gl = groupLabel(group);
+        out.push({kind: 'checkboxes', label: gl, required: /\*\s*$/.test(gl),
+                  options: group.map(g => ({id: tag(g), text: labelOf(g)}))});
+      } else {
+        out.push({kind: 'checkbox', id: tag(el), label, required: required(el, label)});
+      }
     } else if (type === 'file') {
       out.push({kind: 'file', id: tag(el), label, required: required(el, label)});
     } else {
@@ -129,6 +168,7 @@ class FieldResult:
     required: bool
     value: str = ""
     source: str = ""
+    options: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -173,20 +213,40 @@ def application_url(job: dict[str, Any]) -> str | None:
     return None
 
 
+def _dedupe(fields: list[dict]) -> list[dict]:
+    """Drop twins of the same question (a dropdown widget plus its plain
+    input, or one question rendered twice) — keep the most capable control."""
+    rank = {"combobox": 0, "select": 1, "radio": 2, "buttons": 2, "checkboxes": 2}
+    best: dict[str, dict] = {}
+    order: list[str] = []
+    for f in fields:
+        key = f.get("label", "").strip().lower()
+        if not key or f["kind"] in ("file", "checkbox"):
+            order.append(id(f)); best[id(f)] = f
+            continue
+        if key not in best:
+            order.append(key); best[key] = f
+        elif rank.get(f["kind"], 9) < rank.get(best[key]["kind"], 9):
+            best[key] = f
+    return [best[k] for k in order]
+
+
 def fill_form(page, details: dict[str, str], resume_path: Path | None,
-              report: FillReport) -> None:
+              report: FillReport, saved: dict[str, str] | None = None) -> None:
     """Fill every question on an already-open page; records results in report."""
-    fields = page.evaluate(_ENUMERATE_JS)
+    fields = _dedupe(page.evaluate(_ENUMERATE_JS))
     for f in fields:
         label, kind, required = f.get("label", ""), f["kind"], bool(f.get("required"))
-        result = FieldResult(label=label, kind=kind, required=required)
+        options = f.get("options") or []
+        result = FieldResult(label=label, kind=kind, required=required,
+                             options=[o["text"] if isinstance(o, dict) else o for o in options])
 
         if kind == "checkbox" and is_consent(label):
             result.source = "legal consent — read and tick it yourself"
             (report.needs_attention if required else report.skipped_optional).append(result)
             continue
 
-        ans = answer_for(label, details)
+        ans = answer_for(label, details, report.company, saved)
         done = False
         if ans:
             try:
@@ -232,18 +292,16 @@ def _apply(page, f: dict, value: str, resume_path: Path | None) -> bool:
         target.check() if kind == "radio" else target.click()
         return True
     if kind == "combobox":
-        box = page.locator(f'[data-jp="{f["id"]}"]')
-        box.click()
-        box.fill(value if value != "Decline to self-identify" else "decline")
-        options = page.locator('[role="option"]')
-        options.first.wait_for(timeout=3000)
-        texts = options.all_inner_texts()
-        choice = pick_option(value, texts)
-        if not choice:
-            box.press("Escape")
-            box.fill("")
+        return _fill_combobox(page, page.locator(f'[data-jp="{f["id"]}"]'), value, f.get("label", ""))
+    if kind == "checkboxes":
+        # Saved answer like "YouTube, Other" — tick each matching option
+        wanted = [w.strip() for w in value.split(",") if w.strip()]
+        texts = [o["text"] for o in f["options"]]
+        picks = [pick_option(w, texts) for w in wanted]
+        if not wanted or None in picks:
             return False
-        options.nth(texts.index(choice)).click()
+        for p in picks:
+            page.locator(f'[data-jp="{f["options"][texts.index(p)]["id"]}"]').check()
         return True
     if kind == "checkbox":
         if value.lower() in ("yes", "true"):
@@ -253,8 +311,56 @@ def _apply(page, f: dict, value: str, resume_path: Path | None) -> bool:
     return False
 
 
+def _visible_options(page) -> tuple[Any, list[str]]:
+    opts = page.locator('[role="option"]:visible')
+    return opts, [t.strip() for t in opts.all_inner_texts()]
+
+
+def _fill_combobox(page, box, value: str, label: str) -> bool:
+    """Searchable or click-only dropdown (react-select and friends).
+
+    1. Click it open and look for the option among those shown — click-only
+       Yes/No dropdowns don't accept typing at all.
+    2. If not there and the box accepts typing, type a short query (just the
+       city for location searches) and wait for suggestions.
+    """
+    box.click()
+    try:
+        page.locator('[role="option"]:visible').first.wait_for(timeout=4000)
+    except Exception:
+        pass
+    opts, texts = _visible_options(page)
+    choice = pick_option(value, texts)
+
+    if not choice and box.is_editable():
+        query = value
+        if re.search(r"location|city|where", label, re.I):
+            query = value.split(",")[0]                  # "New York, NY" → "New York"
+        elif value == "Decline to self-identify":
+            query = "decline"
+        box.fill(query)
+        try:
+            page.locator('[role="option"]:visible').first.wait_for(timeout=6000)
+        except Exception:
+            pass
+        opts, texts = _visible_options(page)
+        choice = pick_option(value, texts) or (
+            # location suggestions read "New York, NY, USA" — accept the first that starts with the city
+            next((t for t in texts if t.lower().startswith(query.lower())), None)
+            if re.search(r"location|city|where", label, re.I) else None)
+
+    if not choice:
+        box.press("Escape")
+        if box.is_editable():
+            box.fill("")
+        return False
+    opts.nth(texts.index(choice)).click()
+    return True
+
+
 def practice_apply(job: dict[str, Any], details: dict[str, str], resume_path: Path | None,
-                   out_dir: Path, url: str | None = None, headless: bool = True) -> FillReport:
+                   out_dir: Path, url: str | None = None, headless: bool = True,
+                   saved: dict[str, str] | None = None) -> FillReport:
     """Open the application, fill it, screenshot it. Never submits."""
     from playwright.sync_api import sync_playwright, Error as PWError
 
@@ -271,10 +377,26 @@ def practice_apply(job: dict[str, Any], details: dict[str, str], resume_path: Pa
         browser = _launch(pw, headless)
         try:
             page = browser.new_page(viewport={"width": 1280, "height": 900})
-            page.goto(target, wait_until="networkidle", timeout=45000)
-            fill_form(page, details, resume_path, report)
+            page.set_default_timeout(8000)      # no 30-second hangs on one stubborn field
+            page.goto(target, wait_until="domcontentloaded", timeout=45000)
             out_dir.mkdir(parents=True, exist_ok=True)
             shot = out_dir / "filled.png"
+            # Forms on Ashby/new Greenhouse are drawn by JavaScript after load
+            try:
+                page.wait_for_selector(
+                    "form input:not([type=hidden]), form textarea, input[type=email], input[type=file]",
+                    timeout=20000)
+            except PWError:
+                page.screenshot(path=str(shot), full_page=True)
+                report.screenshot = str(shot)
+                report.error = ("no application form on the page (it may need a click, a login, "
+                                "or the job closed) — see the screenshot")
+                report.save(out_dir)
+                return report
+            page.wait_for_timeout(1500)          # let late widgets finish rendering
+            fill_form(page, details, resume_path, report, saved)
+            if not report.filled and not report.needs_attention:
+                report.error = "found the page but no questions it could read — see the screenshot"
             page.screenshot(path=str(shot), full_page=True)
             report.screenshot = str(shot)
         except PWError as e:

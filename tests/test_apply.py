@@ -155,3 +155,85 @@ def test_fill_practice_form(tmp_path):
                          "I certify that the information provided is accurate and complete *"}
     assert [f.label for f in report.skipped_optional] == ["Desired salary"]
     assert not report.ready_to_submit
+
+
+# ── Twitch-style form: the failures from the first real run ────────────
+
+GH_NEW = Path(__file__).parent / "fixtures" / "forms" / "greenhouse_new.html"
+TWITCH_DETAILS = {
+    "first_name": "Amudhan", "email": "a@x.com", "country": "United States", "city": "New York, NY",
+    "relocate": "Yes", "current_employer": "None", "past_employers": "IBM, Sahara AI",
+    "authorized_us": "Yes", "sponsorship_now": "No", "sponsorship_future": "Yes",
+    "h1b_before": "No", "citizenship": "India", "future_roles": "Yes",
+}
+
+
+def _fill(path, details, saved=None, company="Twitch"):
+    from playwright.sync_api import sync_playwright
+    from pipeline.apply.filler import FillReport, _launch, fill_form
+    report = FillReport(job_id="t", company=company, title="SWE", url="", mode="practice")
+    with sync_playwright() as pw:
+        browser = _launch(pw, headless=True)
+        page = browser.new_page()
+        page.set_default_timeout(8000)
+        page.goto(path.resolve().as_uri())
+        fill_form(page, details, None, report, saved)
+        values = page.evaluate(
+            "() => Object.fromEntries([...document.querySelectorAll('[role=combobox]')].map(e => [e.id, e.value]))")
+        checked = page.evaluate(
+            "() => [...document.querySelectorAll('input[type=checkbox]:checked')].map(e => e.value)")
+        browser.close()
+    return report, values, checked
+
+
+@pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
+def test_twitch_style_form():
+    report, values, _ = _fill(GH_NEW, TWITCH_DETAILS)
+    labels = [f.label for f in report.filled + report.needs_attention + report.skipped_optional]
+    assert len(labels) == len(set(labels)), "a question was listed twice (hidden twin input)"
+    assert values == {
+        "country": "United States",            # not "United States Minor Outlying Islands"
+        "city": "New York, NY, USA",           # late suggestions, searched by city only
+        "relocate": "Yes",                     # click-only dropdown (readonly input)
+        "employee": "No", "amazon": "No",      # not a current employee anywhere
+        "eligible": "Yes", "spons": "Yes", "h1b": "No",
+        "citizen": "India", "future": "Yes",
+        "exp": "",                             # company-specific: left for you
+    }
+    assert [f.label.split(" (")[0] for f in report.needs_attention] == \
+        ["How would you describe your experience with Twitch?"]
+    plat = [f for f in report.skipped_optional if f.kind == "checkboxes"]
+    assert len(plat) == 1 and plat[0].options == ["TikTok", "YouTube", "None"]
+
+
+@pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
+def test_saved_answers_close_the_loop(tmp_path):
+    from pipeline import applicant
+    q = applicant.normalize_question("How would you describe your experience with Twitch? (Select one)*", "Twitch")
+    assert q == "how would you describe your experience with {company}?"
+    applicant.add_pending([{"question": q, "label": "How would you…", "options": ["I stream"],
+                            "company": "Twitch"}], tmp_path)
+    saved = applicant.save_answers({q: "I don't use Twitch",
+                                    "which other platforms are you active on?": "YouTube, None"}, tmp_path)
+    assert applicant.load_pending(tmp_path) == {}            # answered → no longer pending
+
+    report, values, checked = _fill(GH_NEW, TWITCH_DETAILS, saved)
+    assert values["exp"] == "I don't use Twitch"
+    assert sorted(checked) == ["none", "yt"]
+    assert report.needs_attention == []
+
+
+def test_company_name_generalizes():
+    from pipeline import applicant
+    a = applicant.normalize_question("Are you currently a Twitch employee?*", "Twitch")
+    b = applicant.normalize_question("Are you currently a Stripe employee?", "Stripe")
+    assert a == b == "are you currently a {company} employee?"
+
+
+def test_employer_rules():
+    d = {"current_employer": "None", "past_employers": "IBM, Sahara AI"}
+    assert answer_for("Are you currently a Twitch employee?", d, "Twitch").value == "No"
+    assert answer_for("Have you previously worked for IBM?", d, "IBM").value == "Yes"
+    assert answer_for("Have you ever been employed by Amazon?", d, "Twitch").value == "No"
+    assert answer_for("Where are you currently employed?", d) is None       # wants a name
+    assert answer_for("Are you currently a Twitch employee?", {}, "Twitch") is None  # unknown → ask

@@ -391,21 +391,35 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
         raise click.ClickException("No matching jobs (auto-apply supports Greenhouse, Lever, Ashby).")
 
     out_root = applicant.PRIVATE_DIR / "applications"
+    saved = applicant.load_answers()
     console.print(f"\n[bold]Practice mode[/bold] — filling {len(jobs)} application(s); "
                   "nothing will be submitted.\n")
+    new_questions = 0
     for job in jobs:
         console.print(f"[cyan]{job['company']}[/cyan] — {job['title']}  [dim]({job['fit_score']:.0f})[/dim]")
         folder = out_root / _re.sub(r"[^A-Za-z0-9_.-]", "_", job["id"])
-        report = practice_apply(job, details, resume, folder, headless=not headed)
+        report = practice_apply(job, details, resume, folder, headless=not headed, saved=saved)
         if report.error:
-            console.print(f"  [red]✗ {report.error}[/red]\n")
+            console.print(f"  [red]✗ {report.error}[/red]")
+            if report.screenshot:
+                console.print(f"    screenshot: {report.screenshot}")
+            console.print()
             continue
         console.print(f"  [green]✓ filled {len(report.filled)} field(s)[/green]")
+        pending = []
         for f in report.needs_attention:
             console.print(f"  [yellow]! needs you:[/yellow] {f.label[:80]}  [dim]({f.source})[/dim]")
+            if "consent" not in f.source and f.kind != "file":
+                pending.append({"question": applicant.normalize_question(f.label, job["company"]),
+                                "label": f.label, "options": f.options, "company": job["company"]})
+        applicant.add_pending(pending)
+        new_questions += len(pending)
         verdict = "[green]ready to submit[/green]" if report.ready_to_submit \
             else "[yellow]not ready — see above[/yellow]"
         console.print(f"  {verdict} · screenshot: {report.screenshot}\n")
+    if new_questions:
+        console.print("[bold]Answer the open questions once[/bold] on the dashboard → My details → "
+                      "“Questions waiting for you”, then run `jobpipe apply` again.")
 
 
 @main.command("state-key")

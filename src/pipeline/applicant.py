@@ -35,6 +35,7 @@ FIELDS: list[dict[str, Any]] = [
     {"key": "email", "label": "Email", "kind": "email"},
     {"key": "phone", "label": "Phone", "kind": "tel"},
     {"key": "city", "label": "City, State", "kind": "text", "help": "e.g. New York, NY"},
+    {"key": "country", "label": "Country you live in", "kind": "text", "default": "United States"},
     {"key": "linkedin", "label": "LinkedIn URL", "kind": "url"},
     {"key": "github", "label": "GitHub URL", "kind": "url"},
     {"key": "website", "label": "Portfolio / website", "kind": "url"},
@@ -48,6 +49,21 @@ FIELDS: list[dict[str, Any]] = [
      "kind": "choice", "options": YES_NO},
     {"key": "visa_status", "label": "Current visa / work status", "kind": "text",
      "help": "e.g. F-1 OPT (STEM OPT eligible)"},
+    {"key": "citizenship", "label": "Country of citizenship", "kind": "text", "help": "e.g. India"},
+    {"key": "h1b_before", "label": "Have you ever held H-1B status or had an H-1B petition approved?",
+     "kind": "choice", "options": YES_NO},
+    {"key": "other_pr", "label": "Are you a permanent resident of a country other than your citizenship?",
+     "kind": "choice", "options": YES_NO},
+
+    {"section": "Common screening questions"},
+    {"key": "current_employer", "label": "Current employer", "kind": "text",
+     "help": "Write None if you're not employed — answers \"Are you a current <company> employee?\""},
+    {"key": "past_employers", "label": "Past employers (comma-separated)", "kind": "text",
+     "help": "e.g. IBM, Sahara AI — answers \"Have you previously worked for <company>?\""},
+    {"key": "noncompete", "label": "Are you bound by a non-compete or similar agreement?",
+     "kind": "choice", "options": YES_NO},
+    {"key": "future_roles", "label": "Want to be considered for other roles at the company?",
+     "kind": "choice", "options": YES_NO, "default": "Yes"},
 
     {"section": "Education"},
     {"key": "school", "label": "School", "kind": "text"},
@@ -141,6 +157,85 @@ def save_resume(pdf: bytes, private_dir: Path | None = None) -> None:
     path = private_dir / RESUME_FILE
     path.write_bytes(pdf)
     path.chmod(0o600)
+
+
+# ── Saved answers to specific questions ──────────────────────────────────
+# Questions the rules can't answer ("How would you describe your experience
+# with Twitch?") are shown on the My details page; you answer once and the
+# answer is reused. Questions are normalized and the company's name becomes
+# "{company}", so "Are you currently a Twitch employee?" also answers
+# "Are you currently a Stripe employee?".
+
+ANSWERS_FILE = "answers.json"
+PENDING_FILE = "pending_questions.json"
+
+
+def normalize_question(label: str, company: str = "") -> str:
+    q = label.lower().replace("*", " ")
+    q = re.sub(r"\((select one|required|optional|select all that apply)\)", " ", q)
+    if company:
+        for name in {company.lower(), company.lower().replace(" ", "")}:
+            if len(name) >= 2:
+                q = re.sub(rf"\b{re.escape(name)}\b", "{company}", q)
+    return " ".join(q.split()).strip(" :")
+
+
+def load_answers(private_dir: Path | None = None) -> dict[str, str]:
+    path = (private_dir or PRIVATE_DIR) / ANSWERS_FILE
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def save_answers(answers: dict[str, str], private_dir: Path | None = None) -> dict[str, str]:
+    """Merge answers in (empty value = forget that answer)."""
+    private_dir = private_dir or PRIVATE_DIR
+    merged = load_answers(private_dir)
+    for q, a in answers.items():
+        q = normalize_question(str(q))
+        a = str(a or "").strip()[:4000]
+        if not q:
+            continue
+        if a:
+            merged[q] = a
+        else:
+            merged.pop(q, None)
+    private_dir.mkdir(parents=True, exist_ok=True)
+    path = private_dir / ANSWERS_FILE
+    path.write_text(json.dumps(merged, indent=2, ensure_ascii=False))
+    path.chmod(0o600)
+    # Answered questions are no longer pending
+    pending = load_pending(private_dir)
+    if pending:
+        save_pending({q: v for q, v in pending.items() if q not in merged}, private_dir)
+    return merged
+
+
+def load_pending(private_dir: Path | None = None) -> dict[str, dict]:
+    path = (private_dir or PRIVATE_DIR) / PENDING_FILE
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def save_pending(pending: dict[str, dict], private_dir: Path | None = None) -> None:
+    private_dir = private_dir or PRIVATE_DIR
+    private_dir.mkdir(parents=True, exist_ok=True)
+    path = private_dir / PENDING_FILE
+    path.write_text(json.dumps(pending, indent=2, ensure_ascii=False))
+    path.chmod(0o600)
+
+
+def add_pending(items: list[dict], private_dir: Path | None = None) -> None:
+    """Record questions an application couldn't answer.
+    items: {"question": normalized, "label": original, "options": [...], "company": ...}"""
+    pending = load_pending(private_dir)
+    answered = load_answers(private_dir)
+    for it in items:
+        q = it["question"]
+        if not q or q in answered:
+            continue
+        entry = pending.setdefault(q, {"label": it["label"], "options": [], "companies": []})
+        entry["options"] = it.get("options") or entry["options"]
+        if it.get("company") and it["company"] not in entry["companies"]:
+            entry["companies"].append(it["company"])
+    save_pending(pending, private_dir)
 
 
 # ── Resume parsing: pre-fill what can be read reliably ───────────────────

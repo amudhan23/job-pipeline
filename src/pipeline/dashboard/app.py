@@ -372,7 +372,24 @@ PROFILE_HTML = """<!DOCTYPE html>
   </div>
 
   <div id="missing" class="card warn" style="display:none"></div>
+
+  <div class="card" id="qcard" style="display:none">
+    <h2>Questions waiting for you</h2>
+    <p class="help" style="margin:-6px 0 14px">From applications the bot couldn't finish. Answer once — it's reused
+      everywhere the same question comes up (a company's name in the question works for any company).</p>
+    <div id="pending"></div>
+    <button type="button" id="saveAnswers" style="margin-top:6px">Save answers</button>
+    <span id="astatus" style="margin-left:10px;font-size:13px"></span>
+  </div>
+
   <form id="form"></form>
+
+  <div class="card" id="savedcard" style="display:none">
+    <h2>Your saved answers</h2>
+    <p class="help" style="margin:-6px 0 14px">Clear a box and save to forget an answer.</p>
+    <div id="saved"></div>
+    <button type="button" id="saveSaved" style="margin-top:6px">Save changes</button>
+  </div>
 
   <div class="bar"><button id="save">Save</button><span id="status"></span></div>
 </div>
@@ -461,6 +478,45 @@ async function upload(file) {
            : 'Resume saved. Nothing new to pre-fill.', n ? 'warn' : 'ok');
 }
 
+// ── Questions waiting for you / saved answers ──
+function answerInput(id, options, value) {
+  const opts = (options || []).filter(o => o && !/^(select|choose)/i.test(o));
+  if (opts.length) {
+    return `<select data-q="${esc(id)}"><option value="">— choose —</option>` +
+      opts.map(o => `<option${o === value ? ' selected' : ''}>${esc(o)}</option>`).join('') + '</select>';
+  }
+  const long = /why|describe|tell us|explain/i.test(id);
+  return long ? `<textarea data-q="${esc(id)}" rows="3" style="width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:9px">${esc(value)}</textarea>`
+              : `<input data-q="${esc(id)}" value="${esc(value || '')}">`;
+}
+
+async function loadAnswers() {
+  const data = await (await fetch('/api/answers')).json();
+  const pend = Object.entries(data.pending || {});
+  document.getElementById('qcard').style.display = pend.length ? 'block' : 'none';
+  document.getElementById('pending').innerHTML = pend.map(([q, p]) =>
+    `<div style="margin-bottom:14px"><label>${esc(p.label)}</label>${answerInput(q, p.options, '')}
+     <div class="help">asked by ${esc((p.companies || []).join(', '))}</div></div>`).join('');
+  const saved = Object.entries(data.saved || {});
+  document.getElementById('savedcard').style.display = saved.length ? 'block' : 'none';
+  document.getElementById('saved').innerHTML = saved.map(([q, a]) =>
+    `<div style="margin-bottom:12px"><label>${esc(q)}</label><input data-q="${esc(q)}" value="${esc(a)}"></div>`).join('');
+}
+
+async function postAnswers(containerId, keepEmpty) {
+  const out = {};
+  document.querySelectorAll(`#${containerId} [data-q]`).forEach(el => {
+    if (el.value.trim() || keepEmpty) out[el.dataset.q] = el.value.trim();
+  });
+  const r = await fetch('/api/answers', {method:'POST', headers:{'Content-Type':'application/json'},
+                                         body: JSON.stringify(out)});
+  document.getElementById('astatus').textContent = r.ok ? 'Saved ✓' : 'Save failed';
+  loadAnswers();
+}
+document.getElementById('saveAnswers').onclick = () => postAnswers('pending', false);
+document.getElementById('saveSaved').onclick = () => postAnswers('saved', true);
+loadAnswers();
+
 const drop = document.getElementById('drop'), file = document.getElementById('file');
 drop.onclick = () => file.click();
 file.onchange = () => upload(file.files[0]);
@@ -516,6 +572,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._send_json(self._get_jobs_data(scope))
         elif parsed.path == "/api/profile":
             self._send_json(self._profile_payload())
+        elif parsed.path == "/api/answers":
+            self._send_json(self._answers_payload())
         else:
             self.send_error(404)
 
@@ -531,10 +589,16 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         body = self.rfile.read(length)
 
         try:
-            if path == "/api/profile":
+            if path in ("/api/profile", "/api/answers"):
                 if ctype != "application/json":  # forces a CORS preflight for cross-site posts
                     return self._send_json({"error": "Expected application/json"}, 415)
-                applicant.save(json.loads(body or b"{}"), self._pdir())
+                data = json.loads(body or b"{}")
+                if not isinstance(data, dict):
+                    return self._send_json({"error": "Expected an object"}, 400)
+                if path == "/api/answers":
+                    applicant.save_answers(data, self._pdir())
+                    return self._send_json(self._answers_payload())
+                applicant.save(data, self._pdir())
                 return self._send_json(self._profile_payload())
             if path == "/api/resume":
                 if ctype != "application/pdf":
@@ -548,6 +612,11 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         except (ValueError, json.JSONDecodeError) as e:
             return self._send_json({"error": str(e)}, 400)
         self.send_error(404)
+
+    def _answers_payload(self) -> dict[str, Any]:
+        from pipeline import applicant
+        return {"pending": applicant.load_pending(self._pdir()),
+                "saved": applicant.load_answers(self._pdir())}
 
     def _profile_payload(self) -> dict[str, Any]:
         from pipeline import applicant
