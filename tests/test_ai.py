@@ -155,7 +155,7 @@ def test_ai_fills_only_open_required_questions(tmp_path):
     from pipeline.apply.filler import FillReport, _launch, fill_form
     asked = []
 
-    def fake_writer(label, kind):
+    def fake_writer(label, kind, options=None):
         asked.append(label)
         return "Draft answer." if writer.is_open_question(label, kind) else None
 
@@ -200,10 +200,10 @@ def test_yes_does_not_auto_submit_ai_drafts(tmp_path, monkeypatch):
     monkeypatch.setattr(filler, "application_url", lambda j: ASHBY_WHY.resolve().as_uri())
     import pipeline.ai.writer as w
     monkeypatch.setattr(w, "make_writer", lambda job, details, *a, **k:
-                        (lambda label, kind: "Draft." if w.is_open_question(label, kind) else None))
+                        (lambda label, kind, options=None: "Draft." if w.is_open_question(label, kind) else None))
     monkeypatch.setattr(ai, "status", lambda *a, **k: (True, ""))
 
-    result = CliRunner().invoke(main, ["apply", "--top", "1", "--submit", "--yes"])
+    result = CliRunner().invoke(main, ["apply", "--top", "1", "--submit", "--yes", "--no-fit", "--no-tailor"])
     assert result.exit_code == 0, result.output
     assert "AI draft" in result.output and "not auto-submitting" in result.output
     assert trackerdb.Tracker().get_job("ab-ande-1")["status"] != "applied"
@@ -238,3 +238,184 @@ def test_dashboard_never_returns_the_key(tmp_path):
     finally:
         srv.shutdown()
         DashboardHandler.private_dir = None
+
+
+# ── Fit check ──────────────────────────────────────────────────────────
+
+XAI_JD = ("Government Cloud Security Engineer. Must be a U.S. person as defined by ITAR. "
+          "Active Secret clearance required. 3+ years experience.")
+
+
+def test_fit_check_skip_needs_quoted_evidence(pdir):
+    from pipeline.ai import fitcheck
+    ai.save_key(KEY, pdir)
+    job = {"id": "gh-xai-1", "company": "xAI", "title": "Gov Cloud Security", "description": XAI_JD}
+    fake = FakeClient(text=json.dumps({"verdict": "skip", "dealbreakers": [
+        {"rule": "clearance", "quote": "Active Secret clearance required"}],
+        "concerns": [], "summary": "Needs an active clearance."}))
+    r = fitcheck.check_job(job, {"citizenship": "India"}, "resume", pdir, client=fake)
+    assert r["verdict"] == "skip" and r["dealbreakers"][0]["quote"].startswith("Active Secret")
+    assert fake.calls[0]["model"] == "claude-haiku-5-5"            # always the cheap model
+    assert "citizenship: India" in fake.calls[0]["system"][1]["text"]
+    # "skip" without a quote is downgraded — never throw a job away on a hunch
+    vague = FakeClient(text='{"verdict": "skip", "dealbreakers": [], "summary": "feels senior"}')
+    assert fitcheck.check_job(job, {}, "resume", pdir, client=vague)["verdict"] == "maybe"
+    garbage = FakeClient(text="I think you should apply!")
+    assert fitcheck.check_job(job, {}, "resume", pdir, client=garbage)["verdict"] == "maybe"
+
+
+def test_fit_check_stored_once(pdir, tmp_path):
+    from pipeline.ai import fitcheck
+    from pipeline.models import ATSPlatform, Job
+    from pipeline.tracker.db import Tracker
+    ai.save_key(KEY, pdir)
+    t = Tracker(tmp_path / "t.db")
+    t.upsert_jobs([Job(id="j1", title="SWE", company="Acme", company_slug="acme", location="NYC",
+                       url="u", platform=ATSPlatform.ASHBY, description="Build APIs in Java.")],
+                  run_id=t.start_run(7))
+    fake = FakeClient(text='{"verdict": "apply", "dealbreakers": [], "summary": "Java backend, fits."}')
+    job = t.get_job("j1")
+    assert fitcheck.ensure_checked(job, t, {}, "resume", pdir, client=fake)["verdict"] == "apply"
+    again = t.get_job("j1")
+    assert fitcheck.stored(again)["verdict"] == "apply"
+    fitcheck.ensure_checked(again, t, {}, "resume", pdir, client=fake)
+    assert len(fake.calls) == 1
+    # a re-scrape keeps the result (like status)
+    t.upsert_jobs([Job(id="j1", title="SWE", company="Acme", company_slug="acme", location="NYC",
+                       url="u", platform=ATSPlatform.ASHBY, description="Build APIs in Java.")],
+                  run_id=t.start_run(7))
+    assert fitcheck.stored(t.get_job("j1"))["verdict"] == "apply"
+
+
+def test_no_description_is_not_sent(pdir):
+    from pipeline.ai import fitcheck
+    ai.save_key(KEY, pdir)
+    fake = FakeClient()
+    r = fitcheck.check_job({"id": "x", "company": "A", "description": ""}, {}, "resume", pdir, client=fake)
+    assert r["verdict"] == "maybe" and not fake.calls
+
+
+# ── AI picks for closed questions ──────────────────────────────────────
+
+def test_pick_from_resume(pdir):
+    ai.save_key(KEY, pdir)
+    job = {"company": "Affirm", "title": "SWE", "description": "Java services"}
+    fake = FakeClient(text='{"answer": "3-5 years", "basis": "IBM Application Developer Jul 2021 - Jul 2024"}')
+    a = writer.pick_answer("Years of professional Java experience?*", "select",
+                           ["0-2 years", "3-5 years", "5+ years"], job, {}, "IBM ... Java", pdir, client=fake)
+    assert a.value == "3-5 years" and a.how == "pick" and "IBM" in a.source
+
+
+def test_pick_unknown_or_invalid_is_left_for_you(pdir):
+    ai.save_key(KEY, pdir)
+    job = {"company": "Twitch", "title": "SWE", "description": ""}
+    unk = FakeClient(text='{"answer": "UNKNOWN", "basis": ""}')
+    assert writer.pick_answer("How would you describe your experience with Twitch?", "combobox",
+                              ["I watch streams", "I stream"], job, {}, "r", pdir, client=unk) is None
+    # cached: asking again costs nothing
+    writer.pick_answer("How would you describe your experience with Twitch?", "combobox",
+                       ["I watch streams", "I stream"], job, {}, "r", pdir, client=unk)
+    assert len(unk.calls) == 1
+    made_up = FakeClient(text='{"answer": "Daily viewer", "basis": "resume"}')       # not an option
+    assert writer.pick_answer("Platform usage?", "select", ["Yes", "No"], job, {}, "r", pdir,
+                              client=made_up) is None
+
+
+def test_pick_not_in_resume_says_so(pdir):
+    ai.save_key(KEY, pdir)
+    job = {"company": "Twitch", "title": "SWE", "description": ""}
+    fake = FakeClient(text='{"answer": "No", "basis": "not in resume"}')
+    a = writer.pick_answer("Do you have hands-on experience in SAP?*", "combobox", ["Yes", "No"],
+                           job, {}, "r", pdir, client=fake)
+    assert a.value == "No" and "not in your resume" in a.source
+
+
+@pytest.mark.parametrize("label", [
+    "Have you previously applied to Amazon or any Amazon subsidiary?*",
+    "Who referred you?", "Do you know anyone who works at Twitch?",
+    "Will you require sponsorship?", "Gender", "I certify the above is true",
+])
+def test_never_picked(label):
+    assert not writer.can_pick(label, "combobox")
+
+
+# ── Tailored resume ────────────────────────────────────────────────────
+
+def _config():
+    import yaml
+    return yaml.safe_load((Path(__file__).parents[1] / "config" / "profile.yaml").read_text())
+
+
+def test_tailor_only_reorders(pdir):
+    from pipeline.resume import tailor
+    ai.save_key(KEY, pdir)
+    reply = {"ibm": ["db", "own", "bogus"], "sahara": ["int"], "projects": ["Commentator", "req-guard", "Made Up"],
+             "languages": ["Python", "Cobol"], "note": "Data-heavy role: led with databases."}
+    fake = FakeClient(text=json.dumps(reply))
+    rc, note = tailor.ai_config({"id": "j", "company": "A", "title": "SWE", "description": "Postgres"},
+                                _config(), pdir, client=fake)
+    assert rc.ibm_bullet_order == ["db", "own", "mig", "dbg", "ci"]      # bogus dropped, none lost
+    assert rc.sahara_bullet_order[0] == "int" and len(rc.sahara_bullet_order) == 3
+    assert rc.projects == ["Commentator", "req-guard", "AccessMint"]     # invented project ignored
+    assert rc.language_order[0] == "Python" and "Cobol" not in rc.language_order
+    assert "databases" in note
+
+
+@pytest.mark.skipif(not shutil.which("pdflatex"), reason="pdflatex needed")
+def test_tailored_resume_builds_and_is_reused(pdir, tmp_path):
+    from pipeline.resume import tailor
+    ai.save_key(KEY, pdir)
+    fake = FakeClient(text=json.dumps({"ibm": ["db"], "sahara": [], "projects": ["Commentator"],
+                                       "languages": ["Python"], "note": "AI role."}))
+    job = {"id": "ab-ande-1", "company": "Ande", "title": "SWE, AI", "description": "LLM agents",
+           "platform": "ashby", "url": "u"}
+    folder = tmp_path / "app"
+    pdf, note = tailor.tailored_resume(job, _config(), {"first_name": "Amudhan", "last_name": "Muthaiah"},
+                                       folder, private_dir=pdir, client=fake)
+    assert pdf.name == "Amudhan_Muthaiah_Resume.pdf" and pdf.read_bytes()[:4] == b"%PDF"
+    from pipeline.applicant import resume_text
+    text = resume_text(pdf.read_bytes())
+    assert text.index("Commentator") < text.index("req-guard")           # AI's lead project first
+    assert "Python" in text and note == "AI role."
+    again, _ = tailor.tailored_resume(job, _config(), {"first_name": "Amudhan", "last_name": "Muthaiah"},
+                                      folder, private_dir=pdir, client=fake)
+    assert again == pdf and len(fake.calls) == 1                          # reused, no new call
+
+
+@pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
+def test_apply_skips_dealbreaker_and_moves_on(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from pipeline import applicant
+    from pipeline.ai import fitcheck
+    from pipeline.apply import filler
+    from pipeline.cli import main
+    from pipeline.models import ATSPlatform, Job
+    from pipeline.tracker import db as trackerdb
+    pdir = tmp_path / "private"
+    monkeypatch.setattr(applicant, "PRIVATE_DIR", pdir)
+    monkeypatch.setattr(trackerdb, "DEFAULT_DB_PATH", tmp_path / "t.db")
+    applicant.save({**applicant.defaults(), "first_name": "A", "last_name": "M", "email": "a@x.com",
+                    "phone": "646-555-0123", "city": "New York, NY", "authorized_us": "Yes",
+                    "sponsorship_now": "No", "sponsorship_future": "Yes"}, pdir)
+    applicant.save_resume(b"%PDF-1.4 test", pdir)
+    t = trackerdb.Tracker()
+    run = t.start_run(7)
+    for jid, company, score in (("gh-xai-1", "xAI", 90), ("ab-ande-1", "Ande", 80)):
+        j = Job(id=jid, title="SWE", company=company, company_slug=company.lower(), location="NYC",
+                url=f"https://jobs.ashbyhq.com/{company.lower()}/1", platform=ATSPlatform.ASHBY)
+        j.fit_score = score
+        t.upsert_jobs([j], run_id=run)
+    monkeypatch.setattr(filler, "application_url", lambda j: ASHBY_WHY.resolve().as_uri() + "#" + j["id"])
+    monkeypatch.setattr(ai, "status", lambda *a, **k: (True, ""))
+    import pipeline.ai.writer as w
+    monkeypatch.setattr(w, "make_writer", lambda *a, **k: None)
+    verdicts = {"gh-xai-1": {"verdict": "skip", "summary": "clearance",
+                             "dealbreakers": [{"rule": "clearance", "quote": "Active Secret clearance required"}]},
+                "ab-ande-1": {"verdict": "apply", "summary": "fits", "dealbreakers": []}}
+    monkeypatch.setattr(fitcheck, "ensure_checked", lambda job, *a, **k: verdicts[job["id"]])
+
+    result = CliRunner().invoke(main, ["apply", "--top", "1", "--no-tailor"])
+    assert result.exit_code == 0, result.output
+    assert "skipped by fit check" in result.output and "Active Secret clearance" in result.output
+    assert "Ande" in result.output and "filled" in result.output        # moved on to fill 1 job
+    assert trackerdb.Tracker().get_job("gh-xai-1")["status"] == "skipped"

@@ -179,13 +179,14 @@ def status(private_dir: Path | None = None) -> tuple[bool, str]:
 
 
 def complete(system: list[dict] | str, prompt: str, purpose: str, max_tokens: int = 600,
-             private_dir: Path | None = None, client: Any = None) -> Reply:
-    """One Messages API call, budget-checked and logged."""
+             private_dir: Path | None = None, client: Any = None, model: str | None = None) -> Reply:
+    """One Messages API call, budget-checked and logged. model: "haiku" /
+    "sonnet" / "opus" to override your setting (the fit check uses haiku)."""
     ready, why = status(private_dir)
     if not ready:
         raise AIUnavailable(why)
     settings = load_settings(private_dir)
-    model = MODELS[settings["model"]]
+    model = MODELS[model or settings["model"]]
     # Worst case for this call must still fit the budget
     worst = cost_of(model, {"input_tokens": (len(str(system)) + len(prompt)) // 3,
                             "output_tokens": max_tokens})

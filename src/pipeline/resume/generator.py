@@ -122,16 +122,19 @@ class ResumeGenerator:
             language_order=language_order,
         )
 
-    def build(self, job: Job, output_dir: Path | str) -> Path | None:
+    def build(self, job: Job, output_dir: Path | str, config: ResumeConfig | None = None,
+              filename: str | None = None) -> Path | None:
         """Build a tailored PDF resume for a job.
 
+        config: the choices to apply (from the AI tailor); default is the
+        keyword analysis below. filename: the name recruiters see.
         Returns the path to the generated PDF, or None on failure.
         """
         if not self.template_path.exists():
             logger.error(f"Template not found: {self.template_path}")
             return None
 
-        config = self.analyze_job(job)
+        config = config or self.analyze_job(job)
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -185,7 +188,7 @@ class ResumeGenerator:
 
             # Copy to output
             safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", job.company)
-            output_path = output_dir / f"resume_{safe_name}_{job.id}.pdf"
+            output_path = output_dir / (filename or f"resume_{safe_name}_{job.id}.pdf")
             shutil.copy2(pdf_path, output_path)
 
             logger.info(f"Generated resume: {output_path}")

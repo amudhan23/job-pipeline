@@ -201,34 +201,30 @@ def dashboard(ctx: click.Context, port: int) -> None:
 
 @main.command()
 @click.option("--job-id", "-j", required=True, help="Job ID to generate resume for")
-@click.option("--output-dir", "-o", default="output", help="Output directory for PDFs")
+@click.option("--output-dir", "-o", default=None, help="Where to write it (default: the job's application folder)")
+@click.option("--ai/--no-ai", "use_ai", default=True, help="Let Claude arrange it (default: on with a key)")
 @click.pass_context
-def resume(ctx: click.Context, job_id: str, output_dir: str) -> None:
-    """Generate a tailored resume for a tracked job."""
-    from pipeline.resume.generator import ResumeGenerator
-    from pipeline.models import Job
-
-    config = ctx.obj["config"]
-    template_path = Path(__file__).resolve().parents[2] / "templates" / "generic.tex"
-
-    if not template_path.exists():
-        console.print(f"[red]Template not found: {template_path}[/red]")
-        return
-
-    # Get job from tracker
-    tracker = Tracker()
-    job_data = tracker.get_job(job_id)
-    if not job_data:
-        console.print(f"[red]Job {job_id} not found in tracker[/red]")
-        return
-
-    gen = ResumeGenerator(template_path, config)
-    job = Job(**{k: v for k, v in job_data.items() if k in Job.__dataclass_fields__})
-    result = gen.build(job, Path(output_dir))
-    if result:
-        console.print(f"[bold green]Resume generated: {result}[/bold green]")
-    else:
-        console.print("[red]Resume generation failed — is pdflatex installed?[/red]")
+def resume(ctx: click.Context, job_id: str, output_dir: str | None, use_ai: bool) -> None:
+    """Build a resume arranged for one job (bullets, projects, languages).
+    Only reorders and selects what's in your resume — nothing is rewritten."""
+    import json as _json
+    import re as _re
+    from pipeline import applicant
+    from pipeline.resume.tailor import tailored_resume
+    job = Tracker().get_job(job_id)
+    if not job:
+        raise click.ClickException(f"Job {job_id} not found")
+    folder = Path(output_dir) if output_dir else \
+        applicant.PRIVATE_DIR / "applications" / _re.sub(r"[^A-Za-z0-9_.-]", "_", job_id)
+    for stale in (folder / "tailor.json",):          # an explicit request always rebuilds
+        stale.unlink(missing_ok=True)
+    pdf, note = tailored_resume(job, ctx.obj["config"], applicant.load(), folder, use_ai=use_ai)
+    if not pdf:
+        raise click.ClickException(f"Resume not built: {note}")
+    info = _json.loads((folder / "tailor.json").read_text())
+    console.print(f"[bold green]Built {pdf}[/bold green]  ({'Claude' if info['by'] == 'ai' else 'keyword rules'})")
+    console.print(f"  {note}")
+    console.print(f"  [dim]projects: {', '.join(info['projects'])} · languages: {', '.join(info['languages'][:4])}…[/dim]")
 
 
 @main.command()
@@ -375,9 +371,13 @@ def _one_per_application(jobs: list[dict]) -> list[dict]:
 @click.option("--ai/--no-ai", "use_ai", default=True,
               help="Draft answers to open questions with Claude (default: on when a key is saved)")
 @click.option("--trust-ai", is_flag=True,
-              help="With --submit --yes: also auto-submit forms that contain AI drafts")
+              help="With --submit --yes: also auto-submit forms that contain AI answers")
+@click.option("--fit/--no-fit", "use_fit", default=True,
+              help="AI fit check first; skip jobs with a dealbreaker (default: on with AI)")
+@click.option("--tailor/--no-tailor", "use_tailor", default=True,
+              help="Upload a resume arranged for each job (default: on when pdflatex is installed)")
 def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, submit: bool,
-          yes: bool, use_ai: bool, trust_ai: bool) -> None:
+          yes: bool, use_ai: bool, trust_ai: bool, use_fit: bool, use_tailor: bool) -> None:
     """Fill job applications from your saved details.
 
     Without --submit (practice): fills every question it can, attaches your
@@ -423,18 +423,19 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
         jobs = [j for j in candidates
                 if j["fit_score"] >= min_score and application_url(j)
                 and j["status"] not in ("applied", "interview", "offer", "rejected", "skipped")]
-        jobs = _one_per_application(jobs)[:top]
+        jobs = _one_per_application(jobs)      # walked until `top` are filled (fit skips don't count)
     if not jobs:
         raise click.ClickException("No matching jobs (auto-apply supports Greenhouse, Lever, Ashby).")
 
     out_root = applicant.PRIVATE_DIR / "applications"
     saved = applicant.load_answers()
+    want = len(jobs) if job_id else min(top, len(jobs))
     if submit:
         how = "without asking (--yes)" if yes else "asking you before each one"
-        console.print(f"\n[bold]Submit mode[/bold] — {len(jobs)} application(s); complete forms are "
+        console.print(f"\n[bold]Submit mode[/bold] — up to {want} application(s); complete forms are "
                       f"submitted {how}.\n")
     else:
-        console.print(f"\n[bold]Practice mode[/bold] — filling {len(jobs)} application(s); "
+        console.print(f"\n[bold]Practice mode[/bold] — filling up to {want} application(s); "
                       "nothing will be submitted.\n")
 
     totals = {"questions": 0, "submitted": 0, "ai": 0}
@@ -448,6 +449,18 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
         else:
             console.print(f"[dim]AI drafts off: {why}[/dim]\n")
             use_ai = False
+    use_fit = use_fit and use_ai
+    resume_text = ""
+    if use_ai:
+        from pipeline.ai.context import load_resume_text
+        resume_text = load_resume_text()
+    if use_tailor:
+        from pipeline.resume.tailor import can_build
+        ok, why = can_build()
+        if not ok:
+            console.print(f"[dim]Tailored resumes off: {why} — uploading your saved resume[/dim]\n")
+            use_tailor = False
+    config = click.get_current_context().obj.get("config", {}) if click.get_current_context().obj else {}
 
     def show(report, job) -> None:
         """Print what was filled and what needs you; remember open questions."""
@@ -467,7 +480,7 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
                                 "multi": f.kind == "checkboxes"})
         for f in report.filled:
             if f.label in report.ai_written:
-                console.print(f"  [magenta]✎ AI draft:[/magenta] {f.label[:70]}")
+                console.print(f"  [magenta]✎ {f.source}:[/magenta] {f.label[:70]}")
                 console.print(f"    [dim]{f.value[:300]}[/dim]")
                 pending.append({"question": applicant.normalize_question(f.label, job["company"]),
                                 "label": f.label, "options": [], "company": job["company"],
@@ -486,10 +499,39 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
         click.prompt("    Press Enter here when you're done", default="", show_default=False)
         return True
 
+    filled_count = 0
     for job in jobs:
+        if filled_count >= want:
+            break
         console.print(f"[cyan]{job['company']}[/cyan] — {job['title']}  [dim]({job['fit_score']:.0f})[/dim]")
         folder = out_root / _re.sub(r"[^A-Za-z0-9_.-]", "_", job["id"])
         shown = {"done": False}
+
+        # 1. AI fit check: a dealbreaker in the JD → skip, and don't offer it again
+        if use_fit:
+            from pipeline.ai.fitcheck import ensure_checked
+            fit = ensure_checked(job, tracker, details, resume_text)
+            if fit and fit["verdict"] == "skip":
+                why_skip = "; ".join(f"{b['rule']}: “{b['quote']}”" for b in fit["dealbreakers"])
+                console.print(f"  [red]✗ skipped by fit check[/red] — {why_skip[:220]}\n")
+                tracker.update_status(job["id"], ApplicationStatus.SKIPPED, notes=f"AI fit: {why_skip[:400]}")
+                continue
+            if fit and fit["verdict"] == "maybe":
+                console.print(f"  [yellow]? fit check:[/yellow] {fit['summary'][:200]}")
+            elif fit:
+                console.print(f"  [green]✓ fit check:[/green] [dim]{fit['summary'][:200]}[/dim]")
+        filled_count += 1
+
+        # 2. This job's resume
+        upload = resume
+        if use_tailor:
+            from pipeline.resume.tailor import tailored_resume
+            pdf, note = tailored_resume(job, config, details, folder, use_ai=use_ai)
+            if pdf:
+                upload = pdf
+                console.print(f"  [green]📄 tailored resume:[/green] {pdf.name} [dim]— {note[:150]}[/dim]")
+            else:
+                console.print(f"  [yellow]! tailored resume failed ({note}) — using your saved resume[/yellow]")
 
         def on_filled(report, job=job, shown=shown) -> bool:
             show(report, job)
@@ -517,7 +559,7 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
         if use_ai:
             from pipeline.ai.writer import make_writer
             writer = make_writer(job, details)
-        report = practice_apply(job, details, resume, folder, headless=not headed, saved=saved,
+        report = practice_apply(job, details, upload, folder, headless=not headed, saved=saved,
                                 on_filled=on_filled, ask_human=ask_human, writer=writer)
         if report.closed:
             tracker.update_status(job["id"], ApplicationStatus.SKIPPED, notes="posting closed")
@@ -642,6 +684,62 @@ def ai_draft(job_id: str, question: str) -> None:
     except ai_client.AIUnavailable as e:
         raise click.ClickException(str(e))
     console.print(f"\n{text}\n")
+
+
+@main.command()
+@click.option("--job-id", "-j", multiple=True, help="Specific job(s)")
+@click.option("--top", "-n", default=30, help="Otherwise: best N unchecked jobs from the latest run")
+@click.option("--min-score", default=50.0, help="Only jobs scoring at least this")
+@click.option("--recheck", is_flag=True, help="Check again even if already checked")
+def fit(job_id: tuple[str, ...], top: int, min_score: float, recheck: bool) -> None:
+    """AI fit check: read job descriptions for dealbreakers (clearance,
+    citizenship, no sponsorship, years required…). Uses Haiku — a fraction
+    of a cent per job. Results show on the dashboard; `jobpipe apply` skips
+    jobs marked skip."""
+    import json as _json
+    from rich.table import Table
+    from pipeline import applicant
+    from pipeline.ai import client as ai_client
+    from pipeline.ai.context import load_resume_text
+    from pipeline.ai.fitcheck import check_job, stored
+    ready, why = ai_client.status()
+    if not ready:
+        raise click.ClickException(why)
+    resume_text = load_resume_text()
+    if not resume_text.strip():
+        raise click.ClickException("Upload your resume on My details first — the check compares against it.")
+    tracker = Tracker()
+    if job_id:
+        jobs = [j for j in (tracker.get_job(i) for i in job_id) if j]
+    else:
+        run = tracker.latest_run()
+        jobs = [j for j in tracker.get_jobs(run["id"] if run else None)
+                if j["fit_score"] >= min_score and (recheck or not stored(j))
+                and j["status"] not in ("applied", "skipped", "rejected")][:top]
+    if not jobs:
+        console.print("Nothing to check — every job above the score is already checked (--recheck to redo).")
+        return
+    details = applicant.load()
+    table = Table(title=f"AI fit check ({len(jobs)} jobs)")
+    for col in ("Verdict", "Company", "Title", "Why"):
+        table.add_column(col, overflow="fold")
+    colors = {"apply": "green", "maybe": "yellow", "skip": "red"}
+    spent0 = ai_client.spend_summary()["total_spent"]
+    for j in jobs:
+        try:
+            r = check_job(j, details, resume_text)
+        except ai_client.AIUnavailable as e:
+            console.print(f"[yellow]Stopped: {e}[/yellow]")
+            break
+        tracker.set_ai_fit(j["id"], r)
+        why_text = r["summary"]
+        if r["dealbreakers"]:
+            why_text += " — " + "; ".join(f"“{b['quote'][:90]}”" for b in r["dealbreakers"])
+        table.add_row(f"[{colors[r['verdict']]}]{r['verdict']}[/]", j["company"], j["title"][:50],
+                      why_text[:260])
+    console.print(table)
+    cost = ai_client.spend_summary()["total_spent"] - spent0
+    console.print(f"[dim]Cost: ${cost:.4f}. `jobpipe apply` skips jobs marked skip.[/dim]")
 
 
 @main.command("state-key")

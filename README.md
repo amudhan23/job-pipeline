@@ -217,6 +217,27 @@ and question (re-runs are free), shown in the terminal, and wait on My details
 for you to edit — once saved there they're your own answer. `--submit --yes`
 won't auto-send a form containing AI drafts unless you add `--trust-ai`.
 
+**Fit check** (`jobpipe fit`, and automatically in `jobpipe apply`): Haiku reads
+each job description against your resume and details for dealbreakers —
+clearance, U.S. citizenship / "U.S. person", no sponsorship, years or degree
+far above yours, seniority. A "skip" needs a quoted line from the JD; those
+jobs are skipped and marked so, and apply moves on to the next one. Verdicts
+show in the dashboard's **AI fit** column. A fraction of a cent per job.
+
+**Closed questions** nobody answered (dropdowns, Yes/No, years of X): Claude
+answers only when your resume or details settle it, citing the line it used
+("not in your resume" for a skill you don't list); otherwise it's left for
+you. Never legal, eligibility, demographic, referral or company-history
+questions.
+
+**Tailored resume per job** (`jobpipe resume -j <id>`, and automatically in
+apply): Claude arranges your resume for the JD — which IBM / Sahara AI
+bullets lead, which 3 projects, which languages first — choosing only from
+`config/profile.yaml → resume` and never rewriting a bullet. The PDF is built
+with pdflatex as `<First>_<Last>_Resume.pdf` and uploaded instead of your
+saved resume (`--no-tailor` to skip). Needs `sudo apt install
+texlive-latex-extra texlive-fonts-recommended`.
+
 Every call is logged with its tokens and cost (`data/private/ai_usage.jsonl`);
 spend is on My details and in `jobpipe ai status`. A Sonnet answer costs about
 a cent.

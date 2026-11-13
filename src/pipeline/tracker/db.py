@@ -71,6 +71,9 @@ class Tracker:
             conn.execute("ALTER TABLE jobs ADD COLUMN run_id INTEGER")
         if "last_seen" not in cols:
             conn.execute("ALTER TABLE jobs ADD COLUMN last_seen TEXT")
+        if "ai_fit" not in cols:
+            # AI fit check result (JSON); kept across re-scrapes like status
+            conn.execute("ALTER TABLE jobs ADD COLUMN ai_fit TEXT DEFAULT ''")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_run ON jobs(run_id)")
         conn.commit()
         conn.close()
@@ -153,6 +156,13 @@ class Tracker:
             "UPDATE jobs SET status = ?, applied_at = COALESCE(?, applied_at), notes = ? WHERE id = ?",
             (status.value, now, notes, job_id),
         )
+        conn.commit()
+        conn.close()
+
+    def set_ai_fit(self, job_id: str, result: dict[str, Any]) -> None:
+        import json as _json
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("UPDATE jobs SET ai_fit = ? WHERE id = ?", (_json.dumps(result), job_id))
         conn.commit()
         conn.close()
 

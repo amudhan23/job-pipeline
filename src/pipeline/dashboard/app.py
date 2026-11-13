@@ -172,6 +172,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <th onclick="sortBy('sponsorship')">H-1B</th>
           <th onclick="sortBy('h1b_filings_count')">Filings</th>
           <th onclick="sortBy('platform')">ATS</th>
+          <th onclick="sortBy('ai_verdict')">AI fit</th>
           <th onclick="sortBy('status')">Status</th>
           <th>Apply</th>
         </tr>
@@ -303,12 +304,23 @@ function renderTable(jobs) {
       : '<span class="sponsor ' + sponsorClass(j.sponsorship) + '">' + j.sponsorship + '</span>'}</td>
     <td><span class="filings">${j.h1b_filings_count || '—'}</span></td>
     <td>${j.platform}</td>
+    <td>${aiFit(j)}</td>
     <td><span class="status ${statusClass(j.status)}">${j.status}</span></td>
     <td><a href="${esc(j.url)}" target="_blank">Apply →</a></td>
   </tr>`).join('');
 }
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+
+function aiFit(j) {
+  const f = j.ai_fit_parsed;
+  if (!f) return '<span class="location">—</span>';
+  const look = {apply: ['✓', 'var(--green, #4ade80)'], maybe: ['?', 'var(--yellow, #fbbf24)'],
+                skip: ['✗', 'var(--red, #f87171)']}[f.verdict] || ['·', 'inherit'];
+  const tip = [f.summary, ...(f.dealbreakers || []).map(b => `${b.rule}: “${b.quote}”`),
+               ...(f.concerns || [])].join('\\n');
+  return `<span title="${esc(tip)}" style="color:${look[1]};font-weight:600;cursor:help">${look[0]} ${f.verdict}</span>`;
+}
 
 loadJobs();
 // Auto-refresh every 60s
@@ -760,6 +772,12 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 # For now, check the description for no-sponsorship language
                 from pipeline.filters.sponsorship import check_jd_blocks_sponsorship
                 job["jd_blocked"] = check_jd_blocks_sponsorship(job.get("description", ""))
+                try:
+                    job["ai_fit_parsed"] = json.loads(job.get("ai_fit") or "null")
+                except (json.JSONDecodeError, TypeError):
+                    job["ai_fit_parsed"] = None
+                job["ai_verdict"] = (job["ai_fit_parsed"] or {}).get("verdict", "")
+                job.pop("description", None)          # not shown; keeps the payload small
                 jobs.append(job)
 
             return {

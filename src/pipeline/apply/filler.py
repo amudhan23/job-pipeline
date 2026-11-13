@@ -24,6 +24,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable
 
 from pipeline.apply.answers import RESUME, answer_for, is_consent, pick_option
@@ -346,7 +347,7 @@ class FillReport:
 
     @property
     def resume_attached(self) -> bool:
-        return any(f.kind == "file" and f.value == "resume.pdf" for f in self.filled)
+        return any(f.kind == "file" and f.value.lower().endswith(".pdf") for f in self.filled)
 
     @property
     def ready_to_submit(self) -> bool:
@@ -397,7 +398,7 @@ def _dedupe(fields: list[dict]) -> list[dict]:
 
 def fill_form(page, details: dict[str, str], resume_path: Path | None,
               report: FillReport, saved: dict[str, str] | None = None,
-              writer: Callable[[str, str], str | None] | None = None) -> list[dict]:
+              writer: Callable[..., Any] | None = None) -> list[dict]:
     """Fill every question on an already-open page; records results in report.
     Returns the questions found (for re-checking the form later)."""
     fields = _dedupe(page.evaluate(_ENUMERATE_JS))
@@ -429,24 +430,32 @@ def fill_form(page, details: dict[str, str], resume_path: Path | None,
                     used = candidate
                     break
             if done:
-                result.value = "resume.pdf" if used == RESUME else entered
+                result.value = resume_path.name if used == RESUME and resume_path else entered
                 result.source = ans.source if used == ans.value else f"{ans.source} (closest option)"
                 report.filled.append(result)
                 continue
             if not result.source:
                 result.source = f"no option matching '{ans.value}'"
-        elif writer and required and kind in ("text", "textarea"):
-            # Open question nobody answered: an AI draft from your resume + the JD
-            draft = writer(label, kind)
-            if draft:
+        elif writer and required and kind not in ("file", "checkbox"):
+            # Required question nobody answered: ask Claude — a written draft
+            # for open questions, or a pick the resume settles. Else it waits for you.
+            got = writer(label, kind, result.options)
+            if isinstance(got, str):                     # plain draft text
+                got = SimpleNamespace(value=got, source="AI draft from your resume — review it")
+            if got:
                 try:
-                    page.locator(f'[data-jp="{f["id"]}"]').fill(draft)
-                    result.value, result.source = draft, "AI draft from your resume — review it"
+                    entered = _apply(page, f, got.value, resume_path)
+                except FillProblem as e:
+                    entered, result.source = None, f"AI suggested '{got.value}' but {e}"
+                    _close_open_menus(page)
+                except Exception as e:
+                    entered, result.source = None, f"couldn't fill: {e.__class__.__name__}"
+                    _close_open_menus(page)
+                if entered:
+                    result.value, result.source = entered, got.source
                     report.filled.append(result)
                     report.ai_written.append(label)
                     continue
-                except Exception as e:
-                    result.source = f"couldn't fill: {e.__class__.__name__}"
         if not ans and not result.source:
             result.source = "no saved answer for this question"
         (report.needs_attention if required else report.skipped_optional).append(result)
@@ -756,7 +765,7 @@ def practice_apply(job: dict[str, Any], details: dict[str, str], resume_path: Pa
                    saved: dict[str, str] | None = None,
                    on_filled: Callable[[FillReport], bool] | None = None,
                    ask_human: Callable[[str], bool] | None = None,
-                   writer: Callable[[str, str], str | None] | None = None) -> FillReport:
+                   writer: Callable[..., Any] | None = None) -> FillReport:
     """Open the application, fill it, screenshot it.
 
     Submits only if on_filled(report) — called while the filled form is
