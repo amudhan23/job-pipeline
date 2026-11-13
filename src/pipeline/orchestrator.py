@@ -19,6 +19,7 @@ checked even if they don't show up in discovery. They are not required.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
@@ -166,14 +167,14 @@ class Pipeline:
         seen_titles: set[tuple[str, str, str]] = set()
         for job in board_jobs:
             merged.setdefault(normalize_url(job.url), job)
-            seen_titles.add((job.platform.value, job.company_slug, job.title.lower()))
+            seen_titles.add((job.platform.value, job.company_slug, _title_key(job.title)))
 
         dropped = len(board_jobs) - len(merged)
         for job in feed_jobs:
             key = normalize_url(job.url)
             # Same posting already scraped from the board (URL may differ:
             # some boards link to the company's own careers domain)
-            title_key = (job.platform.value, job.company_slug, job.title.lower())
+            title_key = (job.platform.value, job.company_slug, _title_key(job.title))
             if key in merged or title_key in seen_titles:
                 dropped += 1
                 continue
@@ -263,3 +264,9 @@ class Pipeline:
         self.tracker.finish_run(run_id, len(jobs))
         self.run_id = run_id
         return jobs
+
+
+def _title_key(title: str) -> str:
+    """Title for spotting the same posting twice: case and punctuation
+    ignored ("Software Engineer - Backend" = "Software Engineer, Backend")."""
+    return re.sub(r"[^a-z0-9]+", " ", (title or "").lower()).strip()

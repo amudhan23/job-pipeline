@@ -24,10 +24,9 @@ from typing import Any
 
 from pipeline.apply.answers import RESUME, answer_for, is_consent, pick_option
 
-# Lists the form's questions. Every control gets a data-jp attribute so
-# Python can find it again. Returns one entry per question.
-_ENUMERATE_JS = r"""
-() => {
+# Shared by the scripts below: what a person would read as each control's
+# question, whether it's visible, and what to leave alone.
+_HELPERS_JS = r"""
   const txt = s => (s || '').replace(/\s+/g, ' ').trim();
   const visible = el => {
     if (el.type === 'file') return true;           // file inputs are often hidden behind a button
@@ -92,6 +91,21 @@ _ENUMERATE_JS = r"""
                                   || el.closest('[role="group"]')?.getAttribute('aria-required') === 'true'
                                   || /\*\s*$/.test(label) || /\(required\)/i.test(label);
 
+  // Controls that aren't questions and are never touched:
+  //  - CAPTCHA plumbing (reCAPTCHA / hCaptcha / Turnstile keep a hidden
+  //    textarea in the form) — a CAPTCHA is for the human;
+  //  - Ashby's "Autofill from resume" uploader, which parses a resume into
+  //    the form (the real Resume question comes later).
+  const CAPTCHA = /g-recaptcha-response|h-captcha-response|cf-turnstile-response|captcha/i;
+  const ignored = el =>
+    CAPTCHA.test((el.name || '') + ' ' + (el.id || '') + ' ' + (typeof el.className === 'string' ? el.className : ''))
+    || !!el.closest('.g-recaptcha, .h-captcha, .cf-turnstile, [class*="captcha" i]')
+    || (el.type === 'file' && !!el.closest('[class*="autofill" i]'));
+"""
+
+# Lists the form's questions. Every control gets a data-jp attribute so
+# Python can find it again. Returns one entry per question.
+_ENUMERATE_JS = "() => {\n" + _HELPERS_JS + r"""
   const out = []; let n = 0;
   const tag = el => { const id = 'jp' + (n++); el.setAttribute('data-jp', id); return id; };
   const seenRadio = new Set();
@@ -118,6 +132,7 @@ _ENUMERATE_JS = r"""
     const type = (el.type || el.tagName).toLowerCase();
     if (['hidden', 'submit', 'button', 'reset', 'image', 'search'].includes(type)) continue;
     if (!visible(el) || el.disabled) continue;
+    if (ignored(el)) continue;
 
     if (type === 'radio') {
       if (!el.name || seenRadio.has(el.name)) continue;
@@ -188,6 +203,94 @@ _ENUMERATE_JS = r"""
 """
 
 
+# The options of ONE dropdown: the list its combobox points at
+# (aria-controls → react-select's "react-select-<id>-listbox"), else a
+# listbox inside the same field. Reading every option on the page instead
+# mixes in menus that belong to other questions. Tags each option with
+# data-jp-opt so Python can click it. null = no list found for this box.
+_MENU_OPTIONS_JS = "(box) => {\n" + _HELPERS_JS + r"""
+  document.querySelectorAll('[data-jp-opt]').forEach(o => o.removeAttribute('data-jp-opt'));
+  const ids = (box.getAttribute('aria-controls') || box.getAttribute('aria-owns') || '')
+    .split(/\s+/).filter(Boolean);
+  if (box.id) ids.push(`react-select-${box.id}-listbox`);
+  let list = null;
+  for (const id of ids) { list = document.getElementById(id); if (list) break; }
+  for (let c = box.parentElement, i = 0; !list && c && i < 5; c = c.parentElement, i++)
+    list = c.querySelector('[role="listbox"]');
+  if (!list) return null;
+  let opts = [...list.querySelectorAll('[role="option"]')];
+  if (!opts.length) opts = [...list.querySelectorAll('[id*="-option-"], [class*="__option"]')];
+  opts = opts.filter(o => { const r = o.getBoundingClientRect(); return r.width > 0 || r.height > 0; });
+  opts.forEach((o, i) => o.setAttribute('data-jp-opt', String(i)));
+  return opts.map(o => txt(o.innerText));
+}
+"""
+
+# Does a dropdown now show `choice` as its answer? react-select shows it in a
+# "single-value" element next to the (empty) input; simple widgets put it in
+# the input itself. Stops climbing at the question's own label.
+_COMBO_VALUE_JS = r"""
+(box) => {
+  const txt = s => (s || '').replace(/\s+/g, ' ').trim();
+  if (txt(box.value)) return txt(box.value);
+  const labelIds = (box.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean);
+  const isLabel = el => el.tagName === 'LABEL' || labelIds.includes(el.id);
+  for (let c = box.parentElement, i = 0; c && i < 4; c = c.parentElement, i++) {
+    const sv = c.querySelector('[class*="single-value" i], [class*="singleValue"], [class*="multi-value__label" i]');
+    if (sv && txt(sv.innerText)) return txt(sv.innerText);
+    if ([...c.querySelectorAll('label, [id]')].some(isLabel)) break;
+  }
+  return '';
+}
+"""
+
+# Final pass before saying "ready": required questions that are still empty
+# (given the data-jp ids of required questions), plus anything the browser's
+# own form validation would refuse.
+_CHECK_JS = "(ids) => {\n" + _HELPERS_JS + r"""
+  const comboValue = """ + _COMBO_VALUE_JS + r""";
+  const out = [], seen = new Set();
+  const add = (el, why) => {
+    const label = labelOf(el);
+    if (seen.has(label)) return;
+    seen.add(label); out.push({label, why});
+  };
+  for (const id of ids) {
+    const el = document.querySelector(`[data-jp="${id}"]`);
+    if (!el) continue;
+    let empty;
+    if (el.type === 'file') empty = !el.files || !el.files.length;
+    else if (el.getAttribute('role') === 'combobox' || el.getAttribute('aria-autocomplete'))
+      empty = !comboValue(el);
+    else empty = !txt(el.value);
+    if (empty) add(el, 'still empty');
+  }
+  for (const el of document.querySelectorAll('input, textarea, select')) {
+    if (['hidden', 'submit', 'button', 'reset', 'image'].includes(el.type)) continue;
+    if (el.disabled || ignored(el) || !el.willValidate || el.checkValidity()) continue;
+    add(el, el.validationMessage || 'the form rejects this answer');
+  }
+  return out;
+}
+"""
+
+_CAPTCHA_JS = r"""
+() => !!document.querySelector(
+  '[name="g-recaptcha-response"], [name="h-captcha-response"], [name="cf-turnstile-response"], '
+  + 'iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[src*="turnstile"], '
+  + '.g-recaptcha, .h-captcha, .cf-turnstile')
+"""
+
+# Pages that mean the posting is gone even though they load fine
+_CLOSED_TEXT = re.compile(
+    r"no longer (available|accepting|open|active)|job (posting )?(was )?not found|"
+    r"position has been filled|this job (has been|is) closed|couldn.t find (that|this) job|"
+    r"page you.re looking for", re.I)
+
+
+class FillProblem(Exception):
+    """A field we tried and couldn't fill; the message says why."""
+
 @dataclass
 class FieldResult:
     label: str
@@ -211,7 +314,8 @@ class FillReport:
     skipped_optional: list[FieldResult] = field(default_factory=list)
     screenshot: str = ""
     error: str = ""
-    closed: bool = False         # posting is gone (404/410)
+    closed: bool = False         # posting is gone (404/410, or redirected away)
+    captcha: bool = False        # the site checks for bots on submit — may need you then
 
     @property
     def resume_attached(self) -> bool:
@@ -280,11 +384,15 @@ def fill_form(page, details: dict[str, str], resume_path: Path | None,
             continue
 
         ans = answer_for(label, details, report.company, saved)
-        done, used = False, ""
+        done, used, entered = False, "", ""
         if ans:
             for candidate in [ans.value, *ans.alternates]:
                 try:
-                    done = _apply(page, f, candidate, resume_path)
+                    entered = _apply(page, f, candidate, resume_path)
+                    done = bool(entered)
+                except FillProblem as e:
+                    result.source = str(e)
+                    _close_open_menus(page)
                 except Exception as e:  # one stubborn field shouldn't stop the rest
                     result.source = f"couldn't fill: {e.__class__.__name__}"
                     _close_open_menus(page)
@@ -292,7 +400,7 @@ def fill_form(page, details: dict[str, str], resume_path: Path | None,
                     used = candidate
                     break
             if done:
-                result.value = "resume.pdf" if used == RESUME else used
+                result.value = "resume.pdf" if used == RESUME else entered
                 result.source = ans.source if used == ans.value else f"{ans.source} (closest option)"
                 report.filled.append(result)
                 continue
@@ -302,114 +410,177 @@ def fill_form(page, details: dict[str, str], resume_path: Path | None,
             result.source = "no saved answer for this question"
         (report.needs_attention if required else report.skipped_optional).append(result)
 
+    _final_check(page, fields, report)
 
-def _apply(page, f: dict, value: str, resume_path: Path | None) -> bool:
+
+def _norm_label(label: str) -> str:
+    return " ".join(label.replace("*", " ").lower().split())
+
+
+def _final_check(page, fields: list[dict], report: FillReport) -> None:
+    """Look at the form again the way the site will: any required question
+    still empty (or rejected by the browser's own validation) goes under
+    "needs you", so "ready to submit" is never claimed for a form that
+    would bounce. Catches choices that didn't stick and missed questions."""
+    _close_open_menus(page)
+    ids = [f["id"] for f in fields if f.get("required") and f.get("id")
+           and f["kind"] in ("text", "textarea", "select", "combobox", "file")]
+    try:
+        problems = page.evaluate(_CHECK_JS, ids)
+    except Exception:
+        return
+    flagged = {_norm_label(f.label) for f in report.needs_attention}
+    for p in problems:
+        key = _norm_label(p.get("label", ""))
+        if key in flagged:
+            continue
+        flagged.add(key)
+        was = next((f for f in report.filled if _norm_label(f.label) == key), None)
+        if was:
+            report.filled.remove(was)
+            was.source = f"filled '{was.value}' but the form still shows it as {p['why'].lower()} — check it"
+            report.needs_attention.append(was)
+        else:
+            report.needs_attention.append(FieldResult(
+                label=p.get("label", "") or "(unlabelled field)", kind="?", required=True,
+                source=f"required — {p['why'].lower()}"))
+
+
+def _apply(page, f: dict, value: str, resume_path: Path | None) -> str | None:
+    """Enter one answer. Returns what the form now shows (the option text
+    actually chosen, which can differ from the saved wording), or None."""
     kind = f["kind"]
+    loc = lambda i: page.locator(f'[data-jp="{i}"]')  # noqa: E731
     if value == RESUME:
         if kind != "file" or not resume_path or not resume_path.exists():
-            return False
-        page.locator(f'[data-jp="{f["id"]}"]').set_input_files(str(resume_path))
-        return True
+            return None
+        loc(f["id"]).set_input_files(str(resume_path))
+        return RESUME
     if kind == "file":
-        return False
+        return None
     if kind in ("text", "textarea"):
-        page.locator(f'[data-jp="{f["id"]}"]').fill(value)
-        return True
+        loc(f["id"]).fill(value)
+        return value
     if kind == "select":
         choice = pick_option(value, f["options"])
         if not choice:
-            return False
-        page.locator(f'[data-jp="{f["id"]}"]').select_option(label=choice)
-        return True
+            return None
+        loc(f["id"]).select_option(label=choice)
+        return choice
     if kind in ("radio", "buttons"):
         choice = pick_option(value, [o["text"] for o in f["options"]])
         if not choice:
-            return False
+            return None
         opt = next(o for o in f["options"] if o["text"] == choice)
-        target = page.locator(f'[data-jp="{opt["id"]}"]')
-        target.check() if kind == "radio" else target.click()
-        return True
+        loc(opt["id"]).check() if kind == "radio" else loc(opt["id"]).click()
+        return choice
     if kind == "combobox":
-        return _fill_combobox(page, page.locator(f'[data-jp="{f["id"]}"]'), value, f.get("label", ""))
+        return _fill_combobox(page, loc(f["id"]), value, f.get("label", ""))
     if kind == "checkboxes":
         # Saved answer like "YouTube, Other" — tick each matching option
         wanted = [w.strip() for w in value.split(",") if w.strip()]
         texts = [o["text"] for o in f["options"]]
         picks = [pick_option(w, texts) for w in wanted]
         if not wanted or None in picks:
-            return False
+            return None
         for p in picks:
-            page.locator(f'[data-jp="{f["options"][texts.index(p)]["id"]}"]').check()
-        return True
+            loc(f["options"][texts.index(p)]["id"]).check()
+        return ", ".join(picks)
     if kind == "checkbox":
         if value.lower() in ("yes", "true"):
-            page.locator(f'[data-jp="{f["id"]}"]').check()
-            return True
-        return False
-    return False
+            loc(f["id"]).check()
+            return "Yes"
+        return None
+    return None
 
 
-def _visible_options(page) -> tuple[Any, list[str]]:
-    opts = page.locator('[role="option"]:visible')
-    return opts, [t.strip() for t in opts.all_inner_texts()]
+def _menu_options(page, box, wait_ms: int) -> tuple[Any, list[str], bool]:
+    """Options of THIS dropdown's own list, waiting up to wait_ms for them.
+    Returns (locator, texts, scoped). scoped=False means the box doesn't say
+    which list is its own, so every visible option on the page is used."""
+    deadline = wait_ms
+    while True:
+        texts = box.evaluate(_MENU_OPTIONS_JS)
+        if texts:
+            return page.locator("[data-jp-opt]"), texts, True
+        if texts is None:                 # no list linked to this box — page-wide fallback
+            opts = page.locator('[role="option"]:visible')
+            loose = [t.strip() for t in opts.all_inner_texts()]
+            if loose:
+                return opts, loose, False
+        if deadline <= 0:
+            return None, [], texts is not None
+        page.wait_for_timeout(200)
+        deadline -= 200
 
 
-def _fill_combobox(page, box, value: str, label: str) -> bool:
+def _fill_combobox(page, box, value: str, label: str) -> str:
     """Searchable or click-only dropdown (react-select and friends).
 
-    1. Click it open and look for the option among those shown — click-only
+    1. Click it open and look for the option in its own list — click-only
        Yes/No dropdowns don't accept typing at all.
     2. If not there and the box accepts typing, type a short query (just the
        city for location searches) and wait for suggestions.
+    3. Click the option, then check the dropdown really shows it.
+    Raises FillProblem with what it saw when it can't.
     """
+    is_place = bool(re.search(r"location|city|where", label, re.I))
     _close_open_menus(page)
     box.click()
-    try:
-        page.locator('[role="option"]:visible').first.wait_for(timeout=4000)
-    except Exception:
-        pass
-    opts, texts = _visible_options(page)
+    opts, texts, _ = _menu_options(page, box, 4000)
     choice = pick_option(value, texts)
+    seen = texts
 
     typed = False
     if not choice and box.is_editable():
         typed = True
         query = value
-        if re.search(r"location|city|where", label, re.I):
+        if is_place:
             query = value.split(",")[0]                  # "New York, NY" → "New York"
         elif value == "Decline to self-identify":
             query = "decline"
         box.fill(query)
-        try:
-            page.locator('[role="option"]:visible').first.wait_for(timeout=6000)
-        except Exception:
-            pass
-        opts, texts = _visible_options(page)
+        opts, texts, _ = _menu_options(page, box, 6000)
+        seen = texts or seen
         choice = pick_option(value, texts) or (
             # location suggestions read "New York, NY, USA" — accept the first that starts with the city
-            next((t for t in texts if t.lower().startswith(query.lower())), None)
-            if re.search(r"location|city|where", label, re.I) else None)
+            next((t for t in texts if t.lower().startswith(query.lower())), None) if is_place else None)
 
     if not choice:
         # Leave the question blank and the menu closed. Deleting the typed
         # search reopens react-select's menu (any input change does), so
-        # always finish with Escape — a menu left open covers the questions
-        # below it (that caused the TimeoutErrors on Twitch).
+        # always finish by closing it — a menu left open covers the
+        # questions below it.
         if typed:
             box.press("ControlOrMeta+a")
             box.press("Delete")
         _close_open_menus(page)
-        return False
+        if not seen:
+            raise FillProblem(f"the dropdown didn't show any options for '{value}'")
+        shown = ", ".join(f"'{t}'" for t in seen[:6]) + (f" (+{len(seen) - 6} more)" if len(seen) > 6 else "")
+        raise FillProblem(f"no option matching '{value}' — it offered {shown}")
+
     opts.nth(texts.index(choice)).click()
-    return True
+    page.wait_for_timeout(150)
+    shown = box.evaluate(_COMBO_VALUE_JS)
+    if not shown:
+        _close_open_menus(page)
+        raise FillProblem(f"picked '{choice}' but the dropdown didn't keep it")
+    _close_open_menus(page)
+    return choice
 
 
 def _close_open_menus(page) -> None:
-    """Close any dropdown left open so it can't cover the next question."""
+    """Close any dropdown left open so it can't cover the next question.
+    Escape goes to the open box itself — pressed elsewhere it may be ignored."""
     for _ in range(3):
-        if not page.locator('[aria-expanded="true"]').count():
+        expanded = page.locator('[aria-expanded="true"]')
+        if not expanded.count():
             return
-        page.keyboard.press("Escape")
+        try:
+            expanded.first.press("Escape", timeout=1000)
+        except Exception:
+            page.keyboard.press("Escape")
         page.wait_for_timeout(150)
 
 
@@ -441,6 +612,11 @@ def practice_apply(job: dict[str, Any], details: dict[str, str], resume_path: Pa
                 report.error = f"job closed — the posting returns {response.status} (feeds can lag)"
                 report.save(out_dir)
                 return report
+            if _redirected_away(target, page.url):
+                report.closed = True
+                report.error = "job closed — the site sends you back to its job list (feeds can lag)"
+                report.save(out_dir)
+                return report
             # Forms on Ashby/new Greenhouse are drawn by JavaScript after load
             try:
                 page.wait_for_selector(
@@ -449,11 +625,17 @@ def practice_apply(job: dict[str, Any], details: dict[str, str], resume_path: Pa
             except PWError:
                 page.screenshot(path=str(shot), full_page=True)
                 report.screenshot = str(shot)
-                report.error = ("no application form on the page (it may need a click, a login, "
-                                "or the job closed) — see the screenshot")
+                body = page.inner_text("body") if page.locator("body").count() else ""
+                if _redirected_away(target, page.url) or _CLOSED_TEXT.search(body or ""):
+                    report.closed = True
+                    report.error = "job closed — the page says the posting is gone (feeds can lag)"
+                else:
+                    report.error = ("no application form on the page (it may need a click, a login, "
+                                    "or the job closed) — see the screenshot")
                 report.save(out_dir)
                 return report
             page.wait_for_timeout(1500)          # let late widgets finish rendering
+            report.captcha = bool(page.evaluate(_CAPTCHA_JS))
             fill_form(page, details, resume_path, report, saved)
             if not report.filled and not report.needs_attention:
                 report.error = "found the page but no questions it could read — see the screenshot"
@@ -465,6 +647,18 @@ def practice_apply(job: dict[str, Any], details: dict[str, str], resume_path: Pa
             browser.close()
     report.save(out_dir)
     return report
+
+
+def _redirected_away(target: str, final: str) -> bool:
+    """Greenhouse answers a closed job by redirecting to the board with
+    ?error=true; other boards drop you back on the job list."""
+    if not final or final == target:
+        return False
+    if "error=true" in final:
+        return True
+    if "/jobs/" in target and "/jobs/" not in final:
+        return True
+    return False
 
 
 def _launch(pw, headless: bool):

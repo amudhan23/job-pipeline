@@ -158,8 +158,14 @@ def pick_option(answer: str, options: list[str]) -> str | None:
             return o
     if a in ("yes", "no"):                           # "Yes, I am authorized…"
         return next((o for o in opts if re.match(rf"\s*{a}\b", o, re.I)), None)
-    for o in opts:                                   # containment either way
-        ol = o.strip().lower()
-        if a in ol or ol in a:
-            return o
+    # The answer inside an option: the shortest such option is the closest
+    # ("United States" → "United States +1", not "United States Minor
+    # Outlying Islands +1", wherever they sit in the list)
+    holders = [o for o in opts if a in o.strip().lower()]
+    if holders:
+        return min(holders, key=len)
+    # An option inside the answer: the longest one says the most
+    inside = [o for o in opts if len(o.strip()) > 2 and o.strip().lower() in a]
+    if inside:
+        return max(inside, key=len)
     return None

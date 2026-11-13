@@ -343,6 +343,24 @@ def boards(ctx: click.Context, platform: str | None, limit: int) -> None:
     console.print(table)
 
 
+def _one_per_application(jobs: list[dict]) -> list[dict]:
+    """The same posting can arrive twice (its board and a feed, with slightly
+    different titles). Keep the first — they're sorted best score first — so
+    one application is never filled twice."""
+    import re as _re
+    from pipeline.apply.filler import application_url
+    seen: set = set()
+    out = []
+    for j in jobs:
+        title = _re.sub(r"[^a-z0-9]+", " ", (j.get("title") or "").lower()).strip()
+        keys = {("url", application_url(j)), ("title", (j.get("company") or "").lower(), title)}
+        if keys & seen:
+            continue
+        seen |= keys
+        out.append(j)
+    return out
+
+
 @main.command()
 @click.option("--job-id", "-j", multiple=True, help="Specific job(s) to apply to")
 @click.option("--top", "-n", default=5, help="Otherwise: best N jobs from the latest run")
@@ -387,7 +405,8 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
         candidates = tracker.get_jobs(run["id"] if run else None)
         jobs = [j for j in candidates
                 if j["fit_score"] >= min_score and application_url(j)
-                and j["status"] not in ("applied", "interview", "offer", "rejected", "skipped")][:top]
+                and j["status"] not in ("applied", "interview", "offer", "rejected", "skipped")]
+        jobs = _one_per_application(jobs)[:top]
     if not jobs:
         raise click.ClickException("No matching jobs (auto-apply supports Greenhouse, Lever, Ashby).")
 
@@ -403,7 +422,7 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
         if report.closed:
             # Don't offer it again
             from pipeline.models import ApplicationStatus
-            tracker.update_status(job["id"], ApplicationStatus.SKIPPED, notes="posting closed (404)")
+            tracker.update_status(job["id"], ApplicationStatus.SKIPPED, notes="posting closed")
         if report.error:
             console.print(f"  [red]✗ {report.error}[/red]")
             if report.screenshot:
@@ -418,11 +437,16 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
         pending = []
         for f in report.needs_attention:
             console.print(f"  [yellow]! needs you:[/yellow] {f.label[:80]}  [dim]({f.source})[/dim]")
-            if "consent" not in f.source and f.kind != "file":
+            # Only questions you can answer once on My details — not consent
+            # boxes, uploads, or answers the form refused to keep
+            if f.source.startswith(("no saved answer", "no option matching")) and f.kind != "file":
                 pending.append({"question": applicant.normalize_question(f.label, job["company"]),
                                 "label": f.label, "options": f.options, "company": job["company"]})
         applicant.add_pending(pending)
         new_questions += len(pending)
+        if report.captcha:
+            console.print("  [dim]this site runs a bot check (CAPTCHA) on submit — "
+                          "submitting may need you to tick a box[/dim]")
         verdict = "[green]ready to submit[/green]" if report.ready_to_submit \
             else "[yellow]not ready — see above[/yellow]"
         console.print(f"  {verdict} · screenshot: {report.screenshot}\n")

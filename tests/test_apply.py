@@ -365,3 +365,143 @@ def test_greenhouse_resume_attached(tmp_path):
     assert cover == 0                                                    # no cover letter on file
     assert [f.label for f in report.skipped_optional if f.kind == "file"] == ["Cover Letter"]
     assert not any(f.label == "Attach" for f in report.filled + report.needs_attention + report.skipped_optional)
+
+
+# ── Round 3: from the 6-job run (Twitch regression, Kalshi, Engine) ─────
+
+RS5 = Path(__file__).parent / "fixtures" / "forms" / "react_select_v5.html"
+ASHBY_SHORT = Path(__file__).parent / "fixtures" / "forms" / "ashby_short.html"
+
+
+def _shown_values(path, details, saved=None, company="Acme"):
+    """Fill, then read what each dropdown shows (react-select keeps the
+    choice in a single-value div, not the input)."""
+    from playwright.sync_api import sync_playwright
+    from pipeline.apply.filler import FillReport, _launch, fill_form
+    import tempfile
+    resume = Path(tempfile.mkdtemp()) / "resume.pdf"
+    resume.write_bytes(b"%PDF-1.4 test")
+    report = FillReport(job_id="t", company=company, title="SWE", url="", mode="practice")
+    with sync_playwright() as pw:
+        browser = _launch(pw, headless=True)
+        page = browser.new_page()
+        page.set_default_timeout(8000)
+        page.goto(path.resolve().as_uri())
+        fill_form(page, details, resume, report, saved)
+        shown = page.evaluate("""() => Object.fromEntries([...document.querySelectorAll('[role=combobox]')]
+            .map(e => [e.id, e.closest('.field').querySelector('.select__single-value')?.innerText || '']))""")
+        captcha = page.eval_on_selector_all("[name=g-recaptcha-response]", "els => els.map(e => e.value)")
+        browser.close()
+    return report, shown, captcha
+
+
+@pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
+def test_dropdown_reads_only_its_own_list():
+    """Live Twitch run: every dropdown said "no option matching" — options
+    were read from the whole page, not the list the dropdown opened."""
+    details = {**TWITCH_DETAILS, "sponsorship_now": "Yes"}
+    report, shown, _ = _shown_values(RS5, details, saved={"all": {}, "companies": {}})
+    assert shown["country"] == "United States +1"       # dial-code list; closest, not "…Islands +1"
+    assert shown["spons"] == "Yes" and shown["h1b"] == "No" and shown["citizen"] == "India"
+    filled = {f.label: f.value for f in report.filled}
+    assert filled["Country*"] == "United States +1"
+
+
+@pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
+def test_choice_that_does_not_stick_is_not_reported_filled():
+    report, shown, _ = _shown_values(RS5, TWITCH_DETAILS)
+    assert shown["future"] == ""
+    fut = next(f for f in report.needs_attention if f.label.startswith("Would you like to be considered"))
+    assert "didn't keep it" in fut.source
+    assert not report.ready_to_submit
+
+
+@pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
+def test_unmatched_dropdown_says_what_it_offered():
+    details = {**TWITCH_DETAILS, "citizenship": "Narnia"}
+    report, _, _ = _shown_values(RS5, details)
+    cit = next(f for f in report.needs_attention if f.label.startswith("In which country"))
+    assert "no option matching 'Narnia'" in cit.source
+    assert "'Canada'" in cit.source and "'India'" in cit.source
+
+
+@pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
+def test_final_check_catches_empty_required_fields():
+    """'Why do you want to work here?' has no answer → must block 'ready'."""
+    report, _, _ = _shown_values(RS5, TWITCH_DETAILS)
+    labels = [f.label for f in report.needs_attention]
+    assert "Why do you want to work here?*" in labels
+    assert len(labels) == len(set(labels))
+
+
+@pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
+def test_ashby_short_form_skips_captcha_and_autofill():
+    details = {"first_name": "Amudhan", "last_name": "Muthaiah", "email": "a@x.com"}
+    report, _, captcha = _shown_values(ASHBY_SHORT, details, company="Kalshi")
+    seen = report.filled + report.needs_attention + report.skipped_optional
+    assert captcha == [""]                                    # never touched
+    assert not any("recaptcha" in f.label.lower() for f in seen)
+    files = [f for f in seen if f.kind == "file"]
+    assert [f.label for f in files] == ["Resume*"]            # not the autofill uploader
+    assert report.resume_attached and report.ready_to_submit
+
+
+def test_redirect_to_job_list_means_closed():
+    from pipeline.apply.filler import _redirected_away
+    t = "https://job-boards.greenhouse.io/engine/jobs/8046374003"
+    assert _redirected_away(t, "https://job-boards.greenhouse.io/engine?error=true")
+    assert _redirected_away(t, "https://job-boards.greenhouse.io/engine")
+    assert not _redirected_away(t, t)
+    assert not _redirected_away(t, t + "?gh_src=abc")
+    a = "https://jobs.ashbyhq.com/kalshi/49734bb7/application"
+    assert not _redirected_away(a, a)
+
+
+def test_pick_option_prefers_closest():
+    opts = ["United States Minor Outlying Islands +1", "United States +1", "India +91"]
+    assert pick_option("United States", opts) == "United States +1"
+
+
+def test_same_application_selected_once():
+    from pipeline.cli import _one_per_application
+    jobs = [
+        {"id": "ash-kalshi-1", "platform": "ashby", "company": "Kalshi",
+         "title": "Software Engineer - Backend", "url": "https://jobs.ashbyhq.com/kalshi/1"},
+        {"id": "simplify-9", "platform": "ashby", "company": "Kalshi",
+         "title": "Software Engineer, Backend", "url": "https://jobs.ashbyhq.com/kalshi/1/application"},
+        {"id": "ash-kalshi-2", "platform": "ashby", "company": "Kalshi",
+         "title": "Data Engineer", "url": "https://jobs.ashbyhq.com/kalshi/2"},
+    ]
+    assert [j["id"] for j in _one_per_application(jobs)] == ["ash-kalshi-1", "ash-kalshi-2"]
+
+
+def test_merge_title_key_ignores_punctuation():
+    from pipeline.orchestrator import _title_key
+    assert _title_key("Software Engineer - Backend") == _title_key("Software Engineer, Backend")
+
+
+@pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
+def test_greenhouse_closed_redirect_detected(tmp_path):
+    """Engine: the job URL redirects to the board with ?error=true."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from pipeline.apply.filler import practice_apply
+
+    class Board(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if "/jobs/" in self.path:
+                self.send_response(302); self.send_header("Location", "/engine?error=true"); self.end_headers()
+                return
+            self.send_response(200); self.send_header("Content-Type", "text/html"); self.end_headers()
+            self.wfile.write(b"<h1>Current openings at Engine</h1><a href='/engine/jobs/2'>Other job</a>")
+        def log_message(self, *a): pass
+
+    srv = HTTPServer(("127.0.0.1", 0), Board)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        job = {"id": "gh-engine-1", "company": "Engine", "title": "SWE", "platform": "greenhouse", "url": ""}
+        report = practice_apply(job, {}, None, tmp_path / "out",
+                                url=f"http://127.0.0.1:{srv.server_address[1]}/engine/jobs/1")
+    finally:
+        srv.shutdown()
+    assert report.closed and "job closed" in report.error

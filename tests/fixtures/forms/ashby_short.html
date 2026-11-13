@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Kalshi — Software Engineer (Ashby)</title></head>
+<body>
+<!-- Shape of the live Kalshi form: an "Autofill from resume" uploader, three
+     real questions, and reCAPTCHA Enterprise's response textarea -->
+<form class="ashby-application-form" onsubmit="return false;">
+  <div class="ashby-application-form-autofill-pane">
+    <div class="ashby-application-form-autofill-uploader">
+      <p>Autofill from resume</p><p>Upload your resume here to autofill key application fields.</p>
+      <button type="button">Upload file</button>
+      <input type="file" style="display:none">
+    </div>
+  </div>
+  <div class="ashby-application-form-field-entry">
+    <label for="_systemfield_name" class="ashby-application-form-question-title">Name*</label>
+    <input id="_systemfield_name" name="_systemfield_name" required></div>
+  <div class="ashby-application-form-field-entry">
+    <label for="_systemfield_email" class="ashby-application-form-question-title">Email*</label>
+    <input id="_systemfield_email" name="_systemfield_email" type="email" required></div>
+  <div class="ashby-application-form-field-entry">
+    <label for="_systemfield_resume" class="ashby-application-form-question-title">Resume*</label>
+    <button type="button">Upload File</button>
+    <input id="_systemfield_resume" name="_systemfield_resume" type="file" required style="display:none"></div>
+  <textarea id="g-recaptcha-response-100000" name="g-recaptcha-response" class="g-recaptcha-response"
+            style="width: 250px; height: 40px;"></textarea>
+  <button type="submit">Submit Application</button>
+</form>
+</body></html>
