@@ -181,6 +181,91 @@ def probe(ctx: click.Context, company_slug: str) -> None:
         console.print(f"[yellow]{company_slug}[/yellow] — no Greenhouse/Ashby/Lever board found")
 
 
+@main.command()
+@click.option("--platform", "-p", multiple=True,
+              help="Limit to platforms (greenhouse/ashby/lever/smartrecruiters/...)")
+@click.option("--no-location", is_flag=True, help="Drop location filter from queries")
+@click.option("--queries-only", is_flag=True,
+              help="Just print the search queries (no API call)")
+@click.option("--add", is_flag=True, help="Add discovered slugs to config/profile.yaml")
+@click.pass_context
+def discover(ctx: click.Context, platform: tuple[str, ...], no_location: bool,
+             queries_only: bool, add: bool) -> None:
+    """Discover new company slugs via search-engine `site:` queries.
+
+    With no search API key set, prints the boolean queries to paste into
+    Google yourself. With SERPER_API_KEY or SERPAPI_KEY set, runs them and
+    extracts company slugs automatically.
+    """
+    from pipeline.scrapers.search_discover import (
+        generate_queries, discover as run_discover, _get_search_backend, ATS_DOMAINS,
+    )
+
+    config = ctx.obj["config"]
+    platforms = list(platform) if platform else None
+    include_location = not no_location
+
+    # Manual mode: print queries
+    if queries_only or not _get_search_backend():
+        if not queries_only:
+            console.print(
+                "[yellow]No SERPER_API_KEY / SERPAPI_KEY found — "
+                "printing queries to run manually.[/yellow]\n"
+            )
+        queries = generate_queries(config, platforms, include_location)
+        scrapable = {a.name for a in ATS_DOMAINS if a.scrapable}
+        for plat, query in queries:
+            tag = "" if plat in scrapable else " [dim](no scraper yet)[/dim]"
+            console.print(f"[bold cyan]{plat}[/bold cyan]{tag}")
+            console.print(f"  {query}\n")
+        console.print(
+            "[dim]Paste these into Google. Company slug is the path after the "
+            "domain, e.g. boards.greenhouse.io/[bold]stripe[/bold].[/dim]"
+        )
+        return
+
+    # Automated mode: run searches
+    console.print("[bold]Discovering slugs via search API...[/bold]\n")
+    result = asyncio.run(run_discover(config, platforms, include_location))
+
+    if result.total() == 0:
+        console.print("[yellow]No slugs discovered.[/yellow]")
+        return
+
+    for plat in sorted(result.by_platform):
+        slugs = sorted(result.by_platform[plat])
+        console.print(f"[bold cyan]{plat}[/bold cyan] ({len(slugs)} found):")
+        console.print(f"  {', '.join(slugs)}\n")
+
+    console.print(f"[bold green]Discovered {result.total()} slugs total[/bold green]")
+
+    if add:
+        _merge_slugs_into_config(result)
+        console.print("[green]Added new slugs to config/profile.yaml[/green]")
+
+
+def _merge_slugs_into_config(result) -> None:
+    """Merge discovered slugs into the config YAML (scrapable platforms only)."""
+    import yaml
+    from pipeline.scrapers.search_discover import ATS_DOMAINS
+
+    config_path = Path(__file__).resolve().parents[2] / "config" / "profile.yaml"
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f)
+
+    scrapable = {a.name for a in ATS_DOMAINS if a.scrapable}
+    cfg.setdefault("ats", {})
+    for plat, slugs in result.by_platform.items():
+        if plat not in scrapable:
+            continue
+        existing = set(cfg["ats"].get(plat) or [])
+        merged = sorted(existing | slugs)
+        cfg["ats"][plat] = merged
+
+    with open(config_path, "w") as f:
+        yaml.safe_dump(cfg, f, sort_keys=False, default_flow_style=False)
+
+
 def _jobs_table(jobs: list) -> Table:
     """Create a rich table for jobs display."""
     table = Table(title="Matched Jobs")
