@@ -169,13 +169,15 @@ Every run prints a one-line web search report, e.g.
 plus a warning explaining why if it found nothing (blocked, no results, or
 results that weren't job boards).
 
-## Auto-apply (practice mode)
+## Auto-apply
 
 ```bash
 pip install -e '.[apply]'
 playwright install --with-deps chromium      # one-time browser download (may ask for sudo)
-jobpipe apply                                # best 5 jobs from the latest run scoring ≥ 70
+jobpipe apply                                # practice: best 5 jobs scoring ≥ 70, sends nothing
 jobpipe apply -j <job-id> --headed           # one job, with the browser visible
+jobpipe apply --submit --headed              # submit complete forms, asking "Submit?" for each
+jobpipe apply --submit --yes                 # fully automatic: submit every complete form
 ```
 
 Fill in **My details** on the dashboard first (and upload your resume). For
@@ -183,9 +185,18 @@ each job the bot opens the real Greenhouse/Lever/Ashby form, finds questions
 by their visible wording, fills what your details answer, attaches your
 resume, and saves a screenshot + report to `data/private/applications/<job>/`.
 
-It never submits in practice mode, never ticks legal consent boxes, and never
-guesses: questions it has no answer for (essays, a blank salary) are listed as
-**needs you**. Submitting gets switched on once practice runs look right.
+It never ticks legal consent boxes and never guesses: questions it has no
+answer for (essays, a blank salary) are listed as **needs you** and wait for
+you on My details.
+
+**Submitting** (`--submit`) only happens when a final check of the page finds
+every required question answered, and — unless you pass `--yes` — after you
+say yes while the filled form is open. With `--headed` you can also finish an
+incomplete form by hand and type `s` to submit it. After clicking Submit it
+waits for the site's confirmation; only confirmed applications are marked
+**applied** (with any board/feed twin), so nothing is sent twice. A CAPTCHA
+challenge or an emailed security code is handed to you in the open browser —
+never worked around; without `--headed` that application stops unsent.
 
 ## Scheduled runs (GitHub Actions)
 

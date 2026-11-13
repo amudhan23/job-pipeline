@@ -343,17 +343,21 @@ def boards(ctx: click.Context, platform: str | None, limit: int) -> None:
     console.print(table)
 
 
+def _application_keys(j: dict) -> set:
+    import re as _re
+    from pipeline.apply.filler import application_url
+    title = _re.sub(r"[^a-z0-9]+", " ", (j.get("title") or "").lower()).strip()
+    return {("url", application_url(j)), ("title", (j.get("company") or "").lower(), title)}
+
+
 def _one_per_application(jobs: list[dict]) -> list[dict]:
     """The same posting can arrive twice (its board and a feed, with slightly
     different titles). Keep the first — they're sorted best score first — so
     one application is never filled twice."""
-    import re as _re
-    from pipeline.apply.filler import application_url
     seen: set = set()
     out = []
     for j in jobs:
-        title = _re.sub(r"[^a-z0-9]+", " ", (j.get("title") or "").lower()).strip()
-        keys = {("url", application_url(j)), ("title", (j.get("company") or "").lower(), title)}
+        keys = _application_keys(j)
         if keys & seen:
             continue
         seen |= keys
@@ -365,23 +369,30 @@ def _one_per_application(jobs: list[dict]) -> list[dict]:
 @click.option("--job-id", "-j", multiple=True, help="Specific job(s) to apply to")
 @click.option("--top", "-n", default=5, help="Otherwise: best N jobs from the latest run")
 @click.option("--min-score", default=70.0, help="Only jobs scoring at least this")
-@click.option("--headed", is_flag=True, help="Show the browser so you can watch")
-@click.option("--submit", is_flag=True, help="Actually submit (not available yet)")
-def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, submit: bool) -> None:
-    """Fill job applications from your saved details (practice mode: never submits).
+@click.option("--headed", is_flag=True, help="Show the browser so you can watch (and step in)")
+@click.option("--submit", is_flag=True, help="Submit applications whose every required question is answered")
+@click.option("--yes", "-y", is_flag=True, help="With --submit: don't ask before each one (fully automatic)")
+def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, submit: bool,
+          yes: bool) -> None:
+    """Fill job applications from your saved details.
 
-    For each job it opens the real application form, fills every question it
-    has an answer for, attaches your resume, takes a screenshot, and lists
-    anything that needs you. Reports: data/private/applications/<job>/.
+    Without --submit (practice): fills every question it can, attaches your
+    resume, screenshots the form, lists what needs you — and sends nothing.
+
+    With --submit: same, then for each form with every required question
+    answered it asks "Submit?" while the filled form is open (use --headed
+    to look at it first), clicks Submit and waits for the site's
+    confirmation. Confirmed applications are marked applied. --yes skips the
+    question. Reports: data/private/applications/<job>/.
     """
     import re as _re
+    from datetime import datetime as _dt
     from pipeline import applicant
     from pipeline.apply.filler import application_url, practice_apply
+    from pipeline.models import ApplicationStatus
 
-    if submit:
-        raise click.ClickException(
-            "Submitting isn't switched on yet — run practice mode, check the screenshots, "
-            "and we'll enable it once the forms come out right.")
+    if yes and not submit:
+        raise click.ClickException("--yes only makes sense with --submit.")
     try:
         import playwright  # noqa: F401
     except ImportError:
@@ -398,8 +409,10 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
         raise click.ClickException("Upload your resume on the dashboard's My details page first.")
 
     tracker = Tracker()
+    candidates: list[dict] = []
     if job_id:
         jobs = [j for j in (tracker.get_job(i) for i in job_id) if j]
+        jobs = [j for j in jobs if not (submit and j["status"] == "applied")]
     else:
         run = tracker.latest_run()
         candidates = tracker.get_jobs(run["id"] if run else None)
@@ -412,23 +425,18 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
 
     out_root = applicant.PRIVATE_DIR / "applications"
     saved = applicant.load_answers()
-    console.print(f"\n[bold]Practice mode[/bold] — filling {len(jobs)} application(s); "
-                  "nothing will be submitted.\n")
-    new_questions = 0
-    for job in jobs:
-        console.print(f"[cyan]{job['company']}[/cyan] — {job['title']}  [dim]({job['fit_score']:.0f})[/dim]")
-        folder = out_root / _re.sub(r"[^A-Za-z0-9_.-]", "_", job["id"])
-        report = practice_apply(job, details, resume, folder, headless=not headed, saved=saved)
-        if report.closed:
-            # Don't offer it again
-            from pipeline.models import ApplicationStatus
-            tracker.update_status(job["id"], ApplicationStatus.SKIPPED, notes="posting closed")
-        if report.error:
-            console.print(f"  [red]✗ {report.error}[/red]")
-            if report.screenshot:
-                console.print(f"    screenshot: {report.screenshot}")
-            console.print()
-            continue
+    if submit:
+        how = "without asking (--yes)" if yes else "asking you before each one"
+        console.print(f"\n[bold]Submit mode[/bold] — {len(jobs)} application(s); complete forms are "
+                      f"submitted {how}.\n")
+    else:
+        console.print(f"\n[bold]Practice mode[/bold] — filling {len(jobs)} application(s); "
+                      "nothing will be submitted.\n")
+
+    totals = {"questions": 0, "submitted": 0}
+
+    def show(report, job) -> None:
+        """Print what was filled and what needs you; remember open questions."""
         console.print(f"  [green]✓ filled {len(report.filled)} field(s)[/green]")
         if report.resume_attached:
             console.print("  [green]📎 resume attached[/green]")
@@ -444,14 +452,73 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
                                 "label": f.label, "options": f.options, "company": job["company"],
                                 "multi": f.kind == "checkboxes"})
         applicant.add_pending(pending)
-        new_questions += len(pending)
+        totals["questions"] += len(pending)
         if report.captcha:
             console.print("  [dim]this site runs a bot check (CAPTCHA) on submit — "
-                          "submitting may need you to tick a box[/dim]")
-        verdict = "[green]ready to submit[/green]" if report.ready_to_submit \
-            else "[yellow]not ready — see above[/yellow]"
-        console.print(f"  {verdict} · screenshot: {report.screenshot}\n")
-    if new_questions:
+                          "it may ask you to solve one[/dim]")
+
+    def ask_human(message: str) -> bool:
+        if not headed:
+            return False                  # nobody can see the browser
+        console.print(f"  [bold yellow]→ {message}[/bold yellow]")
+        click.prompt("    Press Enter here when you're done", default="", show_default=False)
+        return True
+
+    for job in jobs:
+        console.print(f"[cyan]{job['company']}[/cyan] — {job['title']}  [dim]({job['fit_score']:.0f})[/dim]")
+        folder = out_root / _re.sub(r"[^A-Za-z0-9_.-]", "_", job["id"])
+        shown = {"done": False}
+
+        def on_filled(report, job=job, shown=shown) -> bool:
+            show(report, job)
+            shown["done"] = True
+            if not submit:
+                return False
+            if report.ready_to_submit:
+                if yes:
+                    return True
+                where = "in the browser window" if headed else f"in {report.screenshot}"
+                return click.confirm(f"  Everything is filled (check it {where}). Submit this application?",
+                                     default=False)
+            if headed and not yes:
+                # Let you finish the rest by hand right there
+                answer = click.prompt("  Not complete. Fill the rest in the browser and type 's' to submit, "
+                                      "or press Enter to skip", default="", show_default=False)
+                return answer.strip().lower() == "s"
+            return False
+
+        report = practice_apply(job, details, resume, folder, headless=not headed, saved=saved,
+                                on_filled=on_filled, ask_human=ask_human)
+        if report.closed:
+            tracker.update_status(job["id"], ApplicationStatus.SKIPPED, notes="posting closed")
+        if report.error:
+            console.print(f"  [red]✗ {report.error}[/red]")
+            if report.screenshot:
+                console.print(f"    screenshot: {report.screenshot}")
+            console.print()
+            continue
+        if not shown["done"]:
+            show(report, job)
+        if report.submitted:
+            totals["submitted"] += 1
+            note = f"submitted by jobpipe {_dt.now():%Y-%m-%d %H:%M}"
+            keys = _application_keys(job)
+            twins = {j["id"] for j in candidates if _application_keys(j) & keys} | {job["id"]}
+            for jid in twins:              # its feed/board twin too, so it's never re-sent
+                tracker.update_status(jid, ApplicationStatus.APPLIED, notes=note)
+            console.print(f"  [bold green]✓ submitted — {report.submit_note}[/bold green] · "
+                          f"screenshot: {report.screenshot}\n")
+        elif report.submit_note:
+            console.print(f"  [yellow]not submitted — {report.submit_note}[/yellow] · "
+                          f"screenshot: {report.screenshot}\n")
+        else:
+            verdict = "[green]ready to submit[/green]" if report.ready_to_submit \
+                else "[yellow]not ready — see above[/yellow]"
+            console.print(f"  {verdict} · screenshot: {report.screenshot}\n")
+    if totals["submitted"]:
+        console.print(f"[bold green]Submitted {totals['submitted']} application(s).[/bold green] "
+                      "They're marked applied on the dashboard; watch your email for confirmations.")
+    if totals["questions"]:
         console.print("[bold]Answer the open questions once[/bold] on the dashboard → My details → "
                       "“Questions waiting for you”, then run `jobpipe apply` again.")
 

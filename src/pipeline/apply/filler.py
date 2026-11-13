@@ -8,6 +8,10 @@ How it works:
   4. Each control is filled the way a person would: type, choose a dropdown
      option, click a radio / Yes-No button, attach the resume.
   5. Practice mode: full-page screenshot + report, and it never submits.
+  6. Submit mode (only when every required question is answered and you
+     said yes): clicks Submit and waits for the site's confirmation. A
+     CAPTCHA or emailed code is handed to you in the open browser — never
+     worked around.
 
 Anything it can't answer, plus every legal consent box, is listed under
 "needs your attention" instead of being guessed.
@@ -20,7 +24,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from pipeline.apply.answers import RESUME, answer_for, is_consent, pick_option
 
@@ -336,6 +340,8 @@ class FillReport:
     error: str = ""
     closed: bool = False         # posting is gone (404/410, or redirected away)
     captcha: bool = False        # the site checks for bots on submit — may need you then
+    submitted: bool = False      # the site confirmed the application
+    submit_note: str = ""        # what happened when submitting (or why it didn't)
 
     @property
     def resume_attached(self) -> bool:
@@ -389,8 +395,9 @@ def _dedupe(fields: list[dict]) -> list[dict]:
 
 
 def fill_form(page, details: dict[str, str], resume_path: Path | None,
-              report: FillReport, saved: dict[str, str] | None = None) -> None:
-    """Fill every question on an already-open page; records results in report."""
+              report: FillReport, saved: dict[str, str] | None = None) -> list[dict]:
+    """Fill every question on an already-open page; records results in report.
+    Returns the questions found (for re-checking the form later)."""
     fields = _dedupe(page.evaluate(_ENUMERATE_JS))
     for f in fields:
         label, kind, required = f.get("label", ""), f["kind"], bool(f.get("required"))
@@ -431,6 +438,7 @@ def fill_form(page, details: dict[str, str], resume_path: Path | None,
         (report.needs_attention if required else report.skipped_optional).append(result)
 
     _final_check(page, fields, report)
+    return fields
 
 
 def _norm_label(label: str) -> str:
@@ -604,10 +612,141 @@ def _close_open_menus(page) -> None:
         page.wait_for_timeout(150)
 
 
+# ── Submitting ─────────────────────────────────────────────────────────
+
+# What a site shows after it accepted an application. Only text that wasn't
+# on the page before clicking counts (job pages often say "thank you for
+# your interest" up front).
+_CONFIRM_TEXT = re.compile(
+    r"thank(s| you) for (applying|your application|submitting|applying to)|"
+    r"application (was |has been )?(successfully )?(submitted|received|sent)|"
+    r"we.ve received your application|successfully (applied|submitted)", re.I)
+_CONFIRM_URL = re.compile(r"confirmation|thank|submitted|success", re.I)
+_CODE_TEXT = re.compile(
+    r"(security|verification) code|code (has been |was )?sent|enter the (\d+.character )?code|"
+    r"check your (e-?mail|inbox) for (a|the) code", re.I)
+_ERROR_TEXT = re.compile(
+    r"there (was|were) (an? )?(error|problem)s?|please (fix|correct|complete)|"
+    r"(is|are) required|can.t be blank|something went wrong|could not (be )?submit|"
+    r"unable to submit|try again", re.I)
+_SUBMIT_NAME = re.compile(r"^\s*(submit( your)?( application)?|send application|apply( now)?)\s*$", re.I)
+
+_CHALLENGE_JS = r"""
+() => [...document.querySelectorAll('iframe[src*="recaptcha"][src*="bframe"], iframe[src*="hcaptcha"], '
+                                    + 'iframe[src*="challenges.cloudflare"]')]
+  .some(f => {
+    const r = f.getBoundingClientRect();
+    const shown = f.checkVisibility ? f.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}) : true;
+    return shown && r.width > 50 && r.height > 50;
+  })
+"""
+
+
+def _new_match(rx: re.Pattern, text: str, before: str) -> str:
+    """First match of rx in text that wasn't already on the page before."""
+    for m in rx.finditer(text):
+        if m.group(0).lower() not in before.lower():
+            start = max(0, m.start() - 60)
+            return " ".join(text[start:m.end() + 80].split())
+    return ""
+
+
+def _body_text(page) -> str:
+    try:
+        return page.inner_text("body", timeout=3000)
+    except Exception:
+        return ""                          # mid-navigation
+
+
+def _submit_button(page):
+    btn = page.get_by_role("button", name=_SUBMIT_NAME)
+    for i in range(btn.count()):
+        if btn.nth(i).is_visible():
+            return btn.nth(i)
+    loose = page.locator("form button[type=submit], form input[type=submit]")
+    for i in range(loose.count()):
+        if loose.nth(i).is_visible():
+            return loose.nth(i)
+    return None
+
+
+def submit_application(page, report: FillReport, out_dir: Path,
+                       ask_human: Callable[[str], bool] | None = None,
+                       wait_seconds: int = 60) -> None:
+    """Click Submit and wait for the site to confirm. A CAPTCHA challenge or
+    an emailed verification code is handed to the person (ask_human shows
+    the message and returns once they're done) — never worked around."""
+    report.mode = "submit"
+    btn = _submit_button(page)
+    if btn is None:
+        report.submit_note = "couldn't find the Submit button — nothing was sent"
+        return
+    before_url, before = page.url, _body_text(page)
+    btn.scroll_into_view_if_needed()
+    btn.click()
+
+    asked: set[str] = set()
+    waited, limit = 0, wait_seconds
+    while waited < limit:
+        page.wait_for_timeout(1000)
+        waited += 1
+        text, url = _body_text(page), page.url
+        if (url != before_url and _CONFIRM_URL.search(url)) or _new_match(_CONFIRM_TEXT, text, before):
+            report.submitted = True
+            report.submit_note = "the site confirmed your application"
+            break
+        handoff = None
+        if "code" not in asked and _new_match(_CODE_TEXT, text, before):
+            handoff = ("code", "The site emailed you a verification code. Type it into the "
+                               "browser and finish submitting there.")
+        elif "captcha" not in asked and page.evaluate(_CHALLENGE_JS):
+            handoff = ("captcha", "The site is showing a CAPTCHA. Solve it in the browser "
+                                  "(and press Submit again if it asks).")
+        if handoff:
+            asked.add(handoff[0])
+            if ask_human and ask_human(handoff[1]):
+                limit = waited + 30            # give the site time to confirm after you
+                continue
+            report.submit_note = (f"stopped: the site wants a {handoff[0]} — "
+                                  "run with --headed to handle it yourself")
+            break
+        if waited >= 8:
+            problem = _new_match(_ERROR_TEXT, text, before)
+            if problem:
+                report.submit_note = f"the site reported a problem: “{problem[:160]}”"
+                break
+    else:
+        report.submit_note = ("clicked Submit but saw no confirmation — check your email "
+                              "and the screenshot before trying again")
+    shot = out_dir / "submitted.png"
+    try:
+        page.screenshot(path=str(shot), full_page=True)
+        report.screenshot = str(shot)
+    except Exception:
+        pass
+
+
+def recheck(page, fields: list[dict]) -> list[str]:
+    """Labels of required questions still empty right now (after you've
+    had a chance to fill them in the browser)."""
+    ids = [f["id"] for f in fields if f.get("required") and f.get("id")
+           and f["kind"] in ("text", "textarea", "select", "combobox", "file")]
+    try:
+        return [p.get("label") or "(unlabelled field)" for p in page.evaluate(_CHECK_JS, ids)]
+    except Exception:
+        return ["(couldn't read the form)"]
+
+
 def practice_apply(job: dict[str, Any], details: dict[str, str], resume_path: Path | None,
                    out_dir: Path, url: str | None = None, headless: bool = True,
-                   saved: dict[str, str] | None = None) -> FillReport:
-    """Open the application, fill it, screenshot it. Never submits."""
+                   saved: dict[str, str] | None = None,
+                   on_filled: Callable[[FillReport], bool] | None = None,
+                   ask_human: Callable[[str], bool] | None = None) -> FillReport:
+    """Open the application, fill it, screenshot it.
+
+    Submits only if on_filled(report) — called while the filled form is
+    still open — returns True, and then only once every required question
+    is answered."""
     from playwright.sync_api import sync_playwright, Error as PWError
 
     report = FillReport(job_id=job["id"], company=job.get("company", ""),
@@ -656,11 +795,17 @@ def practice_apply(job: dict[str, Any], details: dict[str, str], resume_path: Pa
                 return report
             page.wait_for_timeout(1500)          # let late widgets finish rendering
             report.captcha = bool(page.evaluate(_CAPTCHA_JS))
-            fill_form(page, details, resume_path, report, saved)
+            fields = fill_form(page, details, resume_path, report, saved)
             if not report.filled and not report.needs_attention:
                 report.error = "found the page but no questions it could read — see the screenshot"
             page.screenshot(path=str(shot), full_page=True)
             report.screenshot = str(shot)
+            if on_filled and not report.error and on_filled(report):
+                missing = recheck(page, fields)
+                if missing:
+                    report.submit_note = ("not sent — still empty: " + "; ".join(m[:60] for m in missing[:5]))
+                else:
+                    submit_application(page, report, out_dir, ask_human)
         except PWError as e:
             report.error = str(e).splitlines()[0][:300]
         finally:

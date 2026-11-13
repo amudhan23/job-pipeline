@@ -96,12 +96,12 @@ def test_apply_command_requires_details(tmp_path, monkeypatch):
     assert result.exit_code != 0 and "Phone" in result.output
 
 
-def test_apply_command_refuses_submit(tmp_path, monkeypatch):
+def test_apply_command_yes_needs_submit(tmp_path, monkeypatch):
     from click.testing import CliRunner
     from pipeline.cli import main
     _cli_env(tmp_path, monkeypatch, details=DETAILS)
-    result = CliRunner().invoke(main, ["apply", "--submit"])
-    assert result.exit_code != 0 and "isn't switched on" in result.output
+    result = CliRunner().invoke(main, ["apply", "--yes"])
+    assert result.exit_code != 0 and "--submit" in result.output
 
 
 @pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
@@ -538,3 +538,68 @@ def test_new_derived_answers():
     ref = answer_for("How did you hear about us?*", {"referral_source": "Online job board"})
     assert pick_option(ref.alternates[0], ["LinkedIn", "Company careers page / website"]) \
         == "Company careers page / website"
+
+
+# ── Submitting ──────────────────────────────────────────────────────────
+
+SUBMIT = Path(__file__).parent / "fixtures" / "forms" / "submit_flow.html"
+
+
+def _submit_cli(tmp_path, monkeypatch, url, args, input=None):
+    import json
+    from click.testing import CliRunner
+    from pipeline.apply import filler
+    from pipeline.cli import main
+    from pipeline.tracker.db import Tracker
+    pdir = _cli_env(tmp_path, monkeypatch, details=DETAILS)
+    monkeypatch.setattr(filler, "application_url", lambda job: url)
+    result = CliRunner().invoke(main, ["apply", "--top", "1", *args], input=input)
+    assert result.exit_code == 0, result.output
+    report = json.loads((pdir / "applications" / "ab-acme-1" / "report.json").read_text())
+    return result.output, report, Tracker().get_job("ab-acme-1")
+
+
+@pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
+def test_submit_confirmed_marks_applied(tmp_path, monkeypatch):
+    out, report, job = _submit_cli(tmp_path, monkeypatch, SUBMIT.resolve().as_uri(), ["--submit", "--yes"])
+    assert report["submitted"] is True and "confirmed" in report["submit_note"]
+    assert job["status"] == "applied" and "submitted by jobpipe" in job["notes"]
+    assert "Submitted 1 application" in out
+
+
+@pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
+def test_submit_asks_first_and_no_means_no(tmp_path, monkeypatch):
+    out, report, job = _submit_cli(tmp_path, monkeypatch, SUBMIT.resolve().as_uri(), ["--submit"], input="n\n")
+    assert "Submit this application?" in out
+    assert report["submitted"] is False and report["mode"] == "practice"
+    assert job["status"] != "applied"
+
+
+@pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
+def test_incomplete_form_is_never_submitted(tmp_path, monkeypatch):
+    out, report, job = _submit_cli(tmp_path, monkeypatch, FORM.resolve().as_uri(), ["--submit", "--yes"])
+    assert report["submitted"] is False and report["mode"] == "practice"
+    assert "needs you" in out and job["status"] != "applied"
+
+
+@pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
+def test_emailed_code_is_handed_to_you(tmp_path, monkeypatch):
+    _, report, job = _submit_cli(tmp_path, monkeypatch, SUBMIT.resolve().as_uri() + "#code", ["--submit", "--yes"])
+    assert report["submitted"] is False and "code" in report["submit_note"] and "--headed" in report["submit_note"]
+    assert job["status"] != "applied"
+
+
+@pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
+def test_site_error_reported_not_applied(tmp_path, monkeypatch):
+    _, report, job = _submit_cli(tmp_path, monkeypatch, SUBMIT.resolve().as_uri() + "#error", ["--submit", "--yes"])
+    assert report["submitted"] is False and "There was an error" in report["submit_note"]
+    assert job["status"] != "applied"
+
+
+@pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
+def test_applied_job_not_offered_again(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from pipeline.cli import main
+    _submit_cli(tmp_path, monkeypatch, SUBMIT.resolve().as_uri(), ["--submit", "--yes"])
+    again = CliRunner().invoke(main, ["apply", "--submit", "--yes"])
+    assert again.exit_code != 0 and "No matching jobs" in again.output
