@@ -169,6 +169,24 @@ Every run prints a one-line web search report, e.g.
 plus a warning explaining why if it found nothing (blocked, no results, or
 results that weren't job boards).
 
+## Auto-apply (practice mode)
+
+```bash
+pip install -e '.[apply]'
+playwright install --with-deps chromium      # one-time browser download (may ask for sudo)
+jobpipe apply                                # best 5 jobs from the latest run scoring ≥ 70
+jobpipe apply -j <job-id> --headed           # one job, with the browser visible
+```
+
+Fill in **My details** on the dashboard first (and upload your resume). For
+each job the bot opens the real Greenhouse/Lever/Ashby form, finds questions
+by their visible wording, fills what your details answer, attaches your
+resume, and saves a screenshot + report to `data/private/applications/<job>/`.
+
+It never submits in practice mode, never ticks legal consent boxes, and never
+guesses: questions it has no answer for (essays, a blank salary) are listed as
+**needs you**. Submitting gets switched on once practice runs look right.
+
 ## Scheduled runs (GitHub Actions)
 
 `.github/workflows/pipeline.yml` runs the pipeline in the cloud — every 3

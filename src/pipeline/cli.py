@@ -342,6 +342,72 @@ def boards(ctx: click.Context, platform: str | None, limit: int) -> None:
     console.print(table)
 
 
+@main.command()
+@click.option("--job-id", "-j", multiple=True, help="Specific job(s) to apply to")
+@click.option("--top", "-n", default=5, help="Otherwise: best N jobs from the latest run")
+@click.option("--min-score", default=70.0, help="Only jobs scoring at least this")
+@click.option("--headed", is_flag=True, help="Show the browser so you can watch")
+@click.option("--submit", is_flag=True, help="Actually submit (not available yet)")
+def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, submit: bool) -> None:
+    """Fill job applications from your saved details (practice mode: never submits).
+
+    For each job it opens the real application form, fills every question it
+    has an answer for, attaches your resume, takes a screenshot, and lists
+    anything that needs you. Reports: data/private/applications/<job>/.
+    """
+    import re as _re
+    from pipeline import applicant
+    from pipeline.apply.filler import application_url, practice_apply
+
+    if submit:
+        raise click.ClickException(
+            "Submitting isn't switched on yet — run practice mode, check the screenshots, "
+            "and we'll enable it once the forms come out right.")
+    try:
+        import playwright  # noqa: F401
+    except ImportError:
+        raise click.ClickException(
+            "Auto-apply needs a browser: pip install -e '.[apply]' && playwright install --with-deps chromium")
+
+    details = applicant.load()
+    missing = applicant.missing_required(details)
+    if missing:
+        raise click.ClickException(
+            f"Fill these on the dashboard's My details page first: {', '.join(missing)}")
+    resume = applicant.PRIVATE_DIR / applicant.RESUME_FILE
+    if not resume.exists():
+        raise click.ClickException("Upload your resume on the dashboard's My details page first.")
+
+    tracker = Tracker()
+    if job_id:
+        jobs = [j for j in (tracker.get_job(i) for i in job_id) if j]
+    else:
+        run = tracker.latest_run()
+        candidates = tracker.get_jobs(run["id"] if run else None)
+        jobs = [j for j in candidates
+                if j["fit_score"] >= min_score and application_url(j)
+                and j["status"] not in ("applied", "interview", "offer", "rejected")][:top]
+    if not jobs:
+        raise click.ClickException("No matching jobs (auto-apply supports Greenhouse, Lever, Ashby).")
+
+    out_root = applicant.PRIVATE_DIR / "applications"
+    console.print(f"\n[bold]Practice mode[/bold] — filling {len(jobs)} application(s); "
+                  "nothing will be submitted.\n")
+    for job in jobs:
+        console.print(f"[cyan]{job['company']}[/cyan] — {job['title']}  [dim]({job['fit_score']:.0f})[/dim]")
+        folder = out_root / _re.sub(r"[^A-Za-z0-9_.-]", "_", job["id"])
+        report = practice_apply(job, details, resume, folder, headless=not headed)
+        if report.error:
+            console.print(f"  [red]✗ {report.error}[/red]\n")
+            continue
+        console.print(f"  [green]✓ filled {len(report.filled)} field(s)[/green]")
+        for f in report.needs_attention:
+            console.print(f"  [yellow]! needs you:[/yellow] {f.label[:80]}  [dim]({f.source})[/dim]")
+        verdict = "[green]ready to submit[/green]" if report.ready_to_submit \
+            else "[yellow]not ready — see above[/yellow]"
+        console.print(f"  {verdict} · screenshot: {report.screenshot}\n")
+
+
 @main.command("state-key")
 @click.option("--save", is_flag=True, help="Also save it to ~/.config/jobpipe/state_key")
 def state_key(save: bool) -> None:

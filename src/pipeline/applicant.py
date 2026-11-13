@@ -85,7 +85,8 @@ def defaults() -> dict[str, str]:
     return {k: _BY_KEY[k].get("default", "") for k in KEYS}
 
 
-def load(private_dir: Path = PRIVATE_DIR) -> dict[str, str]:
+def load(private_dir: Path | None = None) -> dict[str, str]:
+    private_dir = private_dir or PRIVATE_DIR
     path = private_dir / PROFILE_FILE
     data = defaults()
     if path.exists():
@@ -108,7 +109,8 @@ def clean(values: dict[str, Any]) -> dict[str, str]:
     return out
 
 
-def save(values: dict[str, Any], private_dir: Path = PRIVATE_DIR) -> dict[str, str]:
+def save(values: dict[str, Any], private_dir: Path | None = None) -> dict[str, str]:
+    private_dir = private_dir or PRIVATE_DIR
     data = clean(values)
     private_dir.mkdir(parents=True, exist_ok=True)
     path = private_dir / PROFILE_FILE
@@ -124,11 +126,13 @@ def missing_required(data: dict[str, str]) -> list[str]:
     return [_BY_KEY[k]["label"] for k in required if not data.get(k)]
 
 
-def has_resume(private_dir: Path = PRIVATE_DIR) -> bool:
+def has_resume(private_dir: Path | None = None) -> bool:
+    private_dir = private_dir or PRIVATE_DIR
     return (private_dir / RESUME_FILE).exists()
 
 
-def save_resume(pdf: bytes, private_dir: Path = PRIVATE_DIR) -> None:
+def save_resume(pdf: bytes, private_dir: Path | None = None) -> None:
+    private_dir = private_dir or PRIVATE_DIR
     if len(pdf) > MAX_RESUME_BYTES:
         raise ValueError("Resume is larger than 10 MB")
     if not pdf.startswith(b"%PDF"):

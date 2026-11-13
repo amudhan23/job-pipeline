@@ -25,6 +25,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.4", "mypy>=1.10"]
+apply = ["playwright>=1.40"]   # then: playwright install --with-deps chromium
 
 [project.scripts]
 jobpipe = "pipeline.cli:main"

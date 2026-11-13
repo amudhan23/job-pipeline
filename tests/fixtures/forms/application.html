@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Apply — Software Engineer</title>
+<style>
+  body { font-family: sans-serif; max-width: 720px; margin: 20px auto; }
+  .field { margin: 14px 0; } ._label { font-weight: bold; display:block; }
+  .menu { border: 1px solid #ccc; } .menu [role=option] { padding: 4px; cursor: pointer; }
+  input[type=file] { opacity: 0; position: absolute; width: 1px; height: 1px; }  /* hidden behind a button, as on real boards */
+</style></head>
+<body>
+<h1>Software Engineer, New Grad</h1>
+<form id="application_form" onsubmit="window.submitted = true; return false;">
+
+  <!-- Greenhouse-style: <label for> with required asterisk -->
+  <div class="field"><label for="first_name">First Name *</label><input id="first_name" required></div>
+  <div class="field"><label for="last_name">Last Name *</label><input id="last_name" required></div>
+  <div class="field"><label for="email">Email *</label><input id="email" type="email" required></div>
+  <div class="field"><label for="phone">Phone *</label><input id="phone" type="tel" required></div>
+  <div class="field"><label for="resume">Resume/CV *</label>
+       <button type="button" onclick="document.getElementById('resume').click()">Attach</button>
+       <input id="resume" type="file" required></div>
+  <div class="field"><label for="li">LinkedIn Profile</label><input id="li"></div>
+
+  <!-- Lever-style: input wrapped inside its label -->
+  <div class="field"><label>Current location <input name="location"></label></div>
+
+  <!-- Native select -->
+  <div class="field"><label for="auth">Are you legally authorized to work in the United States? *</label>
+    <select id="auth" required><option>Select...</option><option>Yes</option><option>No</option></select></div>
+
+  <!-- Radio group in a fieldset -->
+  <fieldset class="field"><legend>Will you now or in the future require sponsorship for employment visa status (e.g. H-1B)? *</legend>
+    <label><input type="radio" name="spons" value="y" required> Yes</label>
+    <label><input type="radio" name="spons" value="n"> No</label></fieldset>
+
+  <!-- Searchable dropdown (react-select style): role=combobox + role=option list -->
+  <div class="field"><label id="school-lbl">School</label>
+    <input role="combobox" aria-labelledby="school-lbl" aria-autocomplete="list" id="school">
+    <div id="school-menu" class="menu" hidden></div></div>
+
+  <!-- Ashby-style Yes/No buttons -->
+  <div class="field"><div class="_label">Are you open to relocating?</div>
+    <div><button type="button" onclick="window.relocate='Yes'">Yes</button>
+         <button type="button" onclick="window.relocate='No'">No</button></div></div>
+
+  <!-- Voluntary self-ID -->
+  <div class="field"><label for="gender">Gender</label>
+    <select id="gender"><option></option><option>Male</option><option>Female</option>
+      <option>Decline To Self Identify</option></select></div>
+  <div class="field"><label for="vet">Veteran Status</label>
+    <select id="vet"><option></option><option>I am a protected veteran</option>
+      <option>I am not a protected veteran</option><option>I don't wish to answer</option></select></div>
+
+  <!-- Things the bot must NOT guess -->
+  <div class="field"><label for="why">Why do you want to work at Acme? *</label><textarea id="why" required></textarea></div>
+  <div class="field"><label for="salary">Desired salary</label><input id="salary"></div>
+  <div class="field"><label><input type="checkbox" id="consent" required>
+    I certify that the information provided is accurate and complete *</label></div>
+
+  <button type="submit" id="submit">Submit Application</button>
+</form>
+<script>
+  // Minimal searchable dropdown: typing shows matching options
+  const schools = ['Columbia University', 'New York University', 'NYU Shanghai', 'Stanford University'];
+  const box = document.getElementById('school'), menu = document.getElementById('school-menu');
+  box.addEventListener('input', () => {
+    const q = box.value.toLowerCase();
+    menu.innerHTML = schools.filter(s => s.toLowerCase().includes(q))
+      .map(s => `<div role="option">${s}</div>`).join('');
+    menu.hidden = !menu.innerHTML;
+  });
+  menu.addEventListener('click', e => {
+    if (e.target.getAttribute('role') === 'option') { box.value = e.target.textContent; menu.hidden = true; }
+  });
+</script>
+</body></html>
