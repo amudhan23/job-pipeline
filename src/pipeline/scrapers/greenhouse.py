@@ -50,7 +50,9 @@ class GreenhouseScraper(BaseScraper):
                 job = Job(
                     id=f"gh-{company_slug}-{job_id}",
                     title=title,
-                    company=item.get("company", {}).get("name", company_slug),
+                    company=item.get("company_name")
+                    or (item.get("company") or {}).get("name")
+                    or company_slug,
                     company_slug=company_slug,
                     location=location,
                     url=item.get("absolute_url", f"https://boards.greenhouse.io/{company_slug}/jobs/{job_id}"),

@@ -120,16 +120,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <div id="runBanner" style="color:var(--muted);font-size:13px;margin-bottom:12px"></div>
+
   <div class="stats" id="stats"></div>
 
   <div class="filters">
+    <select id="scope" onchange="loadJobs()">
+      <option value="latest">Latest run</option>
+      <option value="all">All saved jobs</option>
+    </select>
     <input type="text" id="search" placeholder="Search company, title, location..."
            oninput="filterJobs()">
     <select id="minScore" onchange="filterJobs()">
       <option value="0">All scores</option>
       <option value="50">Score ≥ 50</option>
       <option value="60">Score ≥ 60</option>
-      <option value="70" selected>Score ≥ 70</option>
+      <option value="70">Score ≥ 70</option>
       <option value="80">Score ≥ 80</option>
     </select>
     <select id="sponsorFilter" onchange="filterJobs()">
@@ -184,9 +190,24 @@ let sortCol = 'fit_score';
 let sortDir = 'desc';
 
 async function loadJobs() {
-  const resp = await fetch('/api/jobs');
+  const scope = document.getElementById('scope').value;
+  const resp = await fetch('/api/jobs?scope=' + scope);
   const data = await resp.json();
   allJobs = data.jobs;
+
+  // Say exactly which jobs are on screen, matching the CLI's last run
+  const banner = document.getElementById('runBanner');
+  const r = data.run;
+  if (data.scope === 'latest' && r) {
+    const when = new Date(r.started_at).toLocaleString();
+    const win = r.max_age_days ? `posted in the last ${r.max_age_days}d` : 'any posting date';
+    banner.textContent = `Showing latest run: ${when} · ${win} · ${r.job_count} jobs ` +
+      `(${data.saved_total} saved in total — pick "All saved jobs" to see them)`;
+  } else if (!r) {
+    banner.textContent = `Showing all ${data.saved_total} saved jobs (no run recorded yet — run "jobpipe run")`;
+  } else {
+    banner.textContent = `Showing all ${data.saved_total} saved jobs from every run`;
+  }
   // Hours since posting; undated jobs sort last and never pass a time filter
   allJobs.forEach(j => {
     const t = j.posted_at ? Date.parse(j.posted_at) : NaN;
@@ -307,30 +328,26 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/" or parsed.path == "/index.html":
             self._send_html(DASHBOARD_HTML)
         elif parsed.path == "/api/jobs":
-            self._send_json(self._get_jobs_data())
+            scope = parse_qs(parsed.query).get("scope", ["latest"])[0]
+            self._send_json(self._get_jobs_data(scope))
         else:
             self.send_error(404)
 
-    def _get_jobs_data(self) -> dict[str, Any]:
-        """Fetch all jobs from the tracker DB."""
+    def _get_jobs_data(self, scope: str = "latest") -> dict[str, Any]:
+        """Jobs from the latest pipeline run (default) or every saved job."""
+        from pipeline.tracker.db import Tracker
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT * FROM jobs ORDER BY fit_score DESC"
-            ).fetchall()
-
-            stats_rows = conn.execute(
-                "SELECT status, COUNT(*) FROM jobs GROUP BY status"
-            ).fetchall()
-            conn.close()
-
-            stats = {row[0]: row[1] for row in stats_rows}
-            stats["total"] = sum(stats.values())
+            tracker = Tracker(self.db_path)
+            run = tracker.latest_run()
+            # "latest" = only what the most recent `jobpipe run` returned.
+            # Before any run was recorded (old databases), fall back to all.
+            run_id = run["id"] if (scope == "latest" and run) else None
+            rows = tracker.get_jobs(run_id)
+            stats = tracker.get_stats(run_id)
+            saved_total = tracker.get_stats(None)["total"]
 
             jobs = []
-            for row in rows:
-                job = dict(row)
+            for job in rows:
                 # Parse fit_breakdown from JSON string
                 try:
                     job["fit_breakdown"] = json.loads(job.get("fit_breakdown", "{}"))
@@ -342,9 +359,14 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 job["jd_blocked"] = check_jd_blocks_sponsorship(job.get("description", ""))
                 jobs.append(job)
 
-            return {"jobs": jobs, "stats": stats}
+            return {
+                "jobs": jobs, "stats": stats, "run": run,
+                "scope": "latest" if run_id is not None else "all",
+                "saved_total": saved_total,
+            }
         except Exception as e:
-            return {"jobs": [], "stats": {"error": str(e)}}
+            return {"jobs": [], "stats": {"error": str(e)}, "run": None,
+                    "scope": scope, "saved_total": 0}
 
     def _send_html(self, content: str) -> None:
         self.send_response(200)

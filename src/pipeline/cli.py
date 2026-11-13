@@ -119,19 +119,27 @@ def _print_run_summary(pipeline: Pipeline) -> None:
 @main.command()
 @click.option("--limit", "-n", default=20, help="Max jobs to show")
 @click.option("--status", "-s", default=None, help="Filter by status")
+@click.option("--all", "show_all", is_flag=True, help="Every saved job, not just the latest run")
 @click.pass_context
-def status(ctx: click.Context, limit: int, status: str | None) -> None:
-    """Show tracked jobs and stats."""
+def status(ctx: click.Context, limit: int, status: str | None, show_all: bool) -> None:
+    """Show tracked jobs and stats (latest run by default)."""
     tracker = Tracker()
+    run = tracker.latest_run()
+    run_id = None if (show_all or not run) else run["id"]
 
-    # Show stats
-    stats = tracker.get_stats()
-    console.print("\n[bold]Pipeline Stats[/bold]")
+    if run_id is not None:
+        win = f"last {run['max_age_days']}d" if run["max_age_days"] else "any date"
+        console.print(f"\n[bold]Latest run[/bold] {run['started_at']} · {win} · "
+                      f"{run['job_count']} jobs  [dim](--all for every saved job)[/dim]")
+    else:
+        console.print("\n[bold]All saved jobs[/bold]")
+
+    stats = tracker.get_stats(run_id)
     for key, val in stats.items():
         console.print(f"  {key}: {val}")
 
     # Show top jobs
-    jobs = tracker.get_top_jobs(limit=limit, status=status)
+    jobs = tracker.get_top_jobs(limit=limit, status=status, run_id=run_id)
     if jobs:
         console.print()
         table = Table(title="Top Jobs")
@@ -319,8 +327,9 @@ def boards(ctx: click.Context, platform: str | None, limit: int) -> None:
                   + ", ".join(f"{p} {n}" for p, n in sorted(counts.items())))
 
     table = Table(title="Discovered boards (newest first)")
+    table.add_column("Company", style="green")
     table.add_column("Platform", style="cyan")
-    table.add_column("Company slug", style="green")
+    table.add_column("Slug", style="dim")
     table.add_column("Found via")
     table.add_column("First seen")
     table.add_column("Matching jobs", justify="right")
@@ -328,7 +337,7 @@ def boards(ctx: click.Context, platform: str | None, limit: int) -> None:
     for b in rows[:limit]:
         status = "[red]retired[/red]" if b.fail_count >= MAX_FAILURES else (
             f"[yellow]{b.fail_count} fails[/yellow]" if b.fail_count else "ok")
-        table.add_row(b.platform, b.slug, b.source, b.first_seen[:10],
+        table.add_row(b.display_name, b.platform, b.slug, b.source, b.first_seen[:10],
                       str(b.last_job_count), status)
     console.print(table)
 

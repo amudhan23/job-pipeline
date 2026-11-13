@@ -15,8 +15,8 @@ Discover (web) → Scrape every board found → Sponsorship Filter → Fit Score
 3. **Sponsorship filter** — JD-first: if the description doesn't say "no sponsorship," you can apply. H-1B filing data is supplementary info, not a blocker. Toggle on/off.
 4. **Fit scoring** — Weighted composite: stack match (30%), sponsorship (25%), experience (15%), location (15%), role type (15%).
 5. **Resume tailoring** — Analyzes each JD, reorders your bullet points, selects projects, and leads with the right language. Builds PDF via pdflatex.
-6. **Dashboard** — Web UI at localhost:8050 for browsing, filtering, and applying.
-7. **Tracking** — SQLite database tracks every job through the pipeline.
+6. **Dashboard** — Web UI at localhost:8050. Shows the latest run by default (same jobs as the CLI printed); switch to "All saved jobs" for history.
+7. **Tracking** — SQLite database tracks every job and every run. Re-running never resets a job you've marked applied.
 
 ## Quick start
 
@@ -48,7 +48,7 @@ jobpipe dashboard
 | `jobpipe scrape` | Discover + scrape only (no scoring) |
 | `jobpipe boards` | List every company board discovered so far |
 | `jobpipe dashboard` | Web dashboard at localhost:8050 |
-| `jobpipe status` | Show pipeline stats and top jobs |
+| `jobpipe status` | Latest run's stats and top jobs (`--all` for every saved job) |
 | `jobpipe export jobs.csv` | Export to CSV |
 | `jobpipe resume -j JOB_ID` | Generate tailored resume for a job |
 | `jobpipe seed-h1b` | Seed H-1B database from data/h1b_seed.json |

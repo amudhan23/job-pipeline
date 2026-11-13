@@ -239,10 +239,11 @@ def test_run_discovers_and_scrapes_unknown_company(monkeypatch, registry):
     jobs = asyncio.run(pipe.run_scrape())
 
     titles = {(j.company, j.title) for j in jobs}
-    assert ("brandnewco", "Backend Engineer") in titles   # found via web, never configured
-    assert ("FeedCo", "Software Engineer") in titles       # Workday role via feed
+    # found via web, never configured (name comes from the feed listing, verbatim)
+    assert ("brandnewco", "Backend Engineer") in titles
+    assert ("FeedCo", "Software Engineer") in titles       # Workday role via feed, name intact
     assert len(jobs) == 2                                  # feed duplicate dropped
-    kept = next(j for j in jobs if j.company == "brandnewco")
+    kept = next(j for j in jobs if j.company_slug == "brandnewco")
     assert kept.description == "JD text"                   # board version (has JD) wins
     assert pipe.stats.new_boards["web search"] == 2
     assert pipe.stats.boards_failed == 1

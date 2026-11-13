@@ -72,6 +72,7 @@ class SimplifyFeed:
         self.url = url
         self.max_age_days = max_age_days
         self.categories = set(categories) if categories else None
+        self.board_names: dict[tuple[str, str], str] = {}
 
     async def fetch(self) -> list[dict[str, Any]]:
         async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
@@ -90,6 +91,8 @@ class SimplifyFeed:
         cutoff = time.time() - self.max_age_days * 86400
         jobs: list[Job] = []
         boards: set[tuple[str, str]] = set()
+        # Company display names per board ("Kalshi" for ashby/kalshi)
+        self.board_names: dict[tuple[str, str], str] = {}
 
         for item in listings:
             if not (item.get("active") and item.get("is_visible", True)):
@@ -107,6 +110,8 @@ class SimplifyFeed:
                 # Register the company's board even if this particular role is
                 # filtered out — other roles on that board may fit.
                 boards.add((platform.value, slug))
+                if item.get("company_name"):
+                    self.board_names[(platform.value, slug)] = item["company_name"]
 
             title = item.get("title", "")
             location = "; ".join(item.get("locations") or [])

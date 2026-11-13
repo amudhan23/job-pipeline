@@ -29,6 +29,19 @@ class Board:
     last_seen: str
     last_job_count: int
     fail_count: int
+    name: str | None = None
+
+    @property
+    def display_name(self) -> str:
+        return self.name or pretty_slug(self.slug)
+
+
+def pretty_slug(slug: str) -> str:
+    """Readable fallback name for a board slug: "humble-robotics" -> "Humble Robotics"."""
+    return slug.replace("-", " ").replace("_", " ").title()
+
+
+_COLS = "platform, slug, source, first_seen, last_seen, last_job_count, fail_count, name"
 
 
 class BoardRegistry:
@@ -50,6 +63,11 @@ class BoardRegistry:
                     PRIMARY KEY (platform, slug)
                 )
             """)
+            # Company display name ("Kalshi" for ashby/kalshi), learned from
+            # feeds. Added after the first release, so migrate old databases.
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(boards)")}
+            if "name" not in cols:
+                conn.execute("ALTER TABLE boards ADD COLUMN name TEXT")
 
     def _conn(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db_path)
@@ -77,7 +95,7 @@ class BoardRegistry:
 
     def active(self, platform: str | None = None) -> list[Board]:
         """Boards that haven't been retired for repeated failures."""
-        query = "SELECT * FROM boards WHERE fail_count < ?"
+        query = f"SELECT {_COLS} FROM boards WHERE fail_count < ?"
         params: list = [MAX_FAILURES]
         if platform:
             query += " AND platform = ?"
@@ -117,5 +135,19 @@ class BoardRegistry:
     def all(self) -> list[Board]:
         with self._conn() as conn:
             return [Board(*row) for row in conn.execute(
-                "SELECT * FROM boards ORDER BY first_seen DESC"
+                f"SELECT {_COLS} FROM boards ORDER BY first_seen DESC"
             )]
+
+    def set_names(self, names: dict[tuple[str, str], str]) -> None:
+        """Remember company display names (from feeds) for boards."""
+        with self._conn() as conn:
+            conn.executemany(
+                "UPDATE boards SET name = ? WHERE platform = ? AND slug = ?",
+                [(n, p, s) for (p, s), n in names.items() if n],
+            )
+
+    def names(self) -> dict[tuple[str, str], str]:
+        with self._conn() as conn:
+            return {(p, s): n for p, s, n in conn.execute(
+                "SELECT platform, slug, name FROM boards WHERE name IS NOT NULL"
+            )}

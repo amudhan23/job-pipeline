@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from pipeline.discovery import BoardRegistry, SimplifyFeed, normalize_url
+from pipeline.discovery.registry import pretty_slug
 from pipeline.models import Job
 from pipeline.scrapers import (
     GreenhouseScraper, AshbyScraper, LeverScraper,
@@ -127,8 +128,22 @@ class Pipeline:
             logger.error(f"Simplify feed failed: {e}")
             return []
         self.stats.new_boards["job feeds"] = self.registry.add_many(boards, source="feed")
+        self.registry.set_names(feed.board_names)
         self.stats.jobs_from_feeds = len(jobs)
         return jobs
+
+    def _apply_company_names(self, jobs: list[Job]) -> None:
+        """Board APIs often return no company name, leaving the raw slug
+        ("kalshi"). Use the name a feed gave us, else a readable slug."""
+        names = self.registry.names()
+        for job in jobs:
+            known = names.get((job.platform.value, job.company_slug))
+            if known:
+                job.company = known
+            elif job.company == job.company_slug:
+                # Exactly the raw slug — the API gave no name. (A real name
+                # like "FeedCo" whose slug is "feedco" is left alone.)
+                job.company = pretty_slug(job.company_slug)
 
     # ── Stage 2: scrape every known board ───────────────────────────────
 
@@ -222,6 +237,7 @@ class Pipeline:
         board_jobs = await self._scrape_registry()
         jobs = self._merge(board_jobs, feed_jobs)
         jobs = self._filter_age(jobs, max_age_days)
+        self._apply_company_names(jobs)
         logger.info(f"Total: {len(jobs)} jobs ({self.stats.duplicates_dropped} duplicates dropped)")
         return jobs
 
@@ -231,16 +247,18 @@ class Pipeline:
     ) -> list[Job]:
         """Run the full pipeline: discover → scrape → filter → score → track."""
         jobs = await self.run_scrape(discover=discover, recency=recency, max_age_days=max_age_days)
-        if not jobs:
+        if jobs:
+            jobs = self.sponsorship.enrich_jobs(jobs)
+            jobs = self.sponsorship.filter_blocked(jobs)
+            logger.info(f"After sponsorship: {len(jobs)} eligible jobs")
+            jobs = self.scorer.score_jobs(jobs)
+        else:
             logger.warning("No jobs found")
-            return []
 
-        jobs = self.sponsorship.enrich_jobs(jobs)
-        jobs = self.sponsorship.filter_blocked(jobs)
-        logger.info(f"After sponsorship: {len(jobs)} eligible jobs")
-
-        jobs = self.scorer.score_jobs(jobs)
-        logger.info(f"Scored {len(jobs)} jobs, top score: {jobs[0].fit_score if jobs else 0}")
-
-        self.tracker.upsert_jobs(jobs)
+        # Record the run even when empty, so "latest run" views never show
+        # stale results from an earlier run.
+        run_id = self.tracker.start_run(self.stats.max_age_days)
+        self.tracker.upsert_jobs(jobs, run_id=run_id)
+        self.tracker.finish_run(run_id, len(jobs))
+        self.run_id = run_id
         return jobs
