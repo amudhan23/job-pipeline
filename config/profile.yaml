@@ -22,7 +22,10 @@ profile:
 filters:
   role_keywords:
     - "software engineer"
+    - "software development engineer"
+    - "software developer"
     - "backend engineer"
+    - "full stack engineer"
     - "infrastructure engineer"
     - "systems engineer"
     - "platform engineer"
@@ -95,58 +98,31 @@ resume:
       desc: "TypeScript, Node.js, Gemini AI, ElevenLabs voice, real-time sports commentary, 15 languages"
   language_order_default: ["Java", "Rust", "Python", "TypeScript", "JavaScript", "C++", "C", "SQL", "Bash"]
 
-# ── ATS Company Lists ──
-# Verified slugs — leave empty to use built-in KNOWN_* lists from discover.py
+# ── Discovery ──
+# No company list needed. Every run searches the web for recent postings on
+# each public ATS and reads job feeds; every company board found is saved to
+# the board registry (data/registry.db) and re-checked on later runs.
+# See what's been found with `jobpipe boards`.
+discovery:
+  enabled: true
+  recency: week            # day | week | month — how fresh search results must be
+  include_location: true   # add your target locations to search queries
+  search_delay: 2.0        # seconds between search queries (avoids rate limits)
+  max_queries: null        # cap queries per run (null = one per platform × role keyword)
+  concurrency: 8           # boards scraped in parallel
+  feed_max_age_days: 30    # ignore feed roles posted longer ago than this
+  feeds:
+    simplify_new_grad: true                 # SimplifyJobs/New-Grad-Positions (daily)
+    simplify_categories: ["Software", "AI/ML/Data"]
+
+# ── Pinned companies (optional) ──
+# Boards you always want checked, even if discovery hasn't surfaced them.
+# Not required — leave empty and discovery does the work.
 ats:
-  greenhouse:
-    - "stripe"
-    - "airbnb"
-    - "anthropic"
-    - "discord"
-    - "gitlab"
-    - "reddit"
-    - "asana"
-    - "figma"
-    - "plaid"
-    - "brex"
-    - "databricks"
-    - "datadog"
-    - "cloudflare"
-    - "hashicorp"
-    - "rippling"
-    - "duolingo"
-    - "grammarly"
-    - "instacart"
-    - "doordash"
-    - "scale"
-    - "anduril"
-    - "robinhood"
-    - "dropbox"
-    - "hubspot"
-    - "twilio"
-    - "crowdstrike"
-    - "coinbase"
-  ashby:
-    - "openai"
-    - "notion"
-    - "ramp"
-    - "linear"
-    - "cursor"
-    - "elevenlabs"
-    - "replit"
-    - "supabase"
-    - "docker"
-    - "posthog"
-    - "substack"
-    - "mercury"
-    - "vercel"
-    - "deel"
-  lever:
-    - "spotify"
-    - "palantir"
-    - "netflix"
-  # Public APIs, no login. Populate with `jobpipe discover --add`.
-  smartrecruiters: []   # slugs are case-sensitive, e.g. "Visa", "Square"
+  greenhouse: []
+  ashby: []
+  lever: []
+  smartrecruiters: []   # slugs are case-sensitive, e.g. "Visa"
   workable: []          # e.g. "huggingface"
   bamboohr: []          # subdomain only, e.g. "acme" for acme.bamboohr.com
 

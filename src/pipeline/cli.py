@@ -32,34 +32,57 @@ def main(ctx: click.Context, config: str | None, verbose: bool) -> None:
     ctx.obj["config"] = load_config(config)
 
 
+_RECENCY = click.Choice(["day", "week", "month", "year"])
+
+
 @main.command()
 @click.option("--limit", "-n", default=20, help="Max jobs to show")
+@click.option("--no-discover", is_flag=True, help="Skip web discovery; only re-scrape known boards")
+@click.option("--recency", type=_RECENCY, default=None,
+              help="How fresh postings must be in web search (default from config: week)")
 @click.pass_context
-def scrape(ctx: click.Context, limit: int) -> None:
-    """Scrape jobs from all configured ATS platforms."""
-    config = ctx.obj["config"]
-    pipeline = Pipeline(config)
-    jobs = asyncio.run(pipeline.run_scrape())
+def scrape(ctx: click.Context, limit: int, no_discover: bool, recency: str | None) -> None:
+    """Discover boards from the web and scrape them (no scoring)."""
+    pipeline = Pipeline(ctx.obj["config"])
+    jobs = asyncio.run(pipeline.run_scrape(discover=not no_discover, recency=recency))
+    _print_run_summary(pipeline)
     console.print(f"\n[bold green]Scraped {len(jobs)} matching jobs[/bold green]\n")
-
     if jobs:
-        table = _jobs_table(jobs[:limit])
-        console.print(table)
+        console.print(_jobs_table(jobs[:limit]))
 
 
 @main.command()
 @click.option("--limit", "-n", default=20, help="Max jobs to show")
+@click.option("--no-discover", is_flag=True, help="Skip web discovery; only re-scrape known boards")
+@click.option("--recency", type=_RECENCY, default=None,
+              help="How fresh postings must be in web search (default from config: week)")
 @click.pass_context
-def run(ctx: click.Context, limit: int) -> None:
-    """Run full pipeline: scrape → filter → score → rank."""
-    config = ctx.obj["config"]
-    pipeline = Pipeline(config)
-    jobs = asyncio.run(pipeline.run_full())
+def run(ctx: click.Context, limit: int, no_discover: bool, recency: str | None) -> None:
+    """Full pipeline: discover from the web → scrape → filter → score → rank."""
+    pipeline = Pipeline(ctx.obj["config"])
+    jobs = asyncio.run(pipeline.run_full(discover=not no_discover, recency=recency))
+    _print_run_summary(pipeline)
     console.print(f"\n[bold green]Pipeline complete: {len(jobs)} jobs processed[/bold green]\n")
-
     if jobs:
-        table = _jobs_table(jobs[:limit])
-        console.print(table)
+        console.print(_jobs_table(jobs[:limit]))
+
+
+def _print_run_summary(pipeline: Pipeline) -> None:
+    s = pipeline.stats
+    console.print()
+    if s.new_boards:
+        found = ", ".join(f"{n} from {src}" for src, n in s.new_boards.items())
+        console.print(f"[bold]New companies discovered:[/bold] {found}")
+    scraped = sum(s.boards_scraped.values())
+    if scraped:
+        by_plat = ", ".join(f"{p} {n}" for p, n in s.boards_scraped.items())
+        console.print(f"[bold]Boards scraped:[/bold] {scraped} ({by_plat})"
+                      + (f", {s.boards_failed} failed" if s.boards_failed else ""))
+    else:
+        console.print("[bold]Boards scraped:[/bold] none yet — run without --no-discover "
+                      "to find some")
+    console.print(f"[bold]Jobs:[/bold] {s.jobs_from_boards} from boards, "
+                  f"{s.jobs_from_feeds} from feeds, {s.duplicates_dropped} duplicates dropped")
 
 
 @main.command()
@@ -185,81 +208,86 @@ def probe(ctx: click.Context, company_slug: str) -> None:
 @click.option("--platform", "-p", multiple=True,
               help="Limit to platforms (greenhouse/ashby/lever/smartrecruiters/...)")
 @click.option("--no-location", is_flag=True, help="Drop location filter from queries")
+@click.option("--recency", type=_RECENCY, default="week", help="How fresh postings must be")
 @click.option("--queries-only", is_flag=True,
-              help="Just print the search queries (no API call)")
-@click.option("--add", is_flag=True, help="Add discovered slugs to config/profile.yaml")
+              help="Just print the search queries to run in a browser")
 @click.pass_context
 def discover(ctx: click.Context, platform: tuple[str, ...], no_location: bool,
-             queries_only: bool, add: bool) -> None:
-    """Discover new company slugs via search-engine `site:` queries.
+             recency: str, queries_only: bool) -> None:
+    """Search the web for recent postings and record the companies found.
 
-    Runs automatically via DuckDuckGo (free, no key). Set SERPER_API_KEY or
-    SERPAPI_KEY for higher-quality Google results. Use --queries-only to just
-    print the boolean queries and run them in a browser yourself.
+    `jobpipe run` already does this every time — use this command to run
+    discovery on its own and see what turns up. New boards go straight into
+    the board registry (see `jobpipe boards`).
     """
+    from pipeline.discovery import BoardRegistry
     from pipeline.scrapers.search_discover import (
-        generate_queries, discover as run_discover, _get_search_backend, ATS_DOMAINS,
+        generate_queries, discover as run_discover, ATS_DOMAINS,
     )
 
     config = ctx.obj["config"]
     platforms = list(platform) if platform else None
     include_location = not no_location
 
-    # Manual mode: just print the queries
     if queries_only:
-        queries = generate_queries(config, platforms, include_location)
         scrapable = {a.name for a in ATS_DOMAINS if a.scrapable}
-        for plat, query in queries:
+        for plat, query in generate_queries(config, platforms, include_location):
             tag = "" if plat in scrapable else " [dim](no scraper yet)[/dim]"
-            console.print(f"[bold cyan]{plat}[/bold cyan]{tag}")
-            console.print(f"  {query}\n")
-        console.print(
-            "[dim]Paste these into Google. Company slug is the path after the "
-            "domain, e.g. boards.greenhouse.io/[bold]stripe[/bold].[/dim]"
-        )
+            console.print(f"[bold cyan]{plat}[/bold cyan]{tag}\n  {query}\n")
+        console.print("[dim]Paste into Google/DuckDuckGo. The company slug is the path "
+                      "after the domain, e.g. boards.greenhouse.io/[bold]stripe[/bold].[/dim]")
         return
 
-    # Automated mode: run searches
-    backend, _ = _get_search_backend()
-    console.print(f"[bold]Discovering slugs via {backend}...[/bold]\n")
-    result = asyncio.run(run_discover(config, platforms, include_location))
+    result = asyncio.run(run_discover(config, platforms, include_location, recency=recency))
+    registry = BoardRegistry()
+    known = {(b.platform, b.slug) for b in registry.all()}
 
     if result.total() == 0:
-        console.print("[yellow]No slugs discovered.[/yellow]")
+        console.print("[yellow]No boards found (search may be rate-limited — try again "
+                      "later or set SERPER_API_KEY).[/yellow]")
         return
 
+    new_total = 0
     for plat in sorted(result.by_platform):
         slugs = sorted(result.by_platform[plat])
-        console.print(f"[bold cyan]{plat}[/bold cyan] ({len(slugs)} found):")
-        console.print(f"  {', '.join(slugs)}\n")
+        new = [s for s in slugs if (plat, s) not in known]
+        new_total += len(new)
+        registry.add_many({(plat, s) for s in slugs}, source="web")
+        console.print(f"[bold cyan]{plat}[/bold cyan]: {len(slugs)} found, "
+                      f"[green]{len(new)} new[/green]")
+        if new:
+            console.print(f"  {', '.join(new)}")
+    console.print(f"\n[bold green]{new_total} new companies added to the registry[/bold green]")
 
-    console.print(f"[bold green]Discovered {result.total()} slugs total[/bold green]")
 
-    if add:
-        _merge_slugs_into_config(result)
-        console.print("[green]Added new slugs to config/profile.yaml[/green]")
+@main.command()
+@click.option("--platform", "-p", default=None, help="Only show one platform")
+@click.option("--limit", "-n", default=50, help="Max rows to show (newest first)")
+@click.pass_context
+def boards(ctx: click.Context, platform: str | None, limit: int) -> None:
+    """Show the company boards the pipeline has discovered."""
+    from pipeline.discovery import BoardRegistry
+    from pipeline.discovery.registry import MAX_FAILURES
 
+    registry = BoardRegistry()
+    rows = [b for b in registry.all() if not platform or b.platform == platform]
+    counts = registry.counts()
+    console.print(f"\n[bold]{sum(counts.values())} active boards[/bold] — "
+                  + ", ".join(f"{p} {n}" for p, n in sorted(counts.items())))
 
-def _merge_slugs_into_config(result) -> None:
-    """Merge discovered slugs into the config YAML (scrapable platforms only)."""
-    import yaml
-    from pipeline.scrapers.search_discover import ATS_DOMAINS
-
-    config_path = Path(__file__).resolve().parents[2] / "config" / "profile.yaml"
-    with open(config_path) as f:
-        cfg = yaml.safe_load(f)
-
-    scrapable = {a.name for a in ATS_DOMAINS if a.scrapable}
-    cfg.setdefault("ats", {})
-    for plat, slugs in result.by_platform.items():
-        if plat not in scrapable:
-            continue
-        existing = set(cfg["ats"].get(plat) or [])
-        merged = sorted(existing | slugs)
-        cfg["ats"][plat] = merged
-
-    with open(config_path, "w") as f:
-        yaml.safe_dump(cfg, f, sort_keys=False, default_flow_style=False)
+    table = Table(title="Discovered boards (newest first)")
+    table.add_column("Platform", style="cyan")
+    table.add_column("Company slug", style="green")
+    table.add_column("Found via")
+    table.add_column("First seen")
+    table.add_column("Matching jobs", justify="right")
+    table.add_column("Status")
+    for b in rows[:limit]:
+        status = "[red]retired[/red]" if b.fail_count >= MAX_FAILURES else (
+            f"[yellow]{b.fail_count} fails[/yellow]" if b.fail_count else "ok")
+        table.add_row(b.platform, b.slug, b.source, b.first_seen[:10],
+                      str(b.last_job_count), status)
+    console.print(table)
 
 
 def _jobs_table(jobs: list) -> Table:

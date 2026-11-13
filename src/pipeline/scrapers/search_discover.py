@@ -104,31 +104,44 @@ def generate_queries(
     config: dict[str, Any],
     platforms: list[str] | None = None,
     include_location: bool = True,
+    per_keyword: bool = False,
+    scrapable_only: bool = False,
 ) -> list[tuple[str, str]]:
     """Generate `site:` boolean search queries from the config filters.
 
-    Returns a list of (platform, query) tuples ready to paste into a
-    search engine. One query per ATS domain.
+    Returns (platform, query) tuples. By default, one query per ATS domain
+    with all role keywords OR'd together (handy to paste into a browser).
+    With per_keyword=True, one query per (domain, role keyword) — each query
+    surfaces a different set of results, so automated discovery covers far
+    more companies.
     """
     filters = config.get("filters", {})
-    role_clause = _build_role_clause(filters.get("role_keywords", []))
+    role_keywords = filters.get("role_keywords", [])
     loc_clause = _build_location_clause(filters.get("locations", [])) if include_location else ""
+
+    role_clauses = (
+        [_build_role_clause([kw]) for kw in role_keywords] if per_keyword
+        else [_build_role_clause(role_keywords)]
+    ) or [""]
 
     queries: list[tuple[str, str]] = []
     seen_domains: set[str] = set()
     for ats in ATS_DOMAINS:
         if platforms and ats.name not in platforms:
             continue
+        if scrapable_only and not ats.scrapable:
+            continue
         if ats.domain in seen_domains:
             continue
         seen_domains.add(ats.domain)
 
-        parts = [f"site:{ats.domain}"]
-        if role_clause:
-            parts.append(role_clause)
-        if loc_clause:
-            parts.append(loc_clause)
-        queries.append((ats.name, " ".join(parts)))
+        for role_clause in role_clauses:
+            parts = [f"site:{ats.domain}"]
+            if role_clause:
+                parts.append(role_clause)
+            if loc_clause:
+                parts.append(loc_clause)
+            queries.append((ats.name, " ".join(parts)))
 
     return queries
 
@@ -147,37 +160,43 @@ def _extract_slug(url: str) -> tuple[str, str] | None:
     return None
 
 
-async def _search_serper(query: str, api_key: str, num: int = 100) -> list[str]:
+class RateLimited(Exception):
+    """The search backend is throttling us; stop searching for this run."""
+
+
+# recency: None | "day" | "week" | "month" | "year"
+_DDG_RECENCY = {"day": "d", "week": "w", "month": "m", "year": "y"}
+_GOOGLE_RECENCY = {"day": "qdr:d", "week": "qdr:w", "month": "qdr:m", "year": "qdr:y"}
+
+
+async def _search_serper(query: str, api_key: str, recency: str | None = None) -> list[str]:
     """Run a query via Serper.dev (Google results). Returns result URLs."""
-    urls: list[str] = []
+    payload: dict[str, Any] = {"q": query, "num": 100}
+    if recency in _GOOGLE_RECENCY:
+        payload["tbs"] = _GOOGLE_RECENCY[recency]
     async with httpx.AsyncClient(timeout=20) as client:
         resp = await client.post(
             "https://google.serper.dev/search",
             headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
-            json={"q": query, "num": num},
+            json=payload,
         )
+        if resp.status_code == 429:
+            raise RateLimited("serper")
         resp.raise_for_status()
-        data = resp.json()
-        for item in data.get("organic", []):
-            if "link" in item:
-                urls.append(item["link"])
-    return urls
+        return [i["link"] for i in resp.json().get("organic", []) if "link" in i]
 
 
-async def _search_serpapi(query: str, api_key: str, num: int = 100) -> list[str]:
+async def _search_serpapi(query: str, api_key: str, recency: str | None = None) -> list[str]:
     """Run a query via SerpAPI (Google results). Returns result URLs."""
-    urls: list[str] = []
+    params: dict[str, Any] = {"q": query, "num": 100, "api_key": api_key, "engine": "google"}
+    if recency in _GOOGLE_RECENCY:
+        params["tbs"] = _GOOGLE_RECENCY[recency]
     async with httpx.AsyncClient(timeout=20) as client:
-        resp = await client.get(
-            "https://serpapi.com/search",
-            params={"q": query, "num": num, "api_key": api_key, "engine": "google"},
-        )
+        resp = await client.get("https://serpapi.com/search", params=params)
+        if resp.status_code == 429:
+            raise RateLimited("serpapi")
         resp.raise_for_status()
-        data = resp.json()
-        for item in data.get("organic_results", []):
-            if "link" in item:
-                urls.append(item["link"])
-    return urls
+        return [i["link"] for i in resp.json().get("organic_results", []) if "link" in i]
 
 
 # Matches result links in DuckDuckGo HTML output.
@@ -202,16 +221,22 @@ def parse_ddg_html(body: str) -> list[str]:
     return [_clean_ddg_url(h) for h in _DDG_LINK_RE.findall(body)]
 
 
-async def _search_duckduckgo(query: str, _key: str = "", num: int = 50) -> list[str]:
+async def _search_duckduckgo(query: str, _key: str = "", recency: str | None = None) -> list[str]:
     """Run a query via DuckDuckGo's HTML endpoint. Free, no API key.
 
     This is the default backend — "doing the Serper thing ourselves."
-    DDG supports the `site:` operator the same way Google does.
+    DDG supports the `site:` operator, and the `df` field restricts results
+    to pages from the past day/week/month/year.
     """
+    data = {"q": query}
+    cookies = {}
+    if recency in _DDG_RECENCY:
+        data["df"] = cookies["df"] = _DDG_RECENCY[recency]
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
         resp = await client.post(
             "https://html.duckduckgo.com/html/",
-            data={"q": query},
+            data=data,
+            cookies=cookies,
             headers={
                 "User-Agent": (
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -220,6 +245,9 @@ async def _search_duckduckgo(query: str, _key: str = "", num: int = 50) -> list[
                 )
             },
         )
+        # DDG signals throttling with a 202 or a bot-check ("anomaly") page
+        if resp.status_code in (202, 429) or "anomaly-modal" in resp.text:
+            raise RateLimited("duckduckgo")
         resp.raise_for_status()
         return parse_ddg_html(resp.text)
 
@@ -237,33 +265,56 @@ async def discover(
     config: dict[str, Any],
     platforms: list[str] | None = None,
     include_location: bool = True,
+    recency: str | None = "week",
+    delay: float = 1.5,
+    max_queries: int | None = None,
 ) -> DiscoveryResult:
-    """Discover company slugs by executing search queries.
+    """Discover company boards by searching the web for recent job postings.
 
-    Uses DuckDuckGo for free by default (no key). If SERPER_API_KEY or
-    SERPAPI_KEY is set, uses that instead for higher-quality Google results.
+    Runs one `site:` query per (ATS domain, role keyword), restricted to
+    pages from the last `recency` window, and pulls the company slug out of
+    every result URL. Uses DuckDuckGo for free by default; SERPER_API_KEY or
+    SERPAPI_KEY switch to Google results.
+
+    If the backend starts throttling, discovery stops early and returns
+    what it found — the run continues with the boards already known.
     """
+    import asyncio
+
     backend_name, api_key = _get_search_backend()
     search_fn = {
         "serper": _search_serper,
         "serpapi": _search_serpapi,
         "duckduckgo": _search_duckduckgo,
     }[backend_name]
-    logger.info(f"Discovery backend: {backend_name}")
+
+    queries = generate_queries(
+        config, platforms, include_location, per_keyword=True, scrapable_only=True,
+    )
+    if max_queries:
+        queries = queries[:max_queries]
+    logger.info(f"Web discovery: {len(queries)} queries via {backend_name} (recency={recency})")
 
     result = DiscoveryResult()
-    queries = generate_queries(config, platforms, include_location)
-
-    for platform, query in queries:
+    for i, (platform, query) in enumerate(queries):
+        if i and delay:
+            await asyncio.sleep(delay)
         try:
-            urls = await search_fn(query, api_key)
-            logger.info(f"[{platform}] {len(urls)} results for: {query}")
-            for url in urls:
-                extracted = _extract_slug(url)
-                if extracted:
-                    plat, slug = extracted
-                    result.add(plat, slug)
+            urls = await search_fn(query, api_key, recency)
+        except RateLimited:
+            logger.warning(
+                f"{backend_name} is rate-limiting — stopping web search after "
+                f"{i}/{len(queries)} queries. Known boards will still be scraped."
+            )
+            break
         except httpx.HTTPError as e:
             logger.error(f"Search failed for {platform}: {e}")
+            continue
+        for url in urls:
+            extracted = _extract_slug(url)
+            if extracted:
+                result.add(*extracted)
+        logger.debug(f"[{platform}] {len(urls)} results for: {query}")
 
+    logger.info(f"Web discovery found {result.total()} boards")
     return result

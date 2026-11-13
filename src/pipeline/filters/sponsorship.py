@@ -187,8 +187,11 @@ class SponsorshipFilter:
 
         blocked_count = 0
         for job in jobs:
-            # PRIMARY: Check the JD text
-            job.jd_blocks_sponsorship = check_jd_blocks_sponsorship(job.description)
+            # PRIMARY: Check the JD text. Keep a block that a feed already set
+            # (e.g. Simplify's "Does Not Offer Sponsorship" — those jobs have no JD).
+            job.jd_blocks_sponsorship = (
+                job.jd_blocks_sponsorship or check_jd_blocks_sponsorship(job.description)
+            )
             if job.jd_blocks_sponsorship:
                 blocked_count += 1
 

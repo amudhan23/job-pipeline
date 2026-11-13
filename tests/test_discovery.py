@@ -1,0 +1,218 @@
+"""Tests for web-first discovery: registry, feeds, merge, and the full run."""
+
+import asyncio
+import time
+
+import pytest
+
+from pipeline.discovery import BoardRegistry, SimplifyFeed, normalize_url
+from pipeline.discovery.registry import MAX_FAILURES
+from pipeline.models import ATSPlatform, Job
+from pipeline.scrapers import search_discover
+from pipeline.scrapers.search_discover import DiscoveryResult, RateLimited, generate_queries
+
+
+CONFIG = {
+    "filters": {
+        "role_keywords": ["software engineer", "backend engineer"],
+        "exclude_keywords": ["senior"],
+        "locations": ["New York", "Remote"],
+    },
+    "discovery": {"search_delay": 0, "feeds": {"simplify_new_grad": True,
+                                               "simplify_categories": None}},
+    "ats": {},
+}
+
+
+@pytest.fixture
+def registry(tmp_path):
+    return BoardRegistry(tmp_path / "registry.db")
+
+
+# ── Registry ────────────────────────────────────────────────────────────
+
+class TestRegistry:
+    def test_add_reports_new_then_known(self, registry):
+        assert registry.add("greenhouse", "stripe", "web") is True
+        assert registry.add("greenhouse", "stripe", "feed") is False
+        assert registry.slugs("greenhouse") == ["stripe"]
+
+    def test_add_many_counts_new(self, registry):
+        registry.add("ashby", "openai", "web")
+        new = registry.add_many({("ashby", "openai"), ("ashby", "ramp")}, "feed")
+        assert new == 1
+
+    def test_dead_board_retires_after_repeated_failures(self, registry):
+        registry.add("lever", "netflix", "web")
+        for _ in range(MAX_FAILURES):
+            registry.record_result("lever", "netflix", None)
+        assert registry.slugs("lever") == []
+
+    def test_success_resets_failures(self, registry):
+        registry.add("lever", "spotify", "web")
+        registry.record_result("lever", "spotify", None)
+        registry.record_result("lever", "spotify", 4)
+        (board,) = registry.active("lever")
+        assert board.fail_count == 0 and board.last_job_count == 4
+
+
+# ── URL normalization ──────────────────────────────────────────────────
+
+def test_normalize_url_strips_tracking_and_case():
+    a = normalize_url("https://Jobs.Lever.co/spotify/abc/?utm_source=Simplify&ref=Simplify")
+    b = normalize_url("https://jobs.lever.co/spotify/abc")
+    assert a == b
+
+
+# ── Simplify feed ──────────────────────────────────────────────────────
+
+def _listing(**kw):
+    base = {
+        "id": "x1", "company_name": "NewCo", "title": "Software Engineer",
+        "url": "https://job-boards.greenhouse.io/newco/jobs/1",
+        "locations": ["New York, NY"], "active": True, "is_visible": True,
+        "date_posted": int(time.time()) - 86400, "category": "Software",
+        "sponsorship": "Other",
+    }
+    base.update(kw)
+    return base
+
+
+def _accept_all(title, location):
+    return True
+
+
+class TestSimplifyFeed:
+    def test_registers_board_from_job_url(self):
+        jobs, boards = SimplifyFeed().parse([_listing()], _accept_all)
+        assert boards == {("greenhouse", "newco")}
+        assert jobs[0].platform == ATSPlatform.GREENHOUSE
+        assert jobs[0].company_slug == "newco"
+
+    def test_skips_inactive_and_stale(self):
+        stale = _listing(id="s", date_posted=int(time.time()) - 90 * 86400)
+        closed = _listing(id="c", active=False)
+        jobs, _ = SimplifyFeed(max_age_days=30).parse([stale, closed], _accept_all)
+        assert jobs == []
+
+    def test_category_filter(self):
+        hw = _listing(category="Hardware")
+        jobs, _ = SimplifyFeed(categories=["Software"]).parse([hw], _accept_all)
+        assert jobs == []
+
+    def test_no_sponsorship_label_blocks(self):
+        jobs, _ = SimplifyFeed().parse(
+            [_listing(sponsorship="Does Not Offer Sponsorship")], _accept_all)
+        assert jobs[0].jd_blocks_sponsorship is True
+
+    def test_board_registered_even_when_role_filtered_out(self):
+        reject_all = lambda t, l: False  # noqa: E731
+        jobs, boards = SimplifyFeed().parse([_listing()], reject_all)
+        assert jobs == [] and boards == {("greenhouse", "newco")}
+
+    def test_unscrapable_ats_link_registers_no_board(self):
+        jv = _listing(url="https://jobs.jobvite.com/acme/job/oABC")
+        jobs, boards = SimplifyFeed().parse([jv], _accept_all)
+        assert boards == set() and jobs[0].platform == ATSPlatform.OTHER
+
+    def test_workday_roles_kept_as_feed_jobs(self):
+        wd = _listing(url="https://acme.wd1.myworkdayjobs.com/en-US/careers/job/123")
+        jobs, boards = SimplifyFeed().parse([wd], _accept_all)
+        assert jobs[0].platform == ATSPlatform.WORKDAY
+        assert boards == set()
+
+
+# ── Query generation for discovery ─────────────────────────────────────
+
+def test_per_keyword_queries_cover_each_role():
+    qs = generate_queries(CONFIG, platforms=["ashby"], per_keyword=True)
+    assert len(qs) == 2
+    assert '"software engineer"' in qs[0][1] and '"backend engineer"' in qs[1][1]
+
+
+def test_scrapable_only_skips_login_platforms():
+    qs = generate_queries(CONFIG, scrapable_only=True)
+    assert "jobvite" not in {p for p, _ in qs}
+
+
+def test_discovery_stops_cleanly_when_rate_limited(monkeypatch):
+    calls = []
+
+    async def fake_search(query, key, recency):
+        calls.append(query)
+        if len(calls) > 1:
+            raise RateLimited("duckduckgo")
+        return ["https://jobs.ashbyhq.com/newco/123"]
+
+    monkeypatch.setattr(search_discover, "_search_duckduckgo", fake_search)
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    monkeypatch.delenv("SERPAPI_KEY", raising=False)
+    result = asyncio.run(search_discover.discover(CONFIG, delay=0))
+    assert result.by_platform == {"ashby": {"newco"}}
+    assert len(calls) == 2  # stopped right after the throttle
+
+
+# ── Full run: a company in no config gets found and scraped ────────────
+
+def _job(slug, title, url, platform=ATSPlatform.ASHBY, description="JD text"):
+    return Job(id=f"{slug}-{title}", title=title, company=slug, company_slug=slug,
+               location="New York, NY", url=url, platform=platform,
+               description=description)
+
+
+class FakeScraper:
+    def __init__(self, boards):
+        self.boards = boards  # slug -> list[Job] or None (fails)
+
+    def passes_filters(self, title, location, description=""):
+        return True
+
+    async def scrape_many(self, slugs, concurrency=8):
+        jobs, status = [], {}
+        for s in slugs:
+            result = self.boards.get(s)
+            status[s] = None if result is None else len(result)
+            jobs.extend(result or [])
+        return jobs, status
+
+
+def test_run_discovers_and_scrapes_unknown_company(monkeypatch, registry):
+    from pipeline import orchestrator
+
+    async def fake_web(config, **kw):
+        r = DiscoveryResult()
+        r.add("ashby", "brandnewco")          # posted its first job this week
+        r.add("ashby", "deadco")              # board 404s
+        return r
+
+    feed_listing = _listing(
+        id="f1", company_name="FeedCo", title="Software Engineer",
+        url="https://acme.wd1.myworkdayjobs.com/job/1",  # Workday — feed-only
+    )
+    dup_listing = _listing(  # same posting the board scrape will return
+        id="f2", company_name="brandnewco", title="Backend Engineer",
+        url="https://jobs.ashbyhq.com/brandnewco/abc?utm_source=Simplify",
+    )
+
+    async def fake_fetch(self):
+        return [feed_listing, dup_listing]
+
+    monkeypatch.setattr(orchestrator, "web_discover", fake_web)
+    monkeypatch.setattr(SimplifyFeed, "fetch", fake_fetch)
+
+    pipe = orchestrator.Pipeline(CONFIG, registry=registry)
+    board_job = _job("brandnewco", "Backend Engineer", "https://jobs.ashbyhq.com/brandnewco/abc")
+    fake = FakeScraper({"brandnewco": [board_job], "deadco": None})
+    pipe.scrapers = {"ashby": fake, "greenhouse": fake}
+
+    jobs = asyncio.run(pipe.run_scrape())
+
+    titles = {(j.company, j.title) for j in jobs}
+    assert ("brandnewco", "Backend Engineer") in titles   # found via web, never configured
+    assert ("FeedCo", "Software Engineer") in titles       # Workday role via feed
+    assert len(jobs) == 2                                  # feed duplicate dropped
+    kept = next(j for j in jobs if j.company == "brandnewco")
+    assert kept.description == "JD text"                   # board version (has JD) wins
+    assert pipe.stats.new_boards["web search"] == 2
+    assert pipe.stats.boards_failed == 1
+    assert "brandnewco" in registry.slugs("ashby")

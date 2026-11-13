@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from abc import ABC, abstractmethod
 from typing import Any
@@ -23,17 +24,37 @@ class BaseScraper(ABC):
         """Scrape all matching jobs from a single company."""
         ...
 
+    async def scrape_many(
+        self, company_slugs: list[str], concurrency: int = 8,
+    ) -> tuple[list[Job], dict[str, int | None]]:
+        """Scrape many boards concurrently.
+
+        Returns (jobs, status) where status maps each slug to the number of
+        matching jobs, or None if that board failed (e.g. 404 — the company
+        left this ATS). The registry uses status to retire dead boards.
+        """
+        sem = asyncio.Semaphore(concurrency)
+        status: dict[str, int | None] = {}
+
+        async def one(slug: str) -> list[Job]:
+            async with sem:
+                try:
+                    jobs = await self.scrape_company(slug)
+                    status[slug] = len(jobs)
+                    logger.debug(f"Scraped {len(jobs)} jobs from {slug}")
+                    return jobs
+                except Exception as e:
+                    status[slug] = None
+                    logger.debug(f"Failed to scrape {slug}: {e}")
+                    return []
+
+        results = await asyncio.gather(*(one(s) for s in company_slugs))
+        return [job for batch in results for job in batch], status
+
     async def scrape_all(self, company_slugs: list[str]) -> list[Job]:
         """Scrape all matching jobs from multiple companies."""
-        all_jobs: list[Job] = []
-        for slug in company_slugs:
-            try:
-                jobs = await self.scrape_company(slug)
-                all_jobs.extend(jobs)
-                logger.info(f"Scraped {len(jobs)} jobs from {slug}")
-            except Exception as e:
-                logger.error(f"Failed to scrape {slug}: {e}")
-        return all_jobs
+        jobs, _ = await self.scrape_many(company_slugs)
+        return jobs
 
     def passes_filters(self, title: str, location: str, description: str = "") -> bool:
         """Check if a job passes the configured filters."""
