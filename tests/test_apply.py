@@ -168,16 +168,20 @@ TWITCH_DETAILS = {
 }
 
 
-def _fill(path, details, saved=None, company="Twitch"):
+def _fill(path, details, saved=None, company="Twitch", resume=None):
     from playwright.sync_api import sync_playwright
     from pipeline.apply.filler import FillReport, _launch, fill_form
+    import tempfile
+    if resume is None:  # forms ask for a resume; supply one unless a test opts out
+        resume = Path(tempfile.mkdtemp()) / "resume.pdf"
+        resume.write_bytes(b"%PDF-1.4 test")
     report = FillReport(job_id="t", company=company, title="SWE", url="", mode="practice")
     with sync_playwright() as pw:
         browser = _launch(pw, headless=True)
         page = browser.new_page()
         page.set_default_timeout(8000)
         page.goto(path.resolve().as_uri())
-        fill_form(page, details, None, report, saved)
+        fill_form(page, details, resume, report, saved)
         values = page.evaluate(
             "() => Object.fromEntries([...document.querySelectorAll('[role=combobox]')].map(e => [e.id, e.value]))")
         checked = page.evaluate(
@@ -277,3 +281,30 @@ def test_closed_posting_detected(tmp_path):
     finally:
         srv.shutdown()
     assert report.closed and "job closed" in report.error
+
+
+@pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
+def test_greenhouse_resume_attached(tmp_path):
+    """Live Twitch form: file input labelled "Attach", question on the group.
+    The resume was silently skipped as an optional "Attach" field."""
+    from playwright.sync_api import sync_playwright
+    from pipeline.apply.filler import FillReport, _launch, fill_form
+    resume = tmp_path / "resume.pdf"
+    resume.write_bytes(b"%PDF-1.4 test")
+    report = FillReport(job_id="t", company="Twitch", title="SWE", url="", mode="practice")
+    with sync_playwright() as pw:
+        browser = _launch(pw, headless=True)
+        page = browser.new_page()
+        page.set_default_timeout(8000)
+        page.goto(GH_NEW.resolve().as_uri())
+        fill_form(page, TWITCH_DETAILS, resume, report)
+        files = page.eval_on_selector("#resume", "e => [...e.files].map(f => f.name)")
+        cover = page.eval_on_selector("#cover_letter", "e => e.files.length")
+        browser.close()
+    assert files == ["resume.pdf"]
+    assert report.resume_attached
+    res = next(f for f in report.filled if f.kind == "file")
+    assert res.label == "Resume/CV*" and res.required
+    assert cover == 0                                                    # no cover letter on file
+    assert [f.label for f in report.skipped_optional if f.kind == "file"] == ["Cover Letter"]
+    assert not any(f.label == "Attach" for f in report.filled + report.needs_attention + report.skipped_optional)

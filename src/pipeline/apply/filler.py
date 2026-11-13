@@ -40,7 +40,33 @@ _ENUMERATE_JS = r"""
     if (el.tabIndex === -1 && r.width <= 2 && r.height <= 2) return false;
     return r.width > 0 || r.height > 0;
   };
+  // Button captions that say what to DO, not what the question is
+  // (Greenhouse labels its resume file input "Attach")
+  const GENERIC = /^(attach|upload|browse|choose( a)? file|select( a)? file|drop files?( here)?|enter manually|add file)\s*$/i;
   const labelOf = el => {
+    const own = labelOfRaw(el);
+    if (!GENERIC.test(own)) return own;
+    // The real question sits on the surrounding group / fieldset
+    const grp = el.closest('[role="group"][aria-labelledby], [role="group"][aria-label], fieldset');
+    if (grp) {
+      if (grp.getAttribute('aria-labelledby')) {
+        const t = grp.getAttribute('aria-labelledby').split(/\s+/)
+          .map(id => document.getElementById(id)?.innerText || '').join(' ');
+        if (txt(t)) return txt(t);
+      }
+      if (grp.getAttribute('aria-label')) return txt(grp.getAttribute('aria-label'));
+      const lg = grp.querySelector('legend');
+      if (lg && txt(lg.innerText)) return txt(lg.innerText);
+    }
+    let c = el.parentElement;
+    for (let i = 0; i < 6 && c; i++, c = c.parentElement) {
+      const l = [...c.querySelectorAll('label, legend, [class*="label" i]')]
+        .find(x => !x.contains(el) && txt(x.innerText) && !GENERIC.test(txt(x.innerText)));
+      if (l) return txt(l.innerText);
+    }
+    return own;
+  };
+  const labelOfRaw = el => {
     if (el.getAttribute('aria-labelledby')) {
       const t = el.getAttribute('aria-labelledby').split(/\s+/)
         .map(id => document.getElementById(id)?.innerText || '').join(' ');
@@ -63,6 +89,7 @@ _ENUMERATE_JS = r"""
     return txt(el.getAttribute('placeholder') || el.name || '');
   };
   const required = (el, label) => el.required || el.getAttribute('aria-required') === 'true'
+                                  || el.closest('[role="group"]')?.getAttribute('aria-required') === 'true'
                                   || /\*\s*$/.test(label) || /\(required\)/i.test(label);
 
   const out = []; let n = 0;
@@ -187,13 +214,18 @@ class FillReport:
     closed: bool = False         # posting is gone (404/410)
 
     @property
+    def resume_attached(self) -> bool:
+        return any(f.kind == "file" and f.value == "resume.pdf" for f in self.filled)
+
+    @property
     def ready_to_submit(self) -> bool:
         return not self.error and not self.needs_attention and bool(self.filled)
 
     def save(self, folder: Path) -> Path:
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / "report.json"
-        path.write_text(json.dumps({**asdict(self), "ready_to_submit": self.ready_to_submit}, indent=2))
+        path.write_text(json.dumps({**asdict(self), "ready_to_submit": self.ready_to_submit,
+                                    "resume_attached": self.resume_attached}, indent=2))
         return path
 
 

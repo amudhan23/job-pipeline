@@ -411,6 +411,10 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
             console.print()
             continue
         console.print(f"  [green]✓ filled {len(report.filled)} field(s)[/green]")
+        if report.resume_attached:
+            console.print("  [green]📎 resume attached[/green]")
+        else:
+            console.print("  [yellow]! resume NOT attached — no resume upload field was recognised[/yellow]")
         pending = []
         for f in report.needs_attention:
             console.print(f"  [yellow]! needs you:[/yellow] {f.label[:80]}  [dim]({f.source})[/dim]")

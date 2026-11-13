@@ -14,6 +14,24 @@
   <div class="field"><label for="first_name" class="label">First Name*</label><input id="first_name" required></div>
   <div class="field"><label for="email" class="label">Email*</label><input id="email" type="email" required></div>
 
+  <!-- Copied from the live Twitch form: the file input's own label is just
+       "Attach"; the question lives on the role=group, which is the required one -->
+  <div role="group" aria-labelledby="upload-label-resume" aria-required="true" class="file-upload">
+    <div id="upload-label-resume" class="label upload-label">Resume/CV<span class="required">*</span></div>
+    <div class="file-upload__wrapper"><div class="button-container"><div class="secondary-button"><div>
+      <button type="button" class="btn btn--rounded">Attach</button>
+      <label class="visually-hidden" for="resume">Attach</label>
+      <input id="resume" class="visually-hidden" type="file" accept=".pdf,.doc,.docx,.txt,.rtf"></div></div>
+      <div class="secondary-button"><button type="button">Dropbox</button></div>
+      <div class="secondary-button"><div><button type="button" data-testid="resume-text">Enter manually</button>
+      <label class="visually-hidden" for="resume_text">Enter manually</label></div></div></div></div></div>
+  <div role="group" aria-labelledby="upload-label-cover_letter" aria-required="false" class="file-upload">
+    <div id="upload-label-cover_letter" class="label upload-label">Cover Letter</div>
+    <div class="file-upload__wrapper"><div class="button-container"><div class="secondary-button"><div>
+      <button type="button" class="btn btn--rounded">Attach</button>
+      <label class="visually-hidden" for="cover_letter">Attach</label>
+      <input id="cover_letter" class="visually-hidden" type="file" accept=".pdf,.doc,.docx,.txt,.rtf"></div></div></div></div></div>
+
   <!-- Dropdowns are built by script below. Each has a visible combobox and a hidden twin input. -->
   <div class="field" data-select="country" data-label="Country*" data-search="1"
        data-options="Canada|India|United Kingdom|United States|United States Minor Outlying Islands"></div>
