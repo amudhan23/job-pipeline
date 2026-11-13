@@ -14,6 +14,7 @@ updated daily, with fields:
 from __future__ import annotations
 
 import logging
+import re
 import time
 from datetime import datetime
 from typing import Any
@@ -42,6 +43,8 @@ def normalize_url(url: str) -> str:
     """Canonical form for dedupe: lowercase host, no query/fragment/trailing slash."""
     parts = urlsplit(url.strip())
     path = parts.path.rstrip("/")
+    # The application page and the posting are the same job
+    path = re.sub(r"/(application|apply)$", "", path)
     return urlunsplit((parts.scheme.lower() or "https", parts.netloc.lower(), path, "", ""))
 
 

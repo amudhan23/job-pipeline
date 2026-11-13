@@ -108,7 +108,8 @@ def _print_run_summary(pipeline: Pipeline) -> None:
         console.print("[bold]Boards scraped:[/bold] none yet — run without --no-discover "
                       "to find some")
     console.print(f"[bold]Jobs:[/bold] {s.jobs_from_boards} from boards, "
-                  f"{s.jobs_from_feeds} from feeds, {s.duplicates_dropped} duplicates dropped")
+                  f"{s.jobs_from_feeds} from feeds, {s.duplicates_dropped} duplicates dropped"
+                  + (f", {s.closed_dropped} closed (feed out of date)" if s.closed_dropped else ""))
     if s.max_age_days:
         console.print(f"[bold]Freshness (last {s.max_age_days}d):[/bold] "
                       f"{s.too_old_dropped} older jobs dropped"
@@ -386,7 +387,7 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
         candidates = tracker.get_jobs(run["id"] if run else None)
         jobs = [j for j in candidates
                 if j["fit_score"] >= min_score and application_url(j)
-                and j["status"] not in ("applied", "interview", "offer", "rejected")][:top]
+                and j["status"] not in ("applied", "interview", "offer", "rejected", "skipped")][:top]
     if not jobs:
         raise click.ClickException("No matching jobs (auto-apply supports Greenhouse, Lever, Ashby).")
 
@@ -399,6 +400,10 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
         console.print(f"[cyan]{job['company']}[/cyan] — {job['title']}  [dim]({job['fit_score']:.0f})[/dim]")
         folder = out_root / _re.sub(r"[^A-Za-z0-9_.-]", "_", job["id"])
         report = practice_apply(job, details, resume, folder, headless=not headed, saved=saved)
+        if report.closed:
+            # Don't offer it again
+            from pipeline.models import ApplicationStatus
+            tracker.update_status(job["id"], ApplicationStatus.SKIPPED, notes="posting closed (404)")
         if report.error:
             console.print(f"  [red]✗ {report.error}[/red]")
             if report.screenshot:

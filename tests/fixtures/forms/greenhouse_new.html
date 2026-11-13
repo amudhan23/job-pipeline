@@ -3,7 +3,8 @@
 <style>
   body { font-family: sans-serif; max-width: 760px; margin: 20px auto; }
   .field { margin: 14px 0; position: relative; } .label { font-weight: bold; display: block; }
-  .menu { border: 1px solid #aaa; background: #fff; } .menu [role=option] { padding: 4px; cursor: pointer; }
+  /* Menus float over the questions below them, like react-select's */
+  .menu { border: 1px solid #aaa; background: #fff; position: absolute; top: 100%; left: 0; right: 0; z-index: 10; } .menu [role=option] { padding: 4px; cursor: pointer; }
   /* react-select's hidden validation input: in the DOM, required, invisible */
   .shadow { opacity: 0; position: absolute; height: 1px; width: 100%; left: 0; bottom: 0; }
 </style></head>
@@ -17,7 +18,9 @@
   <div class="field" data-select="country" data-label="Country*" data-search="1"
        data-options="Canada|India|United Kingdom|United States|United States Minor Outlying Islands"></div>
   <div class="field" data-select="city" data-label="Location (City)*" data-search="1" data-async="1"></div>
-  <div class="field" data-select="relocate" data-label="Are you open to relocation? *" data-options="Yes|No"></div>
+  <!-- Real Twitch: worded yes/no, but the options are cities -->
+  <div class="field" data-select="relocate" data-label="Are you open to relocation? *" data-search="1"
+       data-options="No|No, but I'm open to a remote position|San Francisco, CA|Seattle, WA|New York, NY|London, UK|Seoul, Korea|Tokyo, Japan|Berlin, Germany|Singapore|Sydney, Australia"></div>
   <div class="field" data-select="employee" data-label="Are you currently a Twitch employee?*" data-options="Yes|No"></div>
   <div class="field" data-select="amazon" data-label="Are you a current employee with Amazon or any Amazon subsidiary (outside of Twitch)?*" data-options="Yes|No"></div>
   <div class="field" data-select="eligible" data-label="If offered employment by Amazon, would you be legally eligible to begin employment immediately?*" data-options="Yes|No"></div>
@@ -66,6 +69,11 @@
         setTimeout(() => show(q.includes(',') ? [] : list(q)), 700);
       } else show(list(q));
     });
+    // react-select: Escape closes the menu and clears typed text
+    box.addEventListener('keydown', e => { if (e.key === 'Escape') { menu.hidden = true; box.value = shadow.value; } });
+    box.setAttribute('aria-expanded', 'false');
+    new MutationObserver(() => box.setAttribute('aria-expanded', String(!menu.hidden)))
+      .observe(menu, {attributes: true, attributeFilter: ['hidden']});
     menu.addEventListener('click', e => {
       if (e.target.getAttribute('role') !== 'option') return;
       box.value = shadow.value = e.target.textContent; menu.hidden = true;

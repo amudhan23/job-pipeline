@@ -8,7 +8,7 @@ instead of guessing. Legal consent boxes are never answered automatically.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from pipeline.applicant import DECLINE
 
@@ -17,6 +17,9 @@ from pipeline.applicant import DECLINE
 class Answer:
     value: str          # text to type, option to pick, or "__RESUME__" for uploads
     source: str         # which saved field it came from (for the report)
+    # Other ways to say the same thing when a dropdown has no option for
+    # `value` — e.g. Twitch's "Open to relocation?" lists cities, not Yes/No
+    alternates: list[str] = field(default_factory=list)
 
 
 RESUME = "__RESUME__"
@@ -97,7 +100,13 @@ def answer_for(label: str, details: dict[str, str], company: str = "",
         if field in ("current_employer", "past_employers"):
             return _employer(text, field, details, company)
         value = details.get(field, "")
-        return Answer(value, field) if value else None
+        if not value:
+            return None
+        if field == "relocate" and value == "Yes" and details.get("city"):
+            # Willing to relocate, but the form lists locations: pick your city
+            city = details["city"]
+            return Answer(value, field, alternates=[city, city.split(",")[0].strip()])
+        return Answer(value, field)
     return None
 
 

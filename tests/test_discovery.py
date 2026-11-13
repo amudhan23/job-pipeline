@@ -248,3 +248,45 @@ def test_run_discovers_and_scrapes_unknown_company(monkeypatch, registry):
     assert pipe.stats.new_boards["web search"] == 2
     assert pipe.stats.boards_failed == 1
     assert "brandnewco" in registry.slugs("ashby")
+
+
+
+def test_application_url_matches_posting():
+    assert normalize_url("https://jobs.ashbyhq.com/cursor/u-1/application?embed=true") == \
+        normalize_url("https://jobs.ashbyhq.com/cursor/u-1")
+    assert normalize_url("https://jobs.lever.co/spotify/abc/apply") == normalize_url("https://jobs.lever.co/spotify/abc")
+
+
+def test_stale_feed_job_dropped_when_board_lacks_it(monkeypatch, registry):
+    """Anysphere bug: the feed listed a job the company had closed. We scraped
+    the company's board this run and the job wasn't there → drop it."""
+    from pipeline import orchestrator
+
+    async def no_web(config, **kw):
+        return DiscoveryResult()
+
+    listings = [
+        _listing(id="gone", company_name="Anysphere", title="Software Engineer New Grad",
+                 url="https://jobs.ashbyhq.com/cursor/u-closed/application?embed=true"),
+        _listing(id="live", company_name="Anysphere", title="Software Engineer",
+                 url="https://jobs.ashbyhq.com/cursor/u-live/application"),
+        _listing(id="wd", company_name="BigCo", title="Software Engineer",
+                 url="https://bigco.wd1.myworkdayjobs.com/External/job/NY/SWE_R1"),
+    ]
+
+    async def fake_fetch(self):
+        return listings
+
+    monkeypatch.setattr(orchestrator, "web_discover", no_web)
+    monkeypatch.setattr(SimplifyFeed, "fetch", fake_fetch)
+    pipe = orchestrator.Pipeline(CONFIG, registry=registry)
+    live = _job("cursor", "Software Engineer", "https://jobs.ashbyhq.com/cursor/u-live")
+    pipe.scrapers = {"ashby": FakeScraper({"cursor": [live]}),
+                     "workday": FakeScraper({"bigco.wd1.myworkdayjobs.com/External": []})}
+
+    jobs = asyncio.run(pipe.run_scrape())
+    urls = sorted(j.url for j in jobs)
+    assert "https://jobs.ashbyhq.com/cursor/u-live" in urls
+    assert not any("u-closed" in u for u in urls)           # closed → dropped
+    assert any("myworkdayjobs" in u for u in urls)          # Workday absence isn't proof → kept
+    assert pipe.stats.closed_dropped == 1

@@ -184,6 +184,7 @@ class FillReport:
     skipped_optional: list[FieldResult] = field(default_factory=list)
     screenshot: str = ""
     error: str = ""
+    closed: bool = False         # posting is gone (404/410)
 
     @property
     def ready_to_submit(self) -> bool:
@@ -247,15 +248,20 @@ def fill_form(page, details: dict[str, str], resume_path: Path | None,
             continue
 
         ans = answer_for(label, details, report.company, saved)
-        done = False
+        done, used = False, ""
         if ans:
-            try:
-                done = _apply(page, f, ans.value, resume_path)
-            except Exception as e:  # one stubborn field shouldn't stop the rest
-                result.source = f"couldn't fill: {e.__class__.__name__}"
+            for candidate in [ans.value, *ans.alternates]:
+                try:
+                    done = _apply(page, f, candidate, resume_path)
+                except Exception as e:  # one stubborn field shouldn't stop the rest
+                    result.source = f"couldn't fill: {e.__class__.__name__}"
+                    _close_open_menus(page)
+                if done:
+                    used = candidate
+                    break
             if done:
-                result.value = "resume.pdf" if ans.value == RESUME else ans.value
-                result.source = ans.source
+                result.value = "resume.pdf" if used == RESUME else used
+                result.source = ans.source if used == ans.value else f"{ans.source} (closest option)"
                 report.filled.append(result)
                 continue
             if not result.source:
@@ -324,6 +330,7 @@ def _fill_combobox(page, box, value: str, label: str) -> bool:
     2. If not there and the box accepts typing, type a short query (just the
        city for location searches) and wait for suggestions.
     """
+    _close_open_menus(page)
     box.click()
     try:
         page.locator('[role="option"]:visible').first.wait_for(timeout=4000)
@@ -332,7 +339,9 @@ def _fill_combobox(page, box, value: str, label: str) -> bool:
     opts, texts = _visible_options(page)
     choice = pick_option(value, texts)
 
+    typed = False
     if not choice and box.is_editable():
+        typed = True
         query = value
         if re.search(r"location|city|where", label, re.I):
             query = value.split(",")[0]                  # "New York, NY" → "New York"
@@ -350,12 +359,26 @@ def _fill_combobox(page, box, value: str, label: str) -> bool:
             if re.search(r"location|city|where", label, re.I) else None)
 
     if not choice:
-        box.press("Escape")
-        if box.is_editable():
-            box.fill("")
+        # Leave the question blank and the menu closed. Deleting the typed
+        # search reopens react-select's menu (any input change does), so
+        # always finish with Escape — a menu left open covers the questions
+        # below it (that caused the TimeoutErrors on Twitch).
+        if typed:
+            box.press("ControlOrMeta+a")
+            box.press("Delete")
+        _close_open_menus(page)
         return False
     opts.nth(texts.index(choice)).click()
     return True
+
+
+def _close_open_menus(page) -> None:
+    """Close any dropdown left open so it can't cover the next question."""
+    for _ in range(3):
+        if not page.locator('[aria-expanded="true"]').count():
+            return
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(150)
 
 
 def practice_apply(job: dict[str, Any], details: dict[str, str], resume_path: Path | None,
@@ -378,9 +401,14 @@ def practice_apply(job: dict[str, Any], details: dict[str, str], resume_path: Pa
         try:
             page = browser.new_page(viewport={"width": 1280, "height": 900})
             page.set_default_timeout(8000)      # no 30-second hangs on one stubborn field
-            page.goto(target, wait_until="domcontentloaded", timeout=45000)
+            response = page.goto(target, wait_until="domcontentloaded", timeout=45000)
             out_dir.mkdir(parents=True, exist_ok=True)
             shot = out_dir / "filled.png"
+            if response is not None and response.status in (404, 410):
+                report.closed = True
+                report.error = f"job closed — the posting returns {response.status} (feeds can lag)"
+                report.save(out_dir)
+                return report
             # Forms on Ashby/new Greenhouse are drawn by JavaScript after load
             try:
                 page.wait_for_selector(

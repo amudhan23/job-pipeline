@@ -50,6 +50,7 @@ class RunStats:
     jobs_from_boards: int = 0
     jobs_from_feeds: int = 0
     duplicates_dropped: int = 0
+    closed_dropped: int = 0      # feed jobs missing from their (successfully scraped) board
     max_age_days: int | None = None
     too_old_dropped: int = 0
     undated_dropped: int = 0
@@ -113,7 +114,7 @@ class Pipeline:
         )
         # Any scraper's passes_filters works — they share the config filters
         try:
-            jobs, boards = await feed.collect(self.scrapers["greenhouse"].passes_filters)
+            jobs, boards = await feed.collect(next(iter(self.scrapers.values())).passes_filters)
         except Exception as e:
             logger.error(f"Simplify feed failed: {e}")
             return []
@@ -147,6 +148,8 @@ class Pipeline:
             jobs, status = await scraper.scrape_many(slugs, concurrency=concurrency)
             for slug, count in status.items():
                 self.registry.record_result(platform, slug, count)
+                if count is not None:
+                    self._scraped_ok.add((platform, slug))
             failed = sum(1 for c in status.values() if c is None)
             self.stats.boards_scraped[platform] = len(slugs)
             self.stats.boards_failed += failed
@@ -173,6 +176,13 @@ class Pipeline:
             title_key = (job.platform.value, job.company_slug, job.title.lower())
             if key in merged or title_key in seen_titles:
                 dropped += 1
+                continue
+            # We just read this company's board and the job isn't on it:
+            # the feed is stale and the posting has closed.
+            # (Not Workday: it's searched with page limits, so absence isn't proof.)
+            if job.platform.value != "workday" and \
+                    (job.platform.value, job.company_slug) in self._scraped_ok:
+                self.stats.closed_dropped += 1
                 continue
             merged[key] = job
         self.stats.duplicates_dropped = dropped
@@ -211,6 +221,7 @@ class Pipeline:
         window; with neither, config `filters.max_job_age_days` applies.
         """
         self.stats = RunStats()
+        self._scraped_ok: set[tuple[str, str]] = set()
         search_recency = recency or self.discovery_cfg.get("recency", "week")
         if max_age_days is None:
             max_age_days = (

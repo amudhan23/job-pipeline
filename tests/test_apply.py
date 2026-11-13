@@ -194,7 +194,7 @@ def test_twitch_style_form():
     assert values == {
         "country": "United States",            # not "United States Minor Outlying Islands"
         "city": "New York, NY, USA",           # late suggestions, searched by city only
-        "relocate": "Yes",                     # click-only dropdown (readonly input)
+        "relocate": "New York, NY",            # options are cities, not Yes/No → your city
         "employee": "No", "amazon": "No",      # not a current employee anywhere
         "eligible": "Yes", "spons": "Yes", "h1b": "No",
         "citizen": "India", "future": "Yes",
@@ -237,3 +237,43 @@ def test_employer_rules():
     assert answer_for("Have you ever been employed by Amazon?", d, "Twitch").value == "No"
     assert answer_for("Where are you currently employed?", d) is None       # wants a name
     assert answer_for("Are you currently a Twitch employee?", {}, "Twitch") is None  # unknown → ask
+
+
+@pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
+def test_relocation_reports_closest_option():
+    report, _, _ = _fill(GH_NEW, TWITCH_DETAILS)
+    reloc = next(f for f in report.filled if f.label.startswith("Are you open to relocation"))
+    assert reloc.value == "New York, NY" and "closest option" in reloc.source
+
+
+@pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
+def test_unmatched_dropdown_does_not_block_later_questions():
+    """Twitch bug: an unanswerable dropdown left its menu open over the next
+    questions, so they timed out. Without a city, relocation can't match."""
+    details = {k: v for k, v in TWITCH_DETAILS.items() if k != "city"}
+    report, values, _ = _fill(GH_NEW, details)
+    assert values["relocate"] == ""
+    assert values["employee"] == "No" and values["amazon"] == "No" and values["eligible"] == "Yes"
+    assert not any("TimeoutError" in f.source for f in report.needs_attention + report.skipped_optional)
+
+
+@pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
+def test_closed_posting_detected(tmp_path):
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from pipeline.apply.filler import practice_apply
+
+    class Gone(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(404); self.end_headers(); self.wfile.write(b"Page not found")
+        def log_message(self, *a): pass
+
+    srv = HTTPServer(("127.0.0.1", 0), Gone)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        job = {"id": "simplify-x", "company": "Anysphere", "title": "SWE", "platform": "ashby", "url": ""}
+        report = practice_apply(job, {}, None, tmp_path / "out",
+                                url=f"http://127.0.0.1:{srv.server_address[1]}/cursor/x/application")
+    finally:
+        srv.shutdown()
+    assert report.closed and "job closed" in report.error
