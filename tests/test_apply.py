@@ -217,14 +217,71 @@ def test_saved_answers_close_the_loop(tmp_path):
     assert q == "how would you describe your experience with {company}?"
     applicant.add_pending([{"question": q, "label": "How would you…", "options": ["I stream"],
                             "company": "Twitch"}], tmp_path)
-    saved = applicant.save_answers({q: "I don't use Twitch",
-                                    "which other platforms are you active on?": "YouTube, None"}, tmp_path)
+    saved = applicant.save_answers([
+        {"question": q, "company": "Twitch", "answer": "I don't use Twitch"},
+        {"question": "which other platforms are you active on?", "company": "Twitch", "answer": "YouTube, None"},
+    ], tmp_path)
     assert applicant.load_pending(tmp_path) == {}            # answered → no longer pending
 
     report, values, checked = _fill(GH_NEW, TWITCH_DETAILS, saved)
     assert values["exp"] == "I don't use Twitch"
     assert sorted(checked) == ["none", "yt"]
     assert report.needs_attention == []
+
+
+class TestAnswerScope:
+    """Company-specific answers must not leak into the general profile."""
+
+    def test_company_answer_stays_with_company(self, tmp_path):
+        from pipeline import applicant
+        q = "how would you describe your experience with {company}?"
+        saved = applicant.save_answers([{"question": q, "company": "Twitch", "answer": "I watch streams"}], tmp_path)
+        assert saved["all"] == {}
+        assert answer_for("How would you describe your experience with Twitch?", {}, "Twitch", saved).value \
+            == "I watch streams"
+        assert answer_for("How would you describe your experience with Stripe?", {}, "Stripe", saved) is None
+
+    def test_everywhere_answer_is_shared(self, tmp_path):
+        from pipeline import applicant
+        q = "have you previously applied to {company}?"
+        saved = applicant.save_answers([{"question": q, "company": "Twitch", "answer": "No",
+                                         "everywhere": True}], tmp_path)
+        assert answer_for("Have you previously applied to Stripe?", {}, "Stripe", saved).value == "No"
+
+    def test_company_answer_overrides_shared(self, tmp_path):
+        from pipeline import applicant
+        q = "have you previously applied to {company}?"
+        applicant.save_answers([{"question": q, "company": "", "answer": "No", "everywhere": True}], tmp_path)
+        saved = applicant.save_answers([{"question": q, "company": "Twitch", "answer": "Yes"}], tmp_path)
+        assert answer_for("Have you previously applied to Twitch?", {}, "Twitch", saved).value == "Yes"
+        assert answer_for("Have you previously applied to Stripe?", {}, "Stripe", saved).value == "No"
+
+    def test_pending_is_per_company_and_cleared_by_shared_answer(self, tmp_path):
+        from pipeline import applicant
+        q = "do you have hands-on experience in sap?"
+        for c in ("Twitch", "Acme"):
+            applicant.add_pending([{"question": q, "label": "SAP?", "options": [], "company": c}], tmp_path)
+        assert set(applicant.load_pending(tmp_path)) == {"Twitch", "Acme"}
+        applicant.save_answers([{"question": q, "company": "Twitch", "answer": "No"}], tmp_path)
+        assert set(applicant.load_pending(tmp_path)) == {"Acme"}          # only Twitch answered
+        applicant.save_answers([{"question": q, "company": "Acme", "answer": "No", "everywhere": True}], tmp_path)
+        assert applicant.load_pending(tmp_path) == {}
+
+    def test_forget_answer(self, tmp_path):
+        from pipeline import applicant
+        q = "do you have hands-on experience in sap?"
+        applicant.save_answers([{"question": q, "company": "Twitch", "answer": "No"}], tmp_path)
+        saved = applicant.save_answers([{"question": q, "company": "Twitch", "answer": ""}], tmp_path)
+        assert saved["companies"] == {}
+
+    def test_old_files_migrate(self, tmp_path):
+        import json as _json
+        from pipeline import applicant
+        (tmp_path / "answers.json").write_text(_json.dumps({"q one": "a"}))
+        (tmp_path / "pending_questions.json").write_text(_json.dumps(
+            {"q two": {"label": "Q two", "options": [], "companies": ["Twitch"]}}))
+        assert applicant.load_answers(tmp_path) == {"all": {"q one": "a"}, "companies": {}}
+        assert applicant.load_pending(tmp_path) == {"Twitch": {"q two": {"label": "Q two", "options": []}}}
 
 
 def test_company_name_generalizes():

@@ -164,3 +164,17 @@ def test_resume_template_builds(tmp_path):
               location="NYC", url="u", platform=ATSPlatform.ASHBY, description="backend java")
     out = gen.build(job, tmp_path)
     assert out and out.exists()
+
+
+def test_answers_api_scoped(server):
+    base, pdir = server
+    applicant.add_pending([{"question": "years active on the platform?", "label": "Years?",
+                            "options": [], "company": "Twitch"}], pdir)
+    body = {"answers": [{"question": "years active on the platform?", "company": "Twitch",
+                         "answer": "0", "everywhere": False}]}
+    code, _, out = _req(f"{base}/api/answers", json.dumps(body).encode(), "application/json")
+    data = json.loads(out)
+    assert code == 200
+    assert data["saved"]["companies"] == {"twitch": {"years active on the platform?": "0"}}
+    assert data["saved"]["all"] == {} and data["pending"] == {}
+    assert _req(f"{base}/api/answers", json.dumps({"q": "a"}).encode(), "application/json")[0] == 400

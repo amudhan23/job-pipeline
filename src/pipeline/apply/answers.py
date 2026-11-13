@@ -75,18 +75,19 @@ def is_consent(label: str) -> bool:
 
 
 def answer_for(label: str, details: dict[str, str], company: str = "",
-               saved: dict[str, str] | None = None) -> Answer | None:
+               saved: dict | None = None) -> Answer | None:
     """Best answer for a question, or None if we shouldn't guess.
 
-    Your saved answers to specific questions win over the rules."""
-    from pipeline.applicant import normalize_question
+    Your saved answers win over the rules: this company's own answers
+    first, then answers you chose to use for every company."""
+    from pipeline.applicant import lookup_answer, normalize_question
     text = " ".join(label.lower().replace("*", " ").split())
     if not text or is_consent(text):
         return None
     if saved:
-        q = normalize_question(label, company)
-        if q in saved:
-            return Answer(saved[q], "your saved answer")
+        found = lookup_answer(saved, normalize_question(label, company), company)
+        if found is not None:
+            return Answer(found, "your saved answer")
     for pattern, field in _RULES:
         if not re.search(pattern, text):
             continue

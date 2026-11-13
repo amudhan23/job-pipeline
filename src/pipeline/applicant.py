@@ -161,10 +161,17 @@ def save_resume(pdf: bytes, private_dir: Path | None = None) -> None:
 
 # ── Saved answers to specific questions ──────────────────────────────────
 # Questions the rules can't answer ("How would you describe your experience
-# with Twitch?") are shown on the My details page; you answer once and the
-# answer is reused. Questions are normalized and the company's name becomes
-# "{company}", so "Are you currently a Twitch employee?" also answers
-# "Are you currently a Stripe employee?".
+# with Twitch?") are listed on the My details page, grouped by company.
+#
+# An answer applies ONLY to the company that asked, unless you tick "use for
+# every company" — so company-specific answers never leak into your general
+# profile. Questions are normalized and the asking company's name becomes
+# "{company}", so a shared answer to "Are you currently a Twitch employee?"
+# also answers "Are you currently a Stripe employee?".
+#
+# answers.json:          {"all": {question: answer},
+#                         "companies": {company_key: {question: answer}}}
+# pending_questions.json {company: {question: {"label", "options"}}}
 
 ANSWERS_FILE = "answers.json"
 PENDING_FILE = "pending_questions.json"
@@ -180,61 +187,92 @@ def normalize_question(label: str, company: str = "") -> str:
     return " ".join(q.split()).strip(" :")
 
 
-def load_answers(private_dir: Path | None = None) -> dict[str, str]:
+def company_key(company: str) -> str:
+    return " ".join(company.lower().split())
+
+
+def _write_private(name: str, data: Any, private_dir: Path) -> None:
+    private_dir.mkdir(parents=True, exist_ok=True)
+    path = private_dir / name
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    path.chmod(0o600)
+
+
+def load_answers(private_dir: Path | None = None) -> dict[str, dict]:
     path = (private_dir or PRIVATE_DIR) / ANSWERS_FILE
-    return json.loads(path.read_text()) if path.exists() else {}
+    data = json.loads(path.read_text()) if path.exists() else {}
+    if data and "all" not in data and "companies" not in data:
+        data = {"all": data, "companies": {}}          # old flat format → shared answers
+    return {"all": data.get("all", {}), "companies": data.get("companies", {})}
 
 
-def save_answers(answers: dict[str, str], private_dir: Path | None = None) -> dict[str, str]:
-    """Merge answers in (empty value = forget that answer)."""
+def lookup_answer(saved: dict | None, question: str, company: str) -> str | None:
+    """This company's answer first, then answers shared across companies."""
+    if not saved:
+        return None
+    mine = saved.get("companies", {}).get(company_key(company), {})
+    if question in mine:
+        return mine[question]
+    return saved.get("all", {}).get(question)
+
+
+def save_answers(items: list[dict], private_dir: Path | None = None) -> dict[str, dict]:
+    """items: {"question", "answer", "company", "everywhere": bool}.
+    Empty answer = forget it. Answered questions leave the pending list."""
     private_dir = private_dir or PRIVATE_DIR
-    merged = load_answers(private_dir)
-    for q, a in answers.items():
-        q = normalize_question(str(q))
-        a = str(a or "").strip()[:4000]
+    saved = load_answers(private_dir)
+    pending = load_pending(private_dir)
+    for it in items:
+        q = normalize_question(str(it.get("question", "")))
+        a = str(it.get("answer") or "").strip()[:4000]
+        company = str(it.get("company") or "")
+        everywhere = bool(it.get("everywhere")) or not company
         if not q:
             continue
+        bucket = saved["all"] if everywhere else saved["companies"].setdefault(company_key(company), {})
         if a:
-            merged[q] = a
+            bucket[q] = a
+            if everywhere:          # one shared answer settles it for everyone
+                for c in list(pending):
+                    pending[c].pop(q, None)
+            elif company in pending:
+                pending[company].pop(q, None)
         else:
-            merged.pop(q, None)
-    private_dir.mkdir(parents=True, exist_ok=True)
-    path = private_dir / ANSWERS_FILE
-    path.write_text(json.dumps(merged, indent=2, ensure_ascii=False))
-    path.chmod(0o600)
-    # Answered questions are no longer pending
-    pending = load_pending(private_dir)
-    if pending:
-        save_pending({q: v for q, v in pending.items() if q not in merged}, private_dir)
-    return merged
+            bucket.pop(q, None)
+    saved["companies"] = {c: qs for c, qs in saved["companies"].items() if qs}
+    _write_private(ANSWERS_FILE, saved, private_dir)
+    save_pending({c: qs for c, qs in pending.items() if qs}, private_dir)
+    return saved
 
 
 def load_pending(private_dir: Path | None = None) -> dict[str, dict]:
     path = (private_dir or PRIVATE_DIR) / PENDING_FILE
-    return json.loads(path.read_text()) if path.exists() else {}
+    data = json.loads(path.read_text()) if path.exists() else {}
+    # Old format {question: {label, options, companies: [...]}} → per company
+    if data and all(isinstance(v, dict) and "companies" in v for v in data.values()):
+        converted: dict[str, dict] = {}
+        for q, v in data.items():
+            for c in v.get("companies") or ["(unknown)"]:
+                converted.setdefault(c, {})[q] = {"label": v.get("label", q), "options": v.get("options", [])}
+        data = converted
+    return data
 
 
 def save_pending(pending: dict[str, dict], private_dir: Path | None = None) -> None:
-    private_dir = private_dir or PRIVATE_DIR
-    private_dir.mkdir(parents=True, exist_ok=True)
-    path = private_dir / PENDING_FILE
-    path.write_text(json.dumps(pending, indent=2, ensure_ascii=False))
-    path.chmod(0o600)
+    _write_private(PENDING_FILE, pending, private_dir or PRIVATE_DIR)
 
 
 def add_pending(items: list[dict], private_dir: Path | None = None) -> None:
-    """Record questions an application couldn't answer.
-    items: {"question": normalized, "label": original, "options": [...], "company": ...}"""
+    """Record questions an application couldn't answer, under the company
+    that asked. items: {"question": normalized, "label", "options", "company"}"""
     pending = load_pending(private_dir)
-    answered = load_answers(private_dir)
+    saved = load_answers(private_dir)
     for it in items:
-        q = it["question"]
-        if not q or q in answered:
+        q, company = it["question"], it.get("company") or "(unknown)"
+        if not q or lookup_answer(saved, q, company) is not None:
             continue
-        entry = pending.setdefault(q, {"label": it["label"], "options": [], "companies": []})
+        entry = pending.setdefault(company, {}).setdefault(q, {"label": it["label"], "options": []})
         entry["options"] = it.get("options") or entry["options"]
-        if it.get("company") and it["company"] not in entry["companies"]:
-            entry["companies"].append(it["company"])
     save_pending(pending, private_dir)
 
 

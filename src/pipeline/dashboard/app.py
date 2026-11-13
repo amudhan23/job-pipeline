@@ -375,8 +375,8 @@ PROFILE_HTML = """<!DOCTYPE html>
 
   <div class="card" id="qcard" style="display:none">
     <h2>Questions waiting for you</h2>
-    <p class="help" style="margin:-6px 0 14px">From applications the bot couldn't finish. Answer once — it's reused
-      everywhere the same question comes up (a company's name in the question works for any company).</p>
+    <p class="help" style="margin:-6px 0 14px">From applications the bot couldn't finish, grouped by company. An answer applies only to
+      that company unless you tick “use for every company”.</p>
     <div id="pending"></div>
     <button type="button" id="saveAnswers" style="margin-top:6px">Save answers</button>
     <span id="astatus" style="margin-left:10px;font-size:13px"></span>
@@ -479,37 +479,57 @@ async function upload(file) {
 }
 
 // ── Questions waiting for you / saved answers ──
-function answerInput(id, options, value) {
+// Answers apply only to the company that asked, unless "use for every
+// company" is ticked — company-specific answers stay out of your profile.
+const inputStyle = 'width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:9px';
+
+function answerInput(q, company, options, value) {
+  const attrs = `data-q="${esc(q)}" data-company="${esc(company)}"`;
   const opts = (options || []).filter(o => o && !/^(select|choose)/i.test(o));
   if (opts.length) {
-    return `<select data-q="${esc(id)}"><option value="">— choose —</option>` +
+    return `<select ${attrs}><option value="">— choose —</option>` +
       opts.map(o => `<option${o === value ? ' selected' : ''}>${esc(o)}</option>`).join('') + '</select>';
   }
-  const long = /why|describe|tell us|explain/i.test(id);
-  return long ? `<textarea data-q="${esc(id)}" rows="3" style="width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:9px">${esc(value)}</textarea>`
-              : `<input data-q="${esc(id)}" value="${esc(value || '')}">`;
+  return /why|describe|tell us|explain/i.test(q)
+    ? `<textarea ${attrs} rows="3" style="${inputStyle}">${esc(value || '')}</textarea>`
+    : `<input ${attrs} value="${esc(value || '')}">`;
 }
 
 async function loadAnswers() {
   const data = await (await fetch('/api/answers')).json();
-  const pend = Object.entries(data.pending || {});
-  document.getElementById('qcard').style.display = pend.length ? 'block' : 'none';
-  document.getElementById('pending').innerHTML = pend.map(([q, p]) =>
-    `<div style="margin-bottom:14px"><label>${esc(p.label)}</label>${answerInput(q, p.options, '')}
-     <div class="help">asked by ${esc((p.companies || []).join(', '))}</div></div>`).join('');
-  const saved = Object.entries(data.saved || {});
-  document.getElementById('savedcard').style.display = saved.length ? 'block' : 'none';
-  document.getElementById('saved').innerHTML = saved.map(([q, a]) =>
-    `<div style="margin-bottom:12px"><label>${esc(q)}</label><input data-q="${esc(q)}" value="${esc(a)}"></div>`).join('');
+  const pending = Object.entries(data.pending || {});
+  document.getElementById('qcard').style.display = pending.length ? 'block' : 'none';
+  document.getElementById('pending').innerHTML = pending.map(([company, qs]) =>
+    `<h2 style="margin-top:10px">${esc(company)}</h2>` +
+    Object.entries(qs).map(([q, p]) =>
+      `<div style="margin-bottom:16px"><label>${esc(p.label)}</label>${answerInput(q, company, p.options, '')}
+       <label style="font-size:12px;color:var(--muted);margin-top:6px;display:flex;gap:6px;align-items:center">
+         <input type="checkbox" data-every style="width:auto"> Use this answer for every company</label></div>`
+    ).join('')).join('');
+
+  const saved = data.saved || {all: {}, companies: {}};
+  const groups = [];
+  if (Object.keys(saved.all || {}).length) groups.push(['Every company', '', saved.all]);
+  for (const [c, qs] of Object.entries(saved.companies || {})) groups.push([c, c, qs]);
+  document.getElementById('savedcard').style.display = groups.length ? 'block' : 'none';
+  document.getElementById('saved').innerHTML = groups.map(([title, company, qs]) =>
+    `<h2 style="margin-top:10px">${esc(title)}</h2>` +
+    Object.entries(qs).map(([q, a]) =>
+      `<div style="margin-bottom:12px"><label>${esc(q)}</label>
+       <input data-q="${esc(q)}" data-company="${esc(company)}" ${company ? '' : 'data-everyfixed'} value="${esc(a)}"></div>`
+    ).join('')).join('');
 }
 
 async function postAnswers(containerId, keepEmpty) {
-  const out = {};
+  const answers = [];
   document.querySelectorAll(`#${containerId} [data-q]`).forEach(el => {
-    if (el.value.trim() || keepEmpty) out[el.dataset.q] = el.value.trim();
+    if (!el.value.trim() && !keepEmpty) return;
+    const box = el.parentElement.querySelector('[data-every]');
+    answers.push({question: el.dataset.q, company: el.dataset.company, answer: el.value.trim(),
+                  everywhere: el.hasAttribute('data-everyfixed') || !!(box && box.checked)});
   });
   const r = await fetch('/api/answers', {method:'POST', headers:{'Content-Type':'application/json'},
-                                         body: JSON.stringify(out)});
+                                         body: JSON.stringify({answers})});
   document.getElementById('astatus').textContent = r.ok ? 'Saved ✓' : 'Save failed';
   loadAnswers();
 }
@@ -596,7 +616,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 if not isinstance(data, dict):
                     return self._send_json({"error": "Expected an object"}, 400)
                 if path == "/api/answers":
-                    applicant.save_answers(data, self._pdir())
+                    items = data.get("answers")
+                    if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
+                        return self._send_json({"error": "Expected {answers: [...]}"}, 400)
+                    applicant.save_answers(items, self._pdir())
                     return self._send_json(self._answers_payload())
                 applicant.save(data, self._pdir())
                 return self._send_json(self._profile_payload())
