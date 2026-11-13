@@ -192,7 +192,10 @@ def complete(system: list[dict] | str, prompt: str, purpose: str, max_tokens: in
     if worst > spend_summary(private_dir)["remaining"]:
         raise AIUnavailable("not enough of this month's AI budget left for this request")
     if client is None:
+        import logging
         import anthropic
+        for name in ("httpx", "httpx2", "anthropic"):   # no per-request log lines in the terminal
+            logging.getLogger(name).setLevel(logging.WARNING)
         client = anthropic.Anthropic(api_key=get_key(private_dir))
     msg = client.messages.create(model=model, max_tokens=max_tokens, system=system,
                                  messages=[{"role": "user", "content": prompt}])
