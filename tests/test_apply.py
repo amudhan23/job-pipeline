@@ -505,3 +505,36 @@ def test_greenhouse_closed_redirect_detected(tmp_path):
     finally:
         srv.shutdown()
     assert report.closed and "job closed" in report.error
+
+
+@pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
+def test_required_checkbox_list_is_one_question():
+    """Live Twitch: each box of a required list was reported separately."""
+    report, _, _ = _shown_values(RS5, TWITCH_DETAILS)
+    plat = [f for f in report.needs_attention if "platforms" in f.label]
+    assert len(plat) == 1 and plat[0].kind == "checkboxes"
+    assert plat[0].options == ["TikTok", "YouTube", "None"]
+    assert not any(f.label in ("TikTok", "YouTube", "None") for f in report.needs_attention)
+
+
+@pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
+def test_required_checkbox_list_answered_passes_check():
+    saved = {"all": {}, "companies": {"acme": {
+        "which other platforms are you active on?": "YouTube"}}}
+    report, _, _ = _shown_values(RS5, TWITCH_DETAILS, saved=saved)
+    assert not any("platforms" in f.label for f in report.needs_attention)
+    assert any("platforms" in f.label and f.value == "YouTube" for f in report.filled)
+
+
+def test_new_derived_answers():
+    d = {"country": "United States", "citizenship": "India", "other_pr": "No"}
+    assert answer_for("Are you located in the US?*", d).value == "Yes"
+    assert answer_for("Do you currently hold an active U.S. security clearance?*", d).value == "No"
+    # export-control status list: legal choice, left to you unless a U.S. citizen
+    q = "Please select if you are a (i) U.S. citizen or national, (ii) U.S. lawful, permanent resident"
+    assert answer_for(q, d) is None
+    assert answer_for(q, {**d, "citizenship": "United States"}).value == "U.S. citizen or national"
+    assert answer_for("Are you a permanent resident of a country other than your citizenship?", d).value == "No"
+    ref = answer_for("How did you hear about us?*", {"referral_source": "Online job board"})
+    assert pick_option(ref.alternates[0], ["LinkedIn", "Company careers page / website"]) \
+        == "Company careers page / website"

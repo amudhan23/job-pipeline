@@ -273,6 +273,8 @@ def add_pending(items: list[dict], private_dir: Path | None = None) -> None:
             continue
         entry = pending.setdefault(company, {}).setdefault(q, {"label": it["label"], "options": []})
         entry["options"] = it.get("options") or entry["options"]
+        if it.get("multi"):
+            entry["multi"] = True          # "select all that apply": tick several
     save_pending(pending, private_dir)
 
 

@@ -29,6 +29,11 @@
   <!-- A broken widget: clicking an option doesn't keep it -->
   <div class="field" data-select="future" data-label="Would you like to be considered for future opportunities?*" data-options="Yes|No" data-broken="1"></div>
   <div class="field"><label for="why" class="label">Why do you want to work here?*</label><textarea id="why" required></textarea></div>
+  <!-- Live Twitch: every box of a "select all that apply" list is required -->
+  <fieldset class="field"><legend>Which other platforms are you active on? (Select all that apply)*</legend>
+    <label><input type="checkbox" name="plat[]" value="tt" required> TikTok</label>
+    <label><input type="checkbox" name="plat[]" value="yt" required> YouTube</label>
+    <label><input type="checkbox" name="plat[]" value="none" required> None</label></fieldset>
   <button type="submit">Submit application</button>
 </form>
 <script>

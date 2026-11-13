@@ -441,7 +441,8 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
             # boxes, uploads, or answers the form refused to keep
             if f.source.startswith(("no saved answer", "no option matching")) and f.kind != "file":
                 pending.append({"question": applicant.normalize_question(f.label, job["company"]),
-                                "label": f.label, "options": f.options, "company": job["company"]})
+                                "label": f.label, "options": f.options, "company": job["company"],
+                                "multi": f.kind == "checkboxes"})
         applicant.add_pending(pending)
         new_questions += len(pending)
         if report.captcha:

@@ -101,16 +101,6 @@ _HELPERS_JS = r"""
     CAPTCHA.test((el.name || '') + ' ' + (el.id || '') + ' ' + (typeof el.className === 'string' ? el.className : ''))
     || !!el.closest('.g-recaptcha, .h-captcha, .cf-turnstile, [class*="captcha" i]')
     || (el.type === 'file' && !!el.closest('[class*="autofill" i]'));
-"""
-
-# Lists the form's questions. Every control gets a data-jp attribute so
-# Python can find it again. Returns one entry per question.
-_ENUMERATE_JS = "() => {\n" + _HELPERS_JS + r"""
-  const out = []; let n = 0;
-  const tag = el => { const id = 'jp' + (n++); el.setAttribute('data-jp', id); return id; };
-  const seenRadio = new Set();
-  const seenBox = new Set();
-
   // Group label for a set of controls: fieldset legend, else the nearest
   // container holding all of them that has a label-like element
   const groupLabel = group => {
@@ -127,6 +117,27 @@ _ENUMERATE_JS = "() => {\n" + _HELPERS_JS + r"""
     }
     return '';
   };
+
+  // The checkboxes / radios that answer one question together
+  const groupOf = el => {
+    const sel = `input[type=${el.type}]`;
+    let g = el.name ? [...document.querySelectorAll(`${sel}[name="${CSS.escape(el.name)}"]`)] : [];
+    if (g.length < 2) {
+      const fs = el.closest('fieldset');
+      g = fs ? [...fs.querySelectorAll(sel)] : [el];
+    }
+    return g;
+  };
+"""
+
+# Lists the form's questions. Every control gets a data-jp attribute so
+# Python can find it again. Returns one entry per question.
+_ENUMERATE_JS = "() => {\n" + _HELPERS_JS + r"""
+  const g0req = group => group[0].closest('[role="group"]')?.getAttribute('aria-required') === 'true';
+  const out = []; let n = 0;
+  const tag = el => { const id = 'jp' + (n++); el.setAttribute('data-jp', id); return id; };
+  const seenRadio = new Set();
+  const seenBox = new Set();
 
   for (const el of document.querySelectorAll('input, textarea, select')) {
     const type = (el.type || el.tagName).toLowerCase();
@@ -162,16 +173,14 @@ _ENUMERATE_JS = "() => {\n" + _HELPERS_JS + r"""
     } else if (type === 'checkbox') {
       if (seenBox.has(el)) continue;
       // Several checkboxes answering one question ("Which platforms do you use?")
-      let group = el.name ? [...document.querySelectorAll(`input[type=checkbox][name="${CSS.escape(el.name)}"]`)] : [];
-      if (group.length < 2) {
-        const fs = el.closest('fieldset');
-        group = fs ? [...fs.querySelectorAll('input[type=checkbox]')] : [el];
-      }
-      group = group.filter(visible);
+      const group = groupOf(el).filter(visible);
       if (group.length >= 2) {
         group.forEach(g => seenBox.add(g));
         const gl = groupLabel(group);
-        out.push({kind: 'checkboxes', label: gl, required: /\*\s*$/.test(gl),
+        // Greenhouse marks every box in a "select all that apply" list required
+        out.push({kind: 'checkboxes', label: gl,
+                  required: /\*\s*$/.test(gl) || group.some(g => g.required)
+                            || g0req(group),
                   options: group.map(g => ({id: tag(g), text: labelOf(g)}))});
       } else {
         out.push({kind: 'checkbox', id: tag(el), label, required: required(el, label)});
@@ -268,6 +277,17 @@ _CHECK_JS = "(ids) => {\n" + _HELPERS_JS + r"""
   for (const el of document.querySelectorAll('input, textarea, select')) {
     if (['hidden', 'submit', 'button', 'reset', 'image'].includes(el.type)) continue;
     if (el.disabled || ignored(el) || !el.willValidate || el.checkValidity()) continue;
+    if (el.type === 'checkbox' || el.type === 'radio') {
+      // One question, many boxes: report the question once, and only if
+      // nothing in it is ticked (a lone box is its own question)
+      const g = groupOf(el);
+      if (g.length >= 2) {
+        if (g.some(x => x.checked)) continue;
+        const label = groupLabel(g);
+        if (!seen.has(label)) { seen.add(label); out.push({label, why: 'nothing ticked'}); }
+        continue;
+      }
+    }
     add(el, el.validationMessage || 'the form rejects this answer');
   }
   return out;

@@ -37,7 +37,12 @@ _RULES: list[tuple[str, str]] = [
     (r"phone|mobile|telephone", "phone"),
     # Specific immigration questions before the generic ones
     (r"h-?1b (status|petition)|held h-?1b|h-?1b .*approved", "h1b_before"),
-    (r"permanent resident", "other_pr"),
+    # Export-control "U.S. person" status (citizen / green card / refugee /
+    # asylee / none): a legal answer — only filled for U.S. citizens
+    (r"u\.?s\.? citizen or national|refugee|asylee|\bu\.?s\.? person\b", "us_person"),
+    (r"permanent resident.*\b(other|another)\b|\b(other|another) country.*permanent resident", "other_pr"),
+    (r"security clearance|\bclearance\b", "clearance"),
+    (r"\b(located|based|reside|residing|living|live|currently) in the (us|u\.s\.?|united states)\b", "in_us"),
     # Sponsorship before authorization: "authorized ... without sponsorship" is a sponsorship question
     (r"sponsor", "sponsorship"),
     (r"(legally )?authori[sz]ed to work|eligib\w* to (work|begin employment)|right to work|"
@@ -100,6 +105,8 @@ def answer_for(label: str, details: dict[str, str], company: str = "",
             return _sponsorship(text, details)
         if field in ("current_employer", "past_employers"):
             return _employer(text, field, details, company)
+        if field in ("us_person", "clearance", "in_us"):
+            return _derived(field, details)
         value = details.get(field, "")
         if not value:
             return None
@@ -107,7 +114,35 @@ def answer_for(label: str, details: dict[str, str], company: str = "",
             # Willing to relocate, but the form lists locations: pick your city
             city = details["city"]
             return Answer(value, field, alternates=[city, city.split(",")[0].strip()])
+        if field == "referral_source":
+            # Forms list their own sources. Jobs here come from the company's
+            # own job board, so "careers page / website" is the true fallback.
+            return Answer(value, field, alternates=[
+                "Company careers page", "Company website", "Careers page", "Job board", "Online"])
         return Answer(value, field)
+    return None
+
+
+_US = {"united states", "united states of america", "usa", "us", "u.s.", "u.s.a."}
+
+
+def _derived(field: str, details: dict[str, str]) -> Answer | None:
+    """Answers that follow from what you already saved."""
+    citizenship = details.get("citizenship", "").strip().lower()
+    country = details.get("country", "").strip().lower()
+    if field == "in_us":
+        if not country:
+            return None
+        return Answer("Yes" if country in _US else "No", "country")
+    if field == "clearance":
+        # Clearances are only granted to U.S. citizens
+        if citizenship and not any(c.strip() in _US for c in citizenship.split(",")):
+            return Answer("No", "citizenship (clearances need U.S. citizenship)")
+        return None
+    if field == "us_person":
+        if citizenship and any(c.strip() in _US for c in citizenship.split(",")):
+            return Answer("U.S. citizen or national", "citizenship")
+        return None            # green card / refugee / "none of the above": yours to pick
     return None
 
 

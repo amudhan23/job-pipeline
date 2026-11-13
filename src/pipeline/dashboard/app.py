@@ -483,9 +483,15 @@ async function upload(file) {
 // company" is ticked — company-specific answers stay out of your profile.
 const inputStyle = 'width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:9px';
 
-function answerInput(q, company, options, value) {
+function answerInput(q, company, options, value, multi) {
   const attrs = `data-q="${esc(q)}" data-company="${esc(company)}"`;
   const opts = (options || []).filter(o => o && !/^(select|choose)/i.test(o));
+  if (opts.length && multi) {
+    // "Select all that apply": tick as many as fit; saved as "A, B"
+    return `<div ${attrs} data-multi>` + opts.map(o =>
+      `<label style="display:flex;gap:6px;align-items:center;font-weight:normal">
+         <input type="checkbox" value="${esc(o)}" style="width:auto"> ${esc(o)}</label>`).join('') + '</div>';
+  }
   if (opts.length) {
     return `<select ${attrs}><option value="">— choose —</option>` +
       opts.map(o => `<option${o === value ? ' selected' : ''}>${esc(o)}</option>`).join('') + '</select>';
@@ -502,7 +508,7 @@ async function loadAnswers() {
   document.getElementById('pending').innerHTML = pending.map(([company, qs]) =>
     `<h2 style="margin-top:10px">${esc(company)}</h2>` +
     Object.entries(qs).map(([q, p]) =>
-      `<div style="margin-bottom:16px"><label>${esc(p.label)}</label>${answerInput(q, company, p.options, '')}
+      `<div style="margin-bottom:16px"><label>${esc(p.label)}</label>${answerInput(q, company, p.options, '', p.multi)}
        <label style="font-size:12px;color:var(--muted);margin-top:6px;display:flex;gap:6px;align-items:center">
          <input type="checkbox" data-every style="width:auto"> Use this answer for every company</label></div>`
     ).join('')).join('');
@@ -523,9 +529,12 @@ async function loadAnswers() {
 async function postAnswers(containerId, keepEmpty) {
   const answers = [];
   document.querySelectorAll(`#${containerId} [data-q]`).forEach(el => {
-    if (!el.value.trim() && !keepEmpty) return;
+    const value = el.hasAttribute('data-multi')
+      ? [...el.querySelectorAll('input:checked')].map(b => b.value).join(', ')
+      : el.value.trim();
+    if (!value && !keepEmpty) return;
     const box = el.parentElement.querySelector('[data-every]');
-    answers.push({question: el.dataset.q, company: el.dataset.company, answer: el.value.trim(),
+    answers.push({question: el.dataset.q, company: el.dataset.company, answer: value,
                   everywhere: el.hasAttribute('data-everyfixed') || !!(box && box.checked)});
   });
   const r = await fetch('/api/answers', {method:'POST', headers:{'Content-Type':'application/json'},
