@@ -342,6 +342,7 @@ class FillReport:
     captcha: bool = False        # the site checks for bots on submit — may need you then
     submitted: bool = False      # the site confirmed the application
     submit_note: str = ""        # what happened when submitting (or why it didn't)
+    ai_written: list[str] = field(default_factory=list)   # questions answered with an AI draft
 
     @property
     def resume_attached(self) -> bool:
@@ -395,7 +396,8 @@ def _dedupe(fields: list[dict]) -> list[dict]:
 
 
 def fill_form(page, details: dict[str, str], resume_path: Path | None,
-              report: FillReport, saved: dict[str, str] | None = None) -> list[dict]:
+              report: FillReport, saved: dict[str, str] | None = None,
+              writer: Callable[[str, str], str | None] | None = None) -> list[dict]:
     """Fill every question on an already-open page; records results in report.
     Returns the questions found (for re-checking the form later)."""
     fields = _dedupe(page.evaluate(_ENUMERATE_JS))
@@ -433,7 +435,19 @@ def fill_form(page, details: dict[str, str], resume_path: Path | None,
                 continue
             if not result.source:
                 result.source = f"no option matching '{ans.value}'"
-        elif not result.source:
+        elif writer and required and kind in ("text", "textarea"):
+            # Open question nobody answered: an AI draft from your resume + the JD
+            draft = writer(label, kind)
+            if draft:
+                try:
+                    page.locator(f'[data-jp="{f["id"]}"]').fill(draft)
+                    result.value, result.source = draft, "AI draft from your resume — review it"
+                    report.filled.append(result)
+                    report.ai_written.append(label)
+                    continue
+                except Exception as e:
+                    result.source = f"couldn't fill: {e.__class__.__name__}"
+        if not ans and not result.source:
             result.source = "no saved answer for this question"
         (report.needs_attention if required else report.skipped_optional).append(result)
 
@@ -741,7 +755,8 @@ def practice_apply(job: dict[str, Any], details: dict[str, str], resume_path: Pa
                    out_dir: Path, url: str | None = None, headless: bool = True,
                    saved: dict[str, str] | None = None,
                    on_filled: Callable[[FillReport], bool] | None = None,
-                   ask_human: Callable[[str], bool] | None = None) -> FillReport:
+                   ask_human: Callable[[str], bool] | None = None,
+                   writer: Callable[[str, str], str | None] | None = None) -> FillReport:
     """Open the application, fill it, screenshot it.
 
     Submits only if on_filled(report) — called while the filled form is
@@ -795,7 +810,7 @@ def practice_apply(job: dict[str, Any], details: dict[str, str], resume_path: Pa
                 return report
             page.wait_for_timeout(1500)          # let late widgets finish rendering
             report.captcha = bool(page.evaluate(_CAPTCHA_JS))
-            fields = fill_form(page, details, resume_path, report, saved)
+            fields = fill_form(page, details, resume_path, report, saved, writer)
             if not report.filled and not report.needs_attention:
                 report.error = "found the page but no questions it could read — see the screenshot"
             page.screenshot(path=str(shot), full_page=True)

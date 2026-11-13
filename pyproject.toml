@@ -26,6 +26,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.4", "mypy>=1.10"]
 apply = ["playwright>=1.40"]   # then: playwright install --with-deps chromium
+ai = ["anthropic>=0.40"]        # Claude API: drafts answers to open questions
 
 [project.scripts]
 jobpipe = "pipeline.cli:main"

@@ -391,6 +391,30 @@ PROFILE_HTML = """<!DOCTYPE html>
     <button type="button" id="saveSaved" style="margin-top:6px">Save changes</button>
   </div>
 
+  <div class="card" id="aicard">
+    <h2>AI (Claude API)</h2>
+    <p class="help" style="margin:-6px 0 14px">Drafts answers to open questions (“Why us?”, “What exceptional work…”)
+      from your resume and the job description, using your own Anthropic API credits. It never answers
+      legal, eligibility or demographic questions, and stops at your monthly budget.</p>
+    <div class="grid">
+      <div class="full"><label>API key</label>
+        <input id="aikey" type="password" autocomplete="off" placeholder="sk-ant-…">
+        <div class="help" id="aikeyinfo"></div></div>
+      <div><label>Model</label><select id="aimodel">
+        <option value="sonnet">Sonnet — good writing, ~1¢ per answer</option>
+        <option value="haiku">Haiku — cheapest</option>
+        <option value="opus">Opus — strongest</option></select></div>
+      <div><label>Monthly budget (USD)</label><input id="aibudget" type="number" min="0" max="1000" step="0.5"></div>
+      <div class="full"><label style="display:flex;gap:8px;align-items:center">
+        <input id="aienabled" type="checkbox" style="width:auto"> Use AI drafts when applying</label></div>
+    </div>
+    <div class="help" id="aispend" style="margin:10px 0"></div>
+    <button type="button" id="aisave">Save AI settings</button>
+    <button type="button" id="aiforget" style="background:var(--border);color:var(--text);margin-left:8px">Delete key</button>
+    <span id="aistatus" style="margin-left:10px;font-size:13px"></span>
+    <div class="lock">🔒 The key is stored in data/private/ on this computer only, and never shown again in full.</div>
+  </div>
+
   <div class="bar"><button id="save">Save</button><span id="status"></span></div>
 </div>
 
@@ -508,7 +532,7 @@ async function loadAnswers() {
   document.getElementById('pending').innerHTML = pending.map(([company, qs]) =>
     `<h2 style="margin-top:10px">${esc(company)}</h2>` +
     Object.entries(qs).map(([q, p]) =>
-      `<div style="margin-bottom:16px"><label>${esc(p.label)}</label>${answerInput(q, company, p.options, '', p.multi)}
+      `<div style="margin-bottom:16px"><label>${esc(p.label)}</label>${p.draft ? '<div class="help" style="color:#e879f9;margin-bottom:4px">✎ AI draft — edit it, then save to make it your answer</div>' : ''}${answerInput(q, company, p.options, p.draft || '', p.multi)}
        <label style="font-size:12px;color:var(--muted);margin-top:6px;display:flex;gap:6px;align-items:center">
          <input type="checkbox" data-every style="width:auto"> Use this answer for every company</label></div>`
     ).join('')).join('');
@@ -542,6 +566,37 @@ async function postAnswers(containerId, keepEmpty) {
   document.getElementById('astatus').textContent = r.ok ? 'Saved ✓' : 'Save failed';
   loadAnswers();
 }
+async function loadAI(data) {
+  data = data || await (await fetch('/api/ai')).json();
+  document.getElementById('aikeyinfo').textContent = data.key ? `Saved: ${data.key}` + (data.key_from_env ? ' (from ANTHROPIC_API_KEY)' : '') : 'No key saved yet — create one at console.anthropic.com → API keys.';
+  document.getElementById('aimodel').value = data.settings.model;
+  document.getElementById('aibudget').value = data.settings.monthly_budget;
+  document.getElementById('aienabled').checked = !!data.settings.enabled;
+  const s = data.spend;
+  document.getElementById('aispend').innerHTML =
+    `This month: <b>$${s.month_spent.toFixed(4)}</b> of $${s.monthly_budget.toFixed(2)} (${s.month_calls} calls) · all time $${s.total_spent.toFixed(4)}` +
+    (data.ready ? ' · <span class="ok">ready</span>' : ` · <span class="warn">${esc(data.why)}</span>`);
+}
+async function postAI(body) {
+  const r = await fetch('/api/ai', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  const data = await r.json();
+  const st = document.getElementById('aistatus');
+  if (!r.ok) { st.textContent = data.error || 'Save failed'; st.className = 'err'; return; }
+  st.textContent = 'Saved ✓'; st.className = 'ok';
+  document.getElementById('aikey').value = '';
+  loadAI(data);
+}
+document.getElementById('aisave').onclick = () => {
+  const body = {model: document.getElementById('aimodel').value,
+                monthly_budget: parseFloat(document.getElementById('aibudget').value || '0'),
+                enabled: document.getElementById('aienabled').checked};
+  const key = document.getElementById('aikey').value.trim();
+  if (key) body.key = key;
+  postAI(body);
+};
+document.getElementById('aiforget').onclick = () => postAI({forget_key: true});
+loadAI();
+
 document.getElementById('saveAnswers').onclick = () => postAnswers('pending', false);
 document.getElementById('saveSaved').onclick = () => postAnswers('saved', true);
 loadAnswers();
@@ -603,6 +658,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._send_json(self._profile_payload())
         elif parsed.path == "/api/answers":
             self._send_json(self._answers_payload())
+        elif parsed.path == "/api/ai":
+            self._send_json(self._ai_payload())
         else:
             self.send_error(404)
 
@@ -618,12 +675,21 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         body = self.rfile.read(length)
 
         try:
-            if path in ("/api/profile", "/api/answers"):
+            if path in ("/api/profile", "/api/answers", "/api/ai"):
                 if ctype != "application/json":  # forces a CORS preflight for cross-site posts
                     return self._send_json({"error": "Expected application/json"}, 415)
                 data = json.loads(body or b"{}")
                 if not isinstance(data, dict):
                     return self._send_json({"error": "Expected an object"}, 400)
+                if path == "/api/ai":
+                    from pipeline.ai import client as ai_client
+                    if data.get("forget_key"):
+                        ai_client.forget_key(self._pdir())
+                    if data.get("key"):
+                        ai_client.save_key(str(data["key"]), self._pdir())
+                    ai_client.save_settings({k: data[k] for k in ("model", "monthly_budget", "enabled")
+                                             if k in data}, self._pdir())
+                    return self._send_json(self._ai_payload())
                 if path == "/api/answers":
                     items = data.get("answers")
                     if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
@@ -644,6 +710,16 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         except (ValueError, json.JSONDecodeError) as e:
             return self._send_json({"error": str(e)}, 400)
         self.send_error(404)
+
+    def _ai_payload(self) -> dict[str, Any]:
+        import os
+        from pipeline.ai import client as ai_client
+        ready, why = ai_client.status(self._pdir())
+        return {"key": ai_client.masked_key(self._pdir()),        # never the whole key
+                "key_from_env": bool(os.environ.get("ANTHROPIC_API_KEY")),
+                "settings": ai_client.load_settings(self._pdir()),
+                "spend": {k: v for k, v in ai_client.spend_summary(self._pdir()).items() if k != "recent"},
+                "ready": ready, "why": why}
 
     def _answers_payload(self) -> dict[str, Any]:
         from pipeline import applicant

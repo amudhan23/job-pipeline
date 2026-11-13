@@ -198,6 +198,29 @@ waits for the site's confirmation; only confirmed applications are marked
 challenge or an emailed security code is handed to you in the open browser —
 never worked around; without `--headed` that application stops unsent.
 
+## AI drafts (Claude API, your credits)
+
+```bash
+pip install -e '.[ai]'
+jobpipe ai key                 # paste your key (or set ANTHROPIC_API_KEY, or use My details → AI)
+jobpipe ai status --check      # proves the key works with one tiny call
+jobpipe ai budget 5            # monthly cap in USD (default $5); calls stop when it's reached
+jobpipe ai model sonnet        # sonnet (default) · haiku (cheapest) · opus (strongest)
+jobpipe ai draft -j <job-id> "Why this company?"
+```
+
+With a key saved, `jobpipe apply` drafts answers to **required open questions**
+("Why Ande?", "What exceptional work have you done?") from your resume and the
+job description: only facts in your resume, short and plain. It never writes
+legal, eligibility, salary or demographic answers. Drafts are cached per company
+and question (re-runs are free), shown in the terminal, and wait on My details
+for you to edit — once saved there they're your own answer. `--submit --yes`
+won't auto-send a form containing AI drafts unless you add `--trust-ai`.
+
+Every call is logged with its tokens and cost (`data/private/ai_usage.jsonl`);
+spend is on My details and in `jobpipe ai status`. A Sonnet answer costs about
+a cent.
+
 ## Scheduled runs (GitHub Actions)
 
 `.github/workflows/pipeline.yml` runs the pipeline in the cloud — every 3

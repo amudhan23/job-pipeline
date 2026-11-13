@@ -372,8 +372,12 @@ def _one_per_application(jobs: list[dict]) -> list[dict]:
 @click.option("--headed", is_flag=True, help="Show the browser so you can watch (and step in)")
 @click.option("--submit", is_flag=True, help="Submit applications whose every required question is answered")
 @click.option("--yes", "-y", is_flag=True, help="With --submit: don't ask before each one (fully automatic)")
+@click.option("--ai/--no-ai", "use_ai", default=True,
+              help="Draft answers to open questions with Claude (default: on when a key is saved)")
+@click.option("--trust-ai", is_flag=True,
+              help="With --submit --yes: also auto-submit forms that contain AI drafts")
 def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, submit: bool,
-          yes: bool) -> None:
+          yes: bool, use_ai: bool, trust_ai: bool) -> None:
     """Fill job applications from your saved details.
 
     Without --submit (practice): fills every question it can, attaches your
@@ -433,7 +437,17 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
         console.print(f"\n[bold]Practice mode[/bold] — filling {len(jobs)} application(s); "
                       "nothing will be submitted.\n")
 
-    totals = {"questions": 0, "submitted": 0}
+    totals = {"questions": 0, "submitted": 0, "ai": 0}
+    if use_ai:
+        from pipeline.ai import client as ai_client
+        ready, why = ai_client.status()
+        if ready:
+            s = ai_client.spend_summary()
+            console.print(f"[dim]AI drafts on ({ai_client.load_settings()['model']}) — "
+                          f"${s['month_spent']:.2f} of ${s['monthly_budget']:.2f} used this month[/dim]\n")
+        else:
+            console.print(f"[dim]AI drafts off: {why}[/dim]\n")
+            use_ai = False
 
     def show(report, job) -> None:
         """Print what was filled and what needs you; remember open questions."""
@@ -451,8 +465,16 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
                 pending.append({"question": applicant.normalize_question(f.label, job["company"]),
                                 "label": f.label, "options": f.options, "company": job["company"],
                                 "multi": f.kind == "checkboxes"})
+        for f in report.filled:
+            if f.label in report.ai_written:
+                console.print(f"  [magenta]✎ AI draft:[/magenta] {f.label[:70]}")
+                console.print(f"    [dim]{f.value[:300]}[/dim]")
+                pending.append({"question": applicant.normalize_question(f.label, job["company"]),
+                                "label": f.label, "options": [], "company": job["company"],
+                                "draft": f.value})
+        totals["ai"] += len(report.ai_written)
         applicant.add_pending(pending)
-        totals["questions"] += len(pending)
+        totals["questions"] += len(pending) - len(report.ai_written)
         if report.captcha:
             console.print("  [dim]this site runs a bot check (CAPTCHA) on submit — "
                           "it may ask you to solve one[/dim]")
@@ -475,6 +497,10 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
             if not submit:
                 return False
             if report.ready_to_submit:
+                if yes and report.ai_written and not trust_ai:
+                    console.print("  [yellow]has AI-written answers — not auto-submitting. Review them "
+                                  "(run without --yes) or pass --trust-ai.[/yellow]")
+                    return False
                 if yes:
                     return True
                 where = "in the browser window" if headed else f"in {report.screenshot}"
@@ -487,8 +513,12 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
                 return answer.strip().lower() == "s"
             return False
 
+        writer = None
+        if use_ai:
+            from pipeline.ai.writer import make_writer
+            writer = make_writer(job, details)
         report = practice_apply(job, details, resume, folder, headless=not headed, saved=saved,
-                                on_filled=on_filled, ask_human=ask_human)
+                                on_filled=on_filled, ask_human=ask_human, writer=writer)
         if report.closed:
             tracker.update_status(job["id"], ApplicationStatus.SKIPPED, notes="posting closed")
         if report.error:
@@ -518,9 +548,100 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
     if totals["submitted"]:
         console.print(f"[bold green]Submitted {totals['submitted']} application(s).[/bold green] "
                       "They're marked applied on the dashboard; watch your email for confirmations.")
+    if totals["ai"]:
+        console.print(f"[magenta]{totals['ai']} answer(s) drafted by Claude[/magenta] — edit or approve them on "
+                      "the dashboard → My details; saved ones are used as your own from then on.")
     if totals["questions"]:
         console.print("[bold]Answer the open questions once[/bold] on the dashboard → My details → "
                       "“Questions waiting for you”, then run `jobpipe apply` again.")
+
+
+@main.group()
+def ai() -> None:
+    """Claude API: your key, model, monthly budget and spend."""
+
+
+@ai.command("key")
+def ai_key() -> None:
+    """Save your Anthropic API key (kept in data/private, only on this machine)."""
+    from pipeline.ai import client as ai_client
+    key = click.prompt("Paste your Anthropic API key (input hidden)", hide_input=True)
+    try:
+        ai_client.save_key(key)
+    except ValueError as e:
+        raise click.ClickException(str(e))
+    console.print(f"[green]Saved[/green] {ai_client.masked_key()}  — run `jobpipe ai status` to check it.")
+
+
+@ai.command("forget-key")
+def ai_forget_key() -> None:
+    """Delete the saved API key."""
+    from pipeline.ai import client as ai_client
+    ai_client.forget_key()
+    console.print("Key deleted.")
+
+
+@ai.command("status")
+@click.option("--check", is_flag=True, help="Also make one tiny API call to prove the key works (~$0.0001)")
+def ai_status(check: bool) -> None:
+    """Show whether AI is ready, the model, and this month's spend."""
+    from pipeline.ai import client as ai_client
+    ready, why = ai_client.status()
+    st, s = ai_client.load_settings(), ai_client.spend_summary()
+    console.print(f"Key: {ai_client.masked_key() or '[red]none[/red]'}   Model: {st['model']} "
+                  f"({ai_client.MODELS[st['model']]})")
+    console.print(f"This month: ${s['month_spent']:.4f} of ${s['monthly_budget']:.2f} "
+                  f"({s['month_calls']} calls) · all time ${s['total_spent']:.4f}")
+    console.print("[green]Ready[/green]" if ready else f"[yellow]Not ready:[/yellow] {why}")
+    if check and ready:
+        try:
+            r = ai_client.complete("Reply with the single word OK.", "Say OK.", purpose="key check",
+                                   max_tokens=5)
+            console.print(f"[green]API call worked[/green] ({r.model}, ${r.cost:.6f})")
+        except Exception as e:
+            raise click.ClickException(f"API call failed: {e}")
+
+
+@ai.command("budget")
+@click.argument("usd", type=float)
+def ai_budget(usd: float) -> None:
+    """Set the monthly spending cap in USD (calls stop when it's reached)."""
+    from pipeline.ai import client as ai_client
+    try:
+        st = ai_client.save_settings({"monthly_budget": usd})
+    except ValueError as e:
+        raise click.ClickException(str(e))
+    console.print(f"Monthly AI budget: ${st['monthly_budget']:.2f}")
+
+
+@ai.command("model")
+@click.argument("name", type=click.Choice(["sonnet", "haiku", "opus"]))
+def ai_model(name: str) -> None:
+    """Pick the model: sonnet (default), haiku (cheapest), opus (strongest)."""
+    from pipeline.ai import client as ai_client
+    ai_client.save_settings({"model": name})
+    console.print(f"Model: {name} ({ai_client.MODELS[name]})")
+
+
+@ai.command("draft")
+@click.option("--job-id", "-j", required=True, help="Job to write for")
+@click.argument("question")
+def ai_draft(job_id: str, question: str) -> None:
+    """Draft an answer to one question for one job (cached; shown, not sent)."""
+    from pipeline import applicant
+    from pipeline.ai import client as ai_client
+    from pipeline.ai.writer import draft_answer
+    job = Tracker().get_job(job_id)
+    if not job:
+        raise click.ClickException(f"No job {job_id}")
+    resume = applicant.PRIVATE_DIR / applicant.RESUME_FILE
+    if not resume.exists():
+        raise click.ClickException("Upload your resume on My details first — drafts are built from it.")
+    try:
+        text = draft_answer(question, job, applicant.load(), applicant.resume_text(resume.read_bytes()))
+    except ai_client.AIUnavailable as e:
+        raise click.ClickException(str(e))
+    console.print(f"\n{text}\n")
 
 
 @main.command("state-key")

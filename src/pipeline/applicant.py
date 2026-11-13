@@ -277,6 +277,8 @@ def add_pending(items: list[dict], private_dir: Path | None = None) -> None:
         entry["options"] = it.get("options") or entry["options"]
         if it.get("multi"):
             entry["multi"] = True          # "select all that apply": tick several
+        if it.get("draft"):
+            entry["draft"] = it["draft"]   # AI draft waiting for your review
     save_pending(pending, private_dir)
 
 
