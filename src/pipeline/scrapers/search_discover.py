@@ -20,10 +20,12 @@ Two modes:
 
 from __future__ import annotations
 
+import html
 import logging
 import os
 import re
 from dataclasses import dataclass, field
+from urllib.parse import unquote
 from typing import Any
 
 import httpx
@@ -47,12 +49,12 @@ ATS_DOMAINS: list[ATSDomain] = [
     ATSDomain("greenhouse", "job-boards.greenhouse.io", r"job-boards\.greenhouse\.io/([^/?#]+)"),
     ATSDomain("ashby", "jobs.ashbyhq.com", r"jobs\.ashbyhq\.com/([^/?#]+)"),
     ATSDomain("lever", "jobs.lever.co", r"jobs\.lever\.co/([^/?#]+)"),
-    # Platforms the a16z post lists — not scrapable yet, but worth discovering
-    ATSDomain("smartrecruiters", "jobs.smartrecruiters.com", r"jobs\.smartrecruiters\.com/([^/?#]+)", scrapable=False),
-    ATSDomain("workable", "apply.workable.com", r"apply\.workable\.com/([^/?#]+)", scrapable=False),
+    ATSDomain("smartrecruiters", "jobs.smartrecruiters.com", r"jobs\.smartrecruiters\.com/([^/?#]+)"),
+    ATSDomain("workable", "apply.workable.com", r"apply\.workable\.com/([^/?#]+)"),
+    ATSDomain("bamboohr", "bamboohr.com", r"https?://([^.]+)\.bamboohr\.com"),
+    # Platforms the a16z post lists — login/key required, scrapers are a follow-up
     ATSDomain("jobvite", "jobs.jobvite.com", r"jobs\.jobvite\.com/([^/?#]+)", scrapable=False),
     ATSDomain("icims", "careers.icims.com", r"careers\.icims\.com/([^/?#]+)", scrapable=False),
-    ATSDomain("bamboohr", "jobs.bamboohr.com", r"jobs\.bamboohr\.com/([^/?#]+)", scrapable=False),
     ATSDomain("jazz", "apply.jazz.co", r"apply\.jazz\.co/([^/?#]+)", scrapable=False),
 ]
 
@@ -173,13 +175,57 @@ async def _search_serpapi(query: str, api_key: str, num: int = 100) -> list[str]
     return urls
 
 
-def _get_search_backend() -> tuple[str, str] | None:
-    """Find an available search API key. Returns (backend, key) or None."""
+# Matches result links in DuckDuckGo HTML output.
+_DDG_LINK_RE = re.compile(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"')
+# DDG wraps external links in a redirect: //duckduckgo.com/l/?uddg=<encoded>
+_DDG_REDIRECT_RE = re.compile(r"[?&]uddg=([^&]+)")
+
+
+def _clean_ddg_url(href: str) -> str:
+    """Unwrap a DuckDuckGo redirect link into the real target URL."""
+    href = html.unescape(href)
+    m = _DDG_REDIRECT_RE.search(href)
+    if m:
+        return unquote(m.group(1))
+    if href.startswith("//"):
+        return "https:" + href
+    return href
+
+
+def parse_ddg_html(body: str) -> list[str]:
+    """Extract result URLs from a DuckDuckGo HTML response."""
+    return [_clean_ddg_url(h) for h in _DDG_LINK_RE.findall(body)]
+
+
+async def _search_duckduckgo(query: str, _key: str = "", num: int = 50) -> list[str]:
+    """Run a query via DuckDuckGo's HTML endpoint. Free, no API key.
+
+    This is the default backend — "doing the Serper thing ourselves."
+    DDG supports the `site:` operator the same way Google does.
+    """
+    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+        resp = await client.post(
+            "https://html.duckduckgo.com/html/",
+            data={"q": query},
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0 Safari/537.36"
+                )
+            },
+        )
+        resp.raise_for_status()
+        return parse_ddg_html(resp.text)
+
+
+def _get_search_backend() -> tuple[str, str]:
+    """Pick a search backend. Paid APIs win if keys are set; else free DDG."""
     if key := os.environ.get("SERPER_API_KEY"):
         return "serper", key
     if key := os.environ.get("SERPAPI_KEY"):
         return "serpapi", key
-    return None
+    return "duckduckgo", ""
 
 
 async def discover(
@@ -187,20 +233,18 @@ async def discover(
     platforms: list[str] | None = None,
     include_location: bool = True,
 ) -> DiscoveryResult:
-    """Discover company slugs by executing search queries via an API.
+    """Discover company slugs by executing search queries.
 
-    Requires SERPER_API_KEY or SERPAPI_KEY in the environment.
-    Falls back to raising if no backend is available — call
-    generate_queries() instead for the manual (no-key) path.
+    Uses DuckDuckGo for free by default (no key). If SERPER_API_KEY or
+    SERPAPI_KEY is set, uses that instead for higher-quality Google results.
     """
-    backend = _get_search_backend()
-    if not backend:
-        raise RuntimeError(
-            "No search API key found. Set SERPER_API_KEY or SERPAPI_KEY, "
-            "or use generate_queries() to get queries to run manually."
-        )
-    backend_name, api_key = backend
-    search_fn = _search_serper if backend_name == "serper" else _search_serpapi
+    backend_name, api_key = _get_search_backend()
+    search_fn = {
+        "serper": _search_serper,
+        "serpapi": _search_serpapi,
+        "duckduckgo": _search_duckduckgo,
+    }[backend_name]
+    logger.info(f"Discovery backend: {backend_name}")
 
     result = DiscoveryResult()
     queries = generate_queries(config, platforms, include_location)

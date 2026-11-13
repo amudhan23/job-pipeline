@@ -145,6 +145,10 @@ ats:
     - "spotify"
     - "palantir"
     - "netflix"
+  # Public APIs, no login. Populate with `jobpipe discover --add`.
+  smartrecruiters: []   # slugs are case-sensitive, e.g. "Visa", "Square"
+  workable: []          # e.g. "huggingface"
+  bamboohr: []          # subdomain only, e.g. "acme" for acme.bamboohr.com
 
 # ── Sponsorship Filter Toggle ──
 # Set to false to disable sponsorship filtering entirely

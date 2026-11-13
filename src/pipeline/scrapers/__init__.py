@@ -3,6 +3,17 @@
 from .greenhouse import GreenhouseScraper
 from .ashby import AshbyScraper
 from .lever import LeverScraper
+from .smartrecruiters import SmartRecruitersScraper
+from .workable import WorkableScraper
+from .bamboohr import BambooHRScraper
 from .base import BaseScraper
 
-__all__ = ["GreenhouseScraper", "AshbyScraper", "LeverScraper", "BaseScraper"]
+__all__ = [
+    "GreenhouseScraper",
+    "AshbyScraper",
+    "LeverScraper",
+    "SmartRecruitersScraper",
+    "WorkableScraper",
+    "BambooHRScraper",
+    "BaseScraper",
+]

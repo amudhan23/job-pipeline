@@ -10,7 +10,7 @@ Built for international students and H-1B candidates who need sponsorship-aware 
 Scrape (44 companies) → Sponsorship Filter → Fit Score 0-100 → Resume Tailor → Dashboard
 ```
 
-1. **Scrape** — Hits public ATS APIs (Greenhouse, Ashby, Lever) for 44+ companies. No auth needed.
+1. **Scrape** — Hits public ATS APIs (Greenhouse, Ashby, Lever, SmartRecruiters, Workable, BambooHR). No auth needed.
 2. **Sponsorship filter** — JD-first: if the description doesn't say "no sponsorship," you can apply. H-1B filing data is supplementary info, not a blocker. Toggle on/off.
 3. **Fit scoring** — Weighted composite: stack match (30%), sponsorship (25%), experience (15%), location (15%), role type (15%).
 4. **Resume tailoring** — Analyzes each JD, reorders your bullet points, selects projects, and leads with the right language. Builds PDF via pdflatex.
@@ -48,6 +48,9 @@ jobpipe dashboard
 | `jobpipe resume -j JOB_ID` | Generate tailored resume for a job |
 | `jobpipe seed-h1b` | Seed H-1B database from data/h1b_seed.json |
 | `jobpipe probe SLUG` | Check which ATS a company uses |
+| `jobpipe discover` | Find new company slugs via `site:` search (free, DuckDuckGo) |
+| `jobpipe discover --add` | Discover and auto-add slugs to your config |
+| `jobpipe discover --queries-only` | Print the search queries to run in a browser |
 
 Add `-v` before the command for verbose logging: `jobpipe -v run`
 
@@ -108,19 +111,47 @@ data/h1b_seed.json   # H-1B filing data for 93 tech companies
 
 ## ATS coverage
 
-| Platform | Companies | Examples |
-|----------|-----------|---------|
-| Greenhouse | 27 | Stripe, Anthropic, Datadog, Coinbase, Discord, Reddit |
-| Ashby | 14 | OpenAI, Notion, Ramp, Cursor, ElevenLabs, Vercel |
-| Lever | 3 | Spotify, Palantir, Netflix |
+Six public, no-login ATS platforms are scraped directly:
 
-## Adding companies
+| Platform | API | Notes |
+|----------|-----|-------|
+| Greenhouse | `boards-api.greenhouse.io` | Full descriptions in list call |
+| Ashby | `api.ashbyhq.com` | Full descriptions in list call |
+| Lever | `api.lever.co` | Full descriptions in list call |
+| SmartRecruiters | `api.smartrecruiters.com` | Paginated; detail call per job; feed is tier-dependent |
+| Workable | `apply.workable.com` | Full descriptions with `details=true` |
+| BambooHR | `{slug}.bamboohr.com` | Subdomain slug; detail call per job |
+
+Login/key-gated platforms (iCIMS, Jobvite, Jazz, Workday, LinkedIn) are
+discovery-only for now — `discover` will find companies on them, but there's
+no scraper yet.
+
+## Finding more companies
+
+The pipeline ships with a starter set of slugs. To find every company on a
+platform, use search-based discovery (the a16z `site:` technique):
 
 ```bash
-# Check which ATS a company uses
-jobpipe probe <company-name>
+# Free — uses DuckDuckGo, no API key
+jobpipe discover
 
-# Then add the slug to config/profile.yaml under the right ATS section
+# Discover and add new slugs straight into config/profile.yaml
+jobpipe discover --add
+
+# Just print the queries to run in Google yourself
+jobpipe discover --queries-only
+
+# Limit to specific platforms
+jobpipe discover -p greenhouse -p ashby
+```
+
+For higher-quality Google results, set `SERPER_API_KEY` ([serper.dev](https://serper.dev),
+free tier) or `SERPAPI_KEY` — discovery uses it automatically when present.
+
+You can also check one company directly:
+
+```bash
+jobpipe probe <company-name>
 ```
 
 ## Requirements

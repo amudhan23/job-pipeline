@@ -5,6 +5,9 @@ from pipeline.scrapers.search_discover import (
     _extract_slug,
     _build_role_clause,
     _build_location_clause,
+    _clean_ddg_url,
+    parse_ddg_html,
+    _get_search_backend,
 )
 
 
@@ -65,6 +68,12 @@ class TestSlugExtraction:
     def test_smartrecruiters_lowercases(self):
         assert _extract_slug("https://jobs.smartrecruiters.com/Square/123") == ("smartrecruiters", "square")
 
+    def test_workable(self):
+        assert _extract_slug("https://apply.workable.com/huggingface/") == ("workable", "huggingface")
+
+    def test_bamboohr_subdomain(self):
+        assert _extract_slug("https://acme.bamboohr.com/careers/15") == ("bamboohr", "acme")
+
     def test_blocklist_filters_embed(self):
         assert _extract_slug("https://boards.greenhouse.io/embed/job_app") is None
 
@@ -73,6 +82,41 @@ class TestSlugExtraction:
 
     def test_empty(self):
         assert _extract_slug("") is None
+
+
+class TestDuckDuckGo:
+    def test_default_backend_is_ddg(self, monkeypatch):
+        monkeypatch.delenv("SERPER_API_KEY", raising=False)
+        monkeypatch.delenv("SERPAPI_KEY", raising=False)
+        backend, key = _get_search_backend()
+        assert backend == "duckduckgo"
+        assert key == ""
+
+    def test_serper_key_wins(self, monkeypatch):
+        monkeypatch.setenv("SERPER_API_KEY", "abc")
+        backend, key = _get_search_backend()
+        assert backend == "serper"
+        assert key == "abc"
+
+    def test_clean_redirect_url(self):
+        href = "//duckduckgo.com/l/?uddg=https%3A%2F%2Fboards.greenhouse.io%2Fstripe%2Fjobs%2F1&rut=x"
+        assert _clean_ddg_url(href) == "https://boards.greenhouse.io/stripe/jobs/1"
+
+    def test_clean_direct_url(self):
+        assert _clean_ddg_url("https://jobs.lever.co/spotify/x") == "https://jobs.lever.co/spotify/x"
+
+    def test_parse_html_extracts_links(self):
+        sample = '''
+        <div><a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fjobs.ashbyhq.com%2Fopenai%2Fabc">OpenAI</a></div>
+        <div><a class="result__a" href="https://boards.greenhouse.io/figma/jobs/2">Figma</a></div>
+        '''
+        urls = parse_ddg_html(sample)
+        assert "https://jobs.ashbyhq.com/openai/abc" in urls
+        assert "https://boards.greenhouse.io/figma/jobs/2" in urls
+        # And those extract to the right slugs
+        slugs = {_extract_slug(u) for u in urls}
+        assert ("ashby", "openai") in slugs
+        assert ("greenhouse", "figma") in slugs
 
 
 class TestClauses:

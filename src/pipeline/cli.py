@@ -193,9 +193,9 @@ def discover(ctx: click.Context, platform: tuple[str, ...], no_location: bool,
              queries_only: bool, add: bool) -> None:
     """Discover new company slugs via search-engine `site:` queries.
 
-    With no search API key set, prints the boolean queries to paste into
-    Google yourself. With SERPER_API_KEY or SERPAPI_KEY set, runs them and
-    extracts company slugs automatically.
+    Runs automatically via DuckDuckGo (free, no key). Set SERPER_API_KEY or
+    SERPAPI_KEY for higher-quality Google results. Use --queries-only to just
+    print the boolean queries and run them in a browser yourself.
     """
     from pipeline.scrapers.search_discover import (
         generate_queries, discover as run_discover, _get_search_backend, ATS_DOMAINS,
@@ -205,13 +205,8 @@ def discover(ctx: click.Context, platform: tuple[str, ...], no_location: bool,
     platforms = list(platform) if platform else None
     include_location = not no_location
 
-    # Manual mode: print queries
-    if queries_only or not _get_search_backend():
-        if not queries_only:
-            console.print(
-                "[yellow]No SERPER_API_KEY / SERPAPI_KEY found — "
-                "printing queries to run manually.[/yellow]\n"
-            )
+    # Manual mode: just print the queries
+    if queries_only:
         queries = generate_queries(config, platforms, include_location)
         scrapable = {a.name for a in ATS_DOMAINS if a.scrapable}
         for plat, query in queries:
@@ -225,7 +220,8 @@ def discover(ctx: click.Context, platform: tuple[str, ...], no_location: bool,
         return
 
     # Automated mode: run searches
-    console.print("[bold]Discovering slugs via search API...[/bold]\n")
+    backend, _ = _get_search_backend()
+    console.print(f"[bold]Discovering slugs via {backend}...[/bold]\n")
     result = asyncio.run(run_discover(config, platforms, include_location))
 
     if result.total() == 0:

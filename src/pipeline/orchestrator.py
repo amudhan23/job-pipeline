@@ -6,7 +6,10 @@ import logging
 from typing import Any
 
 from pipeline.models import Job
-from pipeline.scrapers import GreenhouseScraper, AshbyScraper, LeverScraper
+from pipeline.scrapers import (
+    GreenhouseScraper, AshbyScraper, LeverScraper,
+    SmartRecruitersScraper, WorkableScraper, BambooHRScraper,
+)
 from pipeline.scrapers.discover import KNOWN_GREENHOUSE, KNOWN_ASHBY, KNOWN_LEVER
 from pipeline.filters import SponsorshipFilter
 from pipeline.scoring import FitScorer
@@ -26,6 +29,9 @@ class Pipeline:
         self.greenhouse = GreenhouseScraper(config)
         self.ashby = AshbyScraper(config)
         self.lever = LeverScraper(config)
+        self.smartrecruiters = SmartRecruitersScraper(config)
+        self.workable = WorkableScraper(config)
+        self.bamboohr = BambooHRScraper(config)
         self.sponsorship = SponsorshipFilter(
             blocklist=config.get("sponsorship_blocklist", []),
             enabled=config.get("sponsorship_filter_enabled", True),
@@ -41,21 +47,30 @@ class Pipeline:
         gh_slugs = ats_config.get("greenhouse", []) or KNOWN_GREENHOUSE
         ab_slugs = ats_config.get("ashby", []) or KNOWN_ASHBY
         lv_slugs = ats_config.get("lever", []) or KNOWN_LEVER
+        sr_slugs = ats_config.get("smartrecruiters", []) or []
+        wk_slugs = ats_config.get("workable", []) or []
+        bb_slugs = ats_config.get("bamboohr", []) or []
 
-        logger.info(f"Scraping {len(gh_slugs)} Greenhouse, {len(ab_slugs)} Ashby, {len(lv_slugs)} Lever companies")
+        logger.info(
+            f"Scraping {len(gh_slugs)} Greenhouse, {len(ab_slugs)} Ashby, "
+            f"{len(lv_slugs)} Lever, {len(sr_slugs)} SmartRecruiters, "
+            f"{len(wk_slugs)} Workable, {len(bb_slugs)} BambooHR companies"
+        )
 
         # Scrape each platform
-        gh_jobs = await self.greenhouse.scrape_all(gh_slugs)
-        all_jobs.extend(gh_jobs)
-        logger.info(f"Greenhouse: {len(gh_jobs)} jobs")
-
-        ab_jobs = await self.ashby.scrape_all(ab_slugs)
-        all_jobs.extend(ab_jobs)
-        logger.info(f"Ashby: {len(ab_jobs)} jobs")
-
-        lv_jobs = await self.lever.scrape_all(lv_slugs)
-        all_jobs.extend(lv_jobs)
-        logger.info(f"Lever: {len(lv_jobs)} jobs")
+        for name, scraper, slugs in [
+            ("Greenhouse", self.greenhouse, gh_slugs),
+            ("Ashby", self.ashby, ab_slugs),
+            ("Lever", self.lever, lv_slugs),
+            ("SmartRecruiters", self.smartrecruiters, sr_slugs),
+            ("Workable", self.workable, wk_slugs),
+            ("BambooHR", self.bamboohr, bb_slugs),
+        ]:
+            if not slugs:
+                continue
+            platform_jobs = await scraper.scrape_all(slugs)
+            all_jobs.extend(platform_jobs)
+            logger.info(f"{name}: {len(platform_jobs)} jobs")
 
         logger.info(f"Total scraped: {len(all_jobs)} jobs")
         return all_jobs
