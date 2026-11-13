@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from pipeline.discovery import BoardRegistry, SimplifyFeed, normalize_url
@@ -35,6 +36,20 @@ from pipeline.tracker import Tracker
 
 logger = logging.getLogger(__name__)
 
+RECENCY_DAYS = {"day": 1, "week": 7, "month": 30, "year": 365}
+
+
+def _as_utc(dt: datetime) -> datetime:
+    """Scrapers return a mix of tz-aware and naive datetimes; normalize."""
+    return dt.astimezone(timezone.utc) if dt.tzinfo else dt.astimezone().astimezone(timezone.utc)
+
+
+def job_age(job: Job) -> timedelta | None:
+    """How long ago a job was posted, or None if the source gave no date."""
+    if not job.posted_at:
+        return None
+    return datetime.now(timezone.utc) - _as_utc(job.posted_at)
+
 
 @dataclass
 class RunStats:
@@ -45,6 +60,10 @@ class RunStats:
     jobs_from_boards: int = 0
     jobs_from_feeds: int = 0
     duplicates_dropped: int = 0
+    max_age_days: int | None = None
+    too_old_dropped: int = 0
+    undated_dropped: int = 0
+    search: Any = None  # DiscoveryResult diagnostics from web search
 
 
 class Pipeline:
@@ -91,6 +110,7 @@ class Pipeline:
         boards = {(p, s) for p, slugs in result.by_platform.items() for s in slugs}
         new = self.registry.add_many(boards, source="web")
         self.stats.new_boards["web search"] = new
+        self.stats.search = result
 
     async def _discover_feeds(self) -> list[Job]:
         feed_cfg = self.discovery_cfg.get("feeds", {})
@@ -153,27 +173,64 @@ class Pipeline:
         self.stats.duplicates_dropped = dropped
         return list(merged.values())
 
+    # ── Stage 4: freshness ──────────────────────────────────────────────
+
+    def _filter_age(self, jobs: list[Job], max_age_days: int | None) -> list[Job]:
+        """Keep jobs posted within max_age_days. Undated jobs are dropped
+        when a window is set — we can't claim they're recent."""
+        self.stats.max_age_days = max_age_days
+        if not max_age_days:
+            return jobs
+        window = timedelta(days=max_age_days)
+        kept = []
+        for job in jobs:
+            age = job_age(job)
+            if age is None:
+                self.stats.undated_dropped += 1
+            elif age > window:
+                self.stats.too_old_dropped += 1
+            else:
+                kept.append(job)
+        return kept
+
     # ── Public entry points ─────────────────────────────────────────────
 
-    async def run_scrape(self, discover: bool = True, recency: str | None = None) -> list[Job]:
-        """Discover boards from the web, then scrape everything known."""
+    async def run_scrape(
+        self, discover: bool = True, recency: str | None = None,
+        max_age_days: int | None = None,
+    ) -> list[Job]:
+        """Discover boards from the web, scrape everything known, keep fresh jobs.
+
+        recency (day/week/month/year), when given, limits BOTH the web search
+        and the jobs returned to that window. max_age_days overrides the job
+        window; with neither, config `filters.max_job_age_days` applies.
+        """
         self.stats = RunStats()
-        recency = recency or self.discovery_cfg.get("recency", "week")
+        search_recency = recency or self.discovery_cfg.get("recency", "week")
+        if max_age_days is None:
+            max_age_days = (
+                RECENCY_DAYS[recency] if recency
+                else self.config.get("filters", {}).get("max_job_age_days")
+            )
         self._register_pins()
 
         feed_jobs: list[Job] = []
         if discover and self.discovery_cfg.get("enabled", True):
-            await self._discover_web(recency)
+            await self._discover_web(search_recency)
             feed_jobs = await self._discover_feeds()
 
         board_jobs = await self._scrape_registry()
         jobs = self._merge(board_jobs, feed_jobs)
+        jobs = self._filter_age(jobs, max_age_days)
         logger.info(f"Total: {len(jobs)} jobs ({self.stats.duplicates_dropped} duplicates dropped)")
         return jobs
 
-    async def run_full(self, discover: bool = True, recency: str | None = None) -> list[Job]:
+    async def run_full(
+        self, discover: bool = True, recency: str | None = None,
+        max_age_days: int | None = None,
+    ) -> list[Job]:
         """Run the full pipeline: discover → scrape → filter → score → track."""
-        jobs = await self.run_scrape(discover=discover, recency=recency)
+        jobs = await self.run_scrape(discover=discover, recency=recency, max_age_days=max_age_days)
         if not jobs:
             logger.warning("No jobs found")
             return []

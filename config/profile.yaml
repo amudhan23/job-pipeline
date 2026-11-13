@@ -37,17 +37,30 @@ filters:
     - "SF"
     - "Bay Area"
     - "Remote"
-  exclude_keywords:
+  exclude_keywords:          # matched as whole words in the title
     - "senior"
+    - "sr"                   # also catches "Sr."
     - "staff"
     - "principal"
     - "director"
     - "manager"
     - "intern"
+    - "internship"
     - "co-op"
     - "PhD"
+  # Rejected unless the location also mentions the US or one of your targets,
+  # so "Remote Canada" is out but "Remote in USA; Remote in Canada" stays.
+  exclude_locations: [
+    "canada", "ontario", "toronto", "vancouver", "montreal", "mexico",
+    "united kingdom", "uk", "london", "ireland", "dublin", "europe", "emea",
+    "germany", "berlin", "france", "paris", "netherlands", "amsterdam", "spain",
+    "poland", "india", "bangalore", "bengaluru", "hyderabad", "pune", "apac",
+    "singapore", "australia", "japan", "tokyo", "israel", "brazil", "latam",
+  ]
   min_experience: 0
   max_experience: 4
+  max_job_age_days: null     # e.g. 7 to only keep jobs posted in the last week;
+                             # `run --recency day|week|month` overrides per run
 
 # ── Stack for Scoring ──
 stack:

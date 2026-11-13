@@ -42,7 +42,8 @@ jobpipe dashboard
 | Command | Description |
 |---------|-------------|
 | `jobpipe run` | Full pipeline: discover, scrape, filter, score, rank |
-| `jobpipe run --recency day` | Only search the web for postings from the last 24h |
+| `jobpipe run --recency day` | Only jobs posted in the last 24h (also narrows web search) |
+| `jobpipe run --days 3` | Only jobs posted in the last 3 days |
 | `jobpipe run --no-discover` | Skip web search; just re-scrape boards already found |
 | `jobpipe scrape` | Discover + scrape only (no scoring) |
 | `jobpipe boards` | List every company board discovered so far |
@@ -54,6 +55,7 @@ jobpipe dashboard
 | `jobpipe probe SLUG` | Check which ATS a company uses |
 | `jobpipe discover` | Run web discovery on its own and show new companies |
 | `jobpipe discover --queries-only` | Print the search queries to run in a browser |
+| `jobpipe discover --debug` | Save raw search pages to `data/search_debug/` |
 
 Add `-v` before the command for verbose logging: `jobpipe -v run`
 
@@ -159,6 +161,20 @@ jobpipe probe <company-name>        # check one company's ATS directly
 
 To make sure a specific company is always checked, add it under `ats:` in
 `config/profile.yaml` (optional).
+
+Every run prints a one-line web search report, e.g.
+`Web search (duckduckgo): 63/63 queries, 410 result links, 88 on job boards → 31 companies`,
+plus a warning explaining why if it found nothing (blocked, no results, or
+results that weren't job boards).
+
+## Freshness
+
+`--recency day|week|month` (or `--days N`) keeps only jobs **posted** in that
+window — dates come from each ATS (Greenhouse `first_published`, Ashby
+`publishedAt`, Lever `createdAt`, SmartRecruiters `releasedDate`, Workable
+`published_on`, BambooHR detail, feed `date_posted`). Jobs with no posting
+date are dropped when a window is set. Set `filters.max_job_age_days` to make
+a window the default. The dashboard has a matching "Posted" column and filter.
 
 ## Requirements
 

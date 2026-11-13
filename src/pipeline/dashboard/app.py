@@ -145,6 +145,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <option value="applied">Applied</option>
       <option value="interview">Interview</option>
     </select>
+    <select id="postedFilter" onchange="filterJobs()">
+      <option value="0">Posted: any time</option>
+      <option value="1">Last 24 hours</option>
+      <option value="7">Last 7 days</option>
+      <option value="30">Last 30 days</option>
+    </select>
   </div>
 
   <div class="table-wrap">
@@ -152,6 +158,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <thead>
         <tr>
           <th onclick="sortBy('fit_score')" data-col="fit_score" class="sorted-desc">Score</th>
+          <th onclick="sortBy('age_hours')" data-col="age_hours">Posted</th>
           <th onclick="sortBy('company')">Company</th>
           <th onclick="sortBy('title')">Title</th>
           <th onclick="sortBy('location')">Location</th>
@@ -180,6 +187,11 @@ async function loadJobs() {
   const resp = await fetch('/api/jobs');
   const data = await resp.json();
   allJobs = data.jobs;
+  // Hours since posting; undated jobs sort last and never pass a time filter
+  allJobs.forEach(j => {
+    const t = j.posted_at ? Date.parse(j.posted_at) : NaN;
+    j.age_hours = isNaN(t) ? Infinity : (Date.now() - t) / 3.6e6;
+  });
   document.getElementById('refreshTime').textContent = new Date().toLocaleTimeString();
 
   // Stats
@@ -197,8 +209,10 @@ function filterJobs() {
   const minScore = parseInt(document.getElementById('minScore').value);
   const sponsor = document.getElementById('sponsorFilter').value;
   const status = document.getElementById('statusFilter').value;
+  const postedDays = parseInt(document.getElementById('postedFilter').value);
 
   let filtered = allJobs.filter(j => {
+    if (postedDays && !(j.age_hours <= postedDays * 24)) return false;
     if (j.fit_score < minScore) return false;
     if (search && !(j.company+j.title+j.location).toLowerCase().includes(search)) return false;
     if (sponsor === 'high' && j.sponsorship !== 'high') return false;
@@ -232,6 +246,13 @@ function sortBy(col) {
   filterJobs();
 }
 
+function fmtAge(h) {
+  if (!isFinite(h)) return '—';
+  if (h < 1) return 'now';
+  if (h < 24) return Math.floor(h) + 'h';
+  const d = Math.floor(h / 24);
+  return d < 60 ? d + 'd' : Math.floor(d / 30) + 'mo';
+}
 function scoreClass(s) { return s >= 70 ? 'score-high' : s >= 50 ? 'score-med' : 'score-low'; }
 function sponsorClass(s) { return 'sponsor-' + s; }
 function statusClass(s) {
@@ -251,6 +272,7 @@ function renderTable(jobs) {
 
   body.innerHTML = jobs.map(j => `<tr>
     <td><span class="score ${scoreClass(j.fit_score)}">${Math.round(j.fit_score)}</span></td>
+    <td><span class="location">${fmtAge(j.age_hours)}</span></td>
     <td><span class="company-name">${esc(j.company)}</span></td>
     <td>${esc(j.title)}</td>
     <td><span class="location">${esc(j.location)}</span></td>

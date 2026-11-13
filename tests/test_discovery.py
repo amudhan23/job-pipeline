@@ -150,6 +150,37 @@ def test_discovery_stops_cleanly_when_rate_limited(monkeypatch):
     result = asyncio.run(search_discover.discover(CONFIG, delay=0))
     assert result.by_platform == {"ashby": {"newco"}}
     assert len(calls) == 2  # stopped right after the throttle
+    assert result.rate_limited and result.queries_run == 1
+
+
+def test_discovery_diagnostics_count_links(monkeypatch):
+    async def fake_search(query, key, recency):
+        return ["https://example.com/blog", "https://jobs.lever.co/acme/1",
+                "https://jobs.jobvite.com/acme/job/x"]  # jobvite: not scrapable
+
+    monkeypatch.setattr(search_discover, "_search_duckduckgo", fake_search)
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    monkeypatch.delenv("SERPAPI_KEY", raising=False)
+    r = asyncio.run(search_discover.discover(CONFIG, delay=0, max_queries=1))
+    assert (r.queries_run, r.result_links, r.ats_links) == (1, 3, 1)
+    assert not r.rate_limited
+
+
+class TestDDGParser:
+    def test_href_before_class_still_parsed(self):
+        body = '<a href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fjobs.lever.co%2Facme%2F1" class="result__a">x</a>'
+        assert search_discover.parse_ddg_html(body) == ["https://jobs.lever.co/acme/1"]
+
+    def test_lite_page_direct_links(self):
+        body = ("<a rel='nofollow' href='https://boards.greenhouse.io/newco/jobs/9' "
+                "class='result-link'>NewCo</a>")
+        assert search_discover.parse_ddg_html(body) == ["https://boards.greenhouse.io/newco/jobs/9"]
+
+    def test_skips_duckduckgo_own_links_and_dupes(self):
+        body = ('<a href="https://duckduckgo.com/settings">s</a>'
+                '<a href="https://jobs.ashbyhq.com/a/1">1</a>'
+                '<a href="https://jobs.ashbyhq.com/a/1">dup</a>')
+        assert search_discover.parse_ddg_html(body) == ["https://jobs.ashbyhq.com/a/1"]
 
 
 # ── Full run: a company in no config gets found and scraped ────────────

@@ -35,16 +35,25 @@ def main(ctx: click.Context, config: str | None, verbose: bool) -> None:
 _RECENCY = click.Choice(["day", "week", "month", "year"])
 
 
+def _freshness_options(f):
+    f = click.option("--days", type=int, default=None,
+                     help="Only jobs posted in the last N days (overrides --recency window)")(f)
+    f = click.option("--recency", type=_RECENCY, default=None,
+                     help="Only jobs posted in the last day/week/month; also narrows web search")(f)
+    f = click.option("--no-discover", is_flag=True,
+                     help="Skip web discovery; only re-scrape known boards")(f)
+    return click.option("--limit", "-n", default=20, help="Max jobs to show")(f)
+
+
 @main.command()
-@click.option("--limit", "-n", default=20, help="Max jobs to show")
-@click.option("--no-discover", is_flag=True, help="Skip web discovery; only re-scrape known boards")
-@click.option("--recency", type=_RECENCY, default=None,
-              help="How fresh postings must be in web search (default from config: week)")
+@_freshness_options
 @click.pass_context
-def scrape(ctx: click.Context, limit: int, no_discover: bool, recency: str | None) -> None:
+def scrape(ctx: click.Context, limit: int, no_discover: bool, recency: str | None,
+           days: int | None) -> None:
     """Discover boards from the web and scrape them (no scoring)."""
     pipeline = Pipeline(ctx.obj["config"])
-    jobs = asyncio.run(pipeline.run_scrape(discover=not no_discover, recency=recency))
+    jobs = asyncio.run(pipeline.run_scrape(
+        discover=not no_discover, recency=recency, max_age_days=days))
     _print_run_summary(pipeline)
     console.print(f"\n[bold green]Scraped {len(jobs)} matching jobs[/bold green]\n")
     if jobs:
@@ -52,24 +61,41 @@ def scrape(ctx: click.Context, limit: int, no_discover: bool, recency: str | Non
 
 
 @main.command()
-@click.option("--limit", "-n", default=20, help="Max jobs to show")
-@click.option("--no-discover", is_flag=True, help="Skip web discovery; only re-scrape known boards")
-@click.option("--recency", type=_RECENCY, default=None,
-              help="How fresh postings must be in web search (default from config: week)")
+@_freshness_options
 @click.pass_context
-def run(ctx: click.Context, limit: int, no_discover: bool, recency: str | None) -> None:
+def run(ctx: click.Context, limit: int, no_discover: bool, recency: str | None,
+        days: int | None) -> None:
     """Full pipeline: discover from the web → scrape → filter → score → rank."""
     pipeline = Pipeline(ctx.obj["config"])
-    jobs = asyncio.run(pipeline.run_full(discover=not no_discover, recency=recency))
+    jobs = asyncio.run(pipeline.run_full(
+        discover=not no_discover, recency=recency, max_age_days=days))
     _print_run_summary(pipeline)
     console.print(f"\n[bold green]Pipeline complete: {len(jobs)} jobs processed[/bold green]\n")
     if jobs:
         console.print(_jobs_table(jobs[:limit]))
 
 
+def _print_search_diagnostics(r) -> None:
+    """One line saying exactly what web search did, so 0 results is never a mystery."""
+    line = (f"[bold]Web search ({r.backend}):[/bold] {r.queries_run}/{r.queries_total} queries, "
+            f"{r.result_links} result links, {r.ats_links} on job boards → {r.total()} companies")
+    console.print(line)
+    if r.rate_limited:
+        console.print(f"  [yellow]{r.backend} started blocking after {r.queries_run} queries. "
+                      "Try again later, raise discovery.search_delay, or set SERPER_API_KEY.[/yellow]")
+    elif r.queries_run and not r.result_links:
+        console.print("  [yellow]The search engine returned no links at all. Run "
+                      "`jobpipe discover --debug` and share data/search_debug/ to diagnose.[/yellow]")
+    elif r.result_links and not r.ats_links:
+        console.print("  [yellow]Links came back but none pointed at a job board — "
+                      "try --recency month for a wider net.[/yellow]")
+
+
 def _print_run_summary(pipeline: Pipeline) -> None:
     s = pipeline.stats
     console.print()
+    if s.search is not None:
+        _print_search_diagnostics(s.search)
     if s.new_boards:
         found = ", ".join(f"{n} from {src}" for src, n in s.new_boards.items())
         console.print(f"[bold]New companies discovered:[/bold] {found}")
@@ -83,6 +109,11 @@ def _print_run_summary(pipeline: Pipeline) -> None:
                       "to find some")
     console.print(f"[bold]Jobs:[/bold] {s.jobs_from_boards} from boards, "
                   f"{s.jobs_from_feeds} from feeds, {s.duplicates_dropped} duplicates dropped")
+    if s.max_age_days:
+        console.print(f"[bold]Freshness (last {s.max_age_days}d):[/bold] "
+                      f"{s.too_old_dropped} older jobs dropped"
+                      + (f", {s.undated_dropped} with no posting date dropped"
+                         if s.undated_dropped else ""))
 
 
 @main.command()
@@ -211,9 +242,12 @@ def probe(ctx: click.Context, company_slug: str) -> None:
 @click.option("--recency", type=_RECENCY, default="week", help="How fresh postings must be")
 @click.option("--queries-only", is_flag=True,
               help="Just print the search queries to run in a browser")
+@click.option("--debug", is_flag=True,
+              help="Save raw search pages to data/search_debug/ for inspection")
+@click.option("--max-queries", type=int, default=None, help="Stop after N queries")
 @click.pass_context
 def discover(ctx: click.Context, platform: tuple[str, ...], no_location: bool,
-             recency: str, queries_only: bool) -> None:
+             recency: str, queries_only: bool, debug: bool, max_queries: int | None) -> None:
     """Search the web for recent postings and record the companies found.
 
     `jobpipe run` already does this every time — use this command to run
@@ -238,13 +272,22 @@ def discover(ctx: click.Context, platform: tuple[str, ...], no_location: bool,
                       "after the domain, e.g. boards.greenhouse.io/[bold]stripe[/bold].[/dim]")
         return
 
-    result = asyncio.run(run_discover(config, platforms, include_location, recency=recency))
+    from pipeline.scrapers import search_discover
+    if debug:
+        debug_dir = Path(__file__).resolve().parents[2] / "data" / "search_debug"
+        search_discover.DEBUG_DIR = debug_dir
+        console.print(f"[dim]Saving raw search pages to {debug_dir}[/dim]")
+
+    result = asyncio.run(run_discover(
+        config, platforms, include_location, recency=recency,
+        delay=config.get("discovery", {}).get("search_delay", 2.0),
+        max_queries=max_queries,
+    ))
+    _print_search_diagnostics(result)
     registry = BoardRegistry()
     known = {(b.platform, b.slug) for b in registry.all()}
 
     if result.total() == 0:
-        console.print("[yellow]No boards found (search may be rate-limited — try again "
-                      "later or set SERPER_API_KEY).[/yellow]")
         return
 
     new_total = 0
@@ -294,6 +337,7 @@ def _jobs_table(jobs: list) -> Table:
     """Create a rich table for jobs display."""
     table = Table(title="Matched Jobs")
     table.add_column("Score", style="cyan", width=6)
+    table.add_column("Posted", style="magenta", width=7, justify="right")
     table.add_column("Company", style="green", width=20)
     table.add_column("Title", width=35)
     table.add_column("Location", width=15)
@@ -307,6 +351,7 @@ def _jobs_table(jobs: list) -> Table:
             h1b_info = "⛔ NO"
         table.add_row(
             f"{j.fit_score:.0f}",
+            _format_age(j),
             j.company[:20],
             j.title[:35],
             j.location[:15],
@@ -314,6 +359,20 @@ def _jobs_table(jobs: list) -> Table:
             j.platform.value,
         )
     return table
+
+
+def _format_age(job) -> str:
+    from pipeline.orchestrator import job_age
+    age = job_age(job)
+    if age is None:
+        return "—"
+    hours = age.total_seconds() / 3600
+    if hours < 1:
+        return "now"
+    if hours < 24:
+        return f"{int(hours)}h"
+    days = int(hours // 24)
+    return f"{days}d" if days < 60 else f"{days // 30}mo"
 
 
 if __name__ == "__main__":

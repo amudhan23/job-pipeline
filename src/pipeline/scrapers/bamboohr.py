@@ -64,9 +64,9 @@ class BambooHRScraper(BaseScraper):
                     continue
 
                 job_id = str(item.get("id", ""))
-                description = ""
+                description, posted_at = "", None
                 if detail_count < MAX_DETAIL_FETCHES:
-                    description = await self._fetch_description(client, base, job_id)
+                    description, posted_at = await self._fetch_detail(client, base, job_id)
                     detail_count += 1
 
                 job = Job(
@@ -79,16 +79,16 @@ class BambooHRScraper(BaseScraper):
                     platform=ATSPlatform.BAMBOOHR,
                     description=description,
                     department=item.get("departmentLabel", "") or "",
-                    posted_at=None,
+                    posted_at=posted_at,
                 )
                 jobs.append(job)
 
         return jobs
 
-    async def _fetch_description(
+    async def _fetch_detail(
         self, client: httpx.AsyncClient, base: str, job_id: str
-    ) -> str:
-        """Fetch the full posting detail for the job description."""
+    ) -> tuple[str, datetime | None]:
+        """Fetch a posting's detail: (description, posted date)."""
         try:
             resp = await client.get(
                 f"{base}/{job_id}/detail",
@@ -96,9 +96,11 @@ class BambooHRScraper(BaseScraper):
             )
             resp.raise_for_status()
             detail = resp.json().get("result", {})
-            return _extract_description(detail)
-        except httpx.HTTPError:
-            return ""
+            # Fields sometimes sit under a nested "jobOpening" object
+            flat = {**detail, **(detail.get("jobOpening") or {})}
+            return _extract_description(flat), _extract_date(flat)
+        except (httpx.HTTPError, ValueError, AttributeError):
+            return "", None
 
 
 def _format_location(item: dict[str, Any]) -> str:
@@ -110,6 +112,19 @@ def _format_location(item: dict[str, Any]) -> str:
         parts = [loc.get("city", ""), loc.get("state", ""), loc.get("country", "")]
         return ", ".join(p.strip() for p in parts if p and p.strip())
     return ""
+
+
+def _extract_date(detail: dict[str, Any]) -> datetime | None:
+    """Posting date from a detail payload (the endpoint is undocumented, so
+    accept the spellings seen in the wild)."""
+    for key in ("datePosted", "postedDate", "datePublished", "createdDate"):
+        value = detail.get(key)
+        if value:
+            try:
+                return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+    return None
 
 
 def _extract_description(detail: dict[str, Any]) -> str:

@@ -63,8 +63,15 @@ ATS_DOMAINS: list[ATSDomain] = [
 
 @dataclass
 class DiscoveryResult:
-    """Slugs discovered per ATS platform."""
+    """Slugs discovered per ATS platform, plus what happened during the search."""
     by_platform: dict[str, set[str]] = field(default_factory=dict)
+    backend: str = ""
+    queries_total: int = 0
+    queries_run: int = 0
+    result_links: int = 0      # every URL the engine returned
+    ats_links: int = 0         # of those, links to a scrapable ATS board
+    rate_limited: bool = False
+    errors: int = 0
 
     def add(self, platform: str, slug: str) -> None:
         self.by_platform.setdefault(platform, set()).add(slug)
@@ -199,10 +206,14 @@ async def _search_serpapi(query: str, api_key: str, recency: str | None = None) 
         return [i["link"] for i in resp.json().get("organic_results", []) if "link" in i]
 
 
-# Matches result links in DuckDuckGo HTML output.
-_DDG_LINK_RE = re.compile(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"')
+# Any href on the page — deliberately not tied to DDG's CSS class names or
+# attribute order, which change between the html and lite pages.
+_HREF_RE = re.compile(r"""href\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
 # DDG wraps external links in a redirect: //duckduckgo.com/l/?uddg=<encoded>
-_DDG_REDIRECT_RE = re.compile(r"[?&]uddg=([^&]+)")
+_DDG_REDIRECT_RE = re.compile(r"[?&]uddg=([^&\"']+)")
+
+# Set by `jobpipe discover --debug` to save raw search pages for inspection
+DEBUG_DIR = None
 
 
 def _clean_ddg_url(href: str) -> str:
@@ -217,8 +228,27 @@ def _clean_ddg_url(href: str) -> str:
 
 
 def parse_ddg_html(body: str) -> list[str]:
-    """Extract result URLs from a DuckDuckGo HTML response."""
-    return [_clean_ddg_url(h) for h in _DDG_LINK_RE.findall(body)]
+    """Extract external result URLs from a DuckDuckGo html or lite page."""
+    urls: list[str] = []
+    seen: set[str] = set()
+    for href in _HREF_RE.findall(body):
+        url = _clean_ddg_url(href)
+        host = url.split("/")[2].lower() if url.startswith("http") and url.count("/") >= 2 else ""
+        if not host or host.endswith("duckduckgo.com"):
+            continue  # DDG's own nav/settings links
+        if url not in seen:
+            seen.add(url)
+            urls.append(url)
+    return urls
+
+
+def _save_debug(name: str, body: str) -> None:
+    if DEBUG_DIR is None:
+        return
+    from pathlib import Path
+    path = Path(DEBUG_DIR)
+    path.mkdir(parents=True, exist_ok=True)
+    (path / f"{name}.html").write_text(body)
 
 
 async def _search_duckduckgo(query: str, _key: str = "", recency: str | None = None) -> list[str]:
@@ -232,24 +262,27 @@ async def _search_duckduckgo(query: str, _key: str = "", recency: str | None = N
     cookies = {}
     if recency in _DDG_RECENCY:
         data["df"] = cookies["df"] = _DDG_RECENCY[recency]
-    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-        resp = await client.post(
-            "https://html.duckduckgo.com/html/",
-            data=data,
-            cookies=cookies,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0 Safari/537.36"
-                )
-            },
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0 Safari/537.36"
         )
-        # DDG signals throttling with a 202 or a bot-check ("anomaly") page
-        if resp.status_code in (202, 429) or "anomaly-modal" in resp.text:
-            raise RateLimited("duckduckgo")
-        resp.raise_for_status()
-        return parse_ddg_html(resp.text)
+    }
+    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+        # html page first, lite page as fallback (different markup, same index)
+        for endpoint in ("https://html.duckduckgo.com/html/", "https://lite.duckduckgo.com/lite/"):
+            resp = await client.post(endpoint, data=data, cookies=cookies, headers=headers)
+            _save_debug(re.sub(r"\W+", "_", f"{endpoint.split('//')[1][:4]}_{query}")[:120],
+                        resp.text)
+            # DDG signals throttling with a 202 or a bot-check ("anomaly") page
+            if resp.status_code in (202, 429) or "anomaly-modal" in resp.text:
+                raise RateLimited("duckduckgo")
+            resp.raise_for_status()
+            urls = parse_ddg_html(resp.text)
+            if urls:
+                return urls
+        return []
 
 
 def _get_search_backend() -> tuple[str, str]:
@@ -295,26 +328,35 @@ async def discover(
         queries = queries[:max_queries]
     logger.info(f"Web discovery: {len(queries)} queries via {backend_name} (recency={recency})")
 
-    result = DiscoveryResult()
+    scrapable = {a.name for a in ATS_DOMAINS if a.scrapable}
+    result = DiscoveryResult(backend=backend_name, queries_total=len(queries))
     for i, (platform, query) in enumerate(queries):
         if i and delay:
             await asyncio.sleep(delay)
         try:
             urls = await search_fn(query, api_key, recency)
         except RateLimited:
+            result.rate_limited = True
             logger.warning(
                 f"{backend_name} is rate-limiting — stopping web search after "
                 f"{i}/{len(queries)} queries. Known boards will still be scraped."
             )
             break
         except httpx.HTTPError as e:
+            result.errors += 1
             logger.error(f"Search failed for {platform}: {e}")
             continue
+        result.queries_run += 1
+        result.result_links += len(urls)
         for url in urls:
             extracted = _extract_slug(url)
-            if extracted:
+            if extracted and extracted[0] in scrapable:
+                result.ats_links += 1
                 result.add(*extracted)
         logger.debug(f"[{platform}] {len(urls)} results for: {query}")
 
-    logger.info(f"Web discovery found {result.total()} boards")
+    logger.info(
+        f"Web discovery: {result.queries_run}/{result.queries_total} queries, "
+        f"{result.result_links} links, {result.total()} boards"
+    )
     return result

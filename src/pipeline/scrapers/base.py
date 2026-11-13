@@ -4,12 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from abc import ABC, abstractmethod
 from typing import Any
 
 from pipeline.models import Job
 
 logger = logging.getLogger(__name__)
+
+_US_WORDS = ("us", "usa", "u.s.", "united states")
+
+
+def _has_word(text: str, word: str) -> bool:
+    """Whole-word, case-insensitive match (handles "sr." and "co-op")."""
+    return re.search(rf"(?<![a-z0-9]){re.escape(word.lower())}(?![a-z0-9])", text) is not None
 
 
 class BaseScraper(ABC):
@@ -65,18 +73,30 @@ class BaseScraper(ABC):
         if role_keywords and not any(kw.lower() in title_lower for kw in role_keywords):
             return False
 
-        # Must not match any exclude keyword
+        # Must not match any exclude keyword — whole words, so "sr" catches
+        # "Sr Software Engineer" but not "Israel"
         exclude = self.filters.get("exclude_keywords", [])
-        if any(exc.lower() in title_lower for exc in exclude):
+        if any(_has_word(title_lower, exc) for exc in exclude):
             return False
 
-        # Location check (if locations configured)
         target_locations = self.filters.get("locations", [])
-        if target_locations:
-            loc_lower = location.lower()
-            if not any(loc.lower() in loc_lower for loc in target_locations):
-                # Also check description for remote
-                if "remote" not in loc_lower and "remote" not in description.lower()[:500]:
-                    return False
+        if not target_locations:
+            return True
 
-        return True
+        loc_lower = location.lower()
+        if not loc_lower.strip():
+            # No location given — fall back to the JD saying it's remote
+            return "remote" in description.lower()[:500]
+
+        # "Remote" is a target but says nothing about the country, so it
+        # doesn't count as a US signal ("Remote Canada" must still be rejected)
+        us_signal = any(
+            t.lower() in loc_lower for t in target_locations if t.lower() != "remote"
+        ) or any(_has_word(loc_lower, w) for w in _US_WORDS)
+        # Foreign location with no US mention ("Remote Canada", "Bangalore, India")
+        if not us_signal and any(
+            _has_word(loc_lower, x) for x in self.filters.get("exclude_locations", [])
+        ):
+            return False
+
+        return any(t.lower() in loc_lower for t in target_locations) or "remote" in loc_lower

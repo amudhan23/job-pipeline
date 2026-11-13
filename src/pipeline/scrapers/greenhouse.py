@@ -57,7 +57,9 @@ class GreenhouseScraper(BaseScraper):
                     platform=ATSPlatform.GREENHOUSE,
                     description=content,
                     department=_extract_department(item),
-                    posted_at=_parse_date(item.get("updated_at")),
+                    # first_published = when the job went live; updated_at changes
+                    # on any edit, so it's only a fallback
+                    posted_at=_parse_date(item.get("first_published") or item.get("updated_at")),
                 )
                 jobs.append(job)
 
