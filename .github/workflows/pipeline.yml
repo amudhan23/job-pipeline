@@ -1,0 +1,93 @@
+# Scheduled job-pipeline runs.
+#
+# Every 3 hours: re-check every known company board (fast, just API calls).
+# Twice a day:   full run — web search + feeds for new companies, then all boards.
+#
+# Results are kept between runs as ONE encrypted file on the `pipeline-data`
+# branch (force-pushed, so the branch never grows). Pull them to your laptop
+# with `jobpipe sync`. Setup: run `jobpipe state-key --save` locally and add
+# the printed key as the repository secret JOBPIPE_STATE_KEY.
+
+name: job-pipeline
+
+on:
+  schedule:
+    - cron: "23 */3 * * *"     # re-check known boards
+    - cron: "41 11,23 * * *"   # full discovery (11:41 & 23:41 UTC)
+  workflow_dispatch:
+    inputs:
+      discover:
+        description: "Search the web for new companies too"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write              # to push the encrypted state branch
+
+concurrency:
+  group: job-pipeline          # never two runs writing state at once
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      JOBPIPE_STATE_KEY: ${{ secrets.JOBPIPE_STATE_KEY }}
+      SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}   # optional, better web search
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -e .
+
+      - name: Require the encryption key
+        # The repo is public: never store job data unencrypted.
+        run: |
+          if [ -z "$JOBPIPE_STATE_KEY" ]; then
+            echo "::error::Add the JOBPIPE_STATE_KEY repository secret (run 'jobpipe state-key --save' locally)."
+            exit 1
+          fi
+
+      - name: Restore saved state
+        id: restore
+        run: |
+          if git fetch --depth=1 origin pipeline-data 2>/dev/null; then
+            git show FETCH_HEAD:state.bin > /tmp/state.bin
+            jobpipe state import --in /tmp/state.bin
+          else
+            echo "No saved state yet — first run."
+          fi
+          jobpipe seed-h1b
+
+      - name: Run pipeline
+        id: pipeline
+        # --limit 0: logs on a public repo are public, so print counts only.
+        run: |
+          if [ "${{ github.event.schedule }}" = "23 */3 * * *" ] || \
+             [ "${{ github.event_name }}" = "workflow_dispatch" -a "${{ inputs.discover }}" = "false" ]; then
+            jobpipe run --no-discover --recency week --limit 0
+          else
+            jobpipe run --recency week --limit 0
+          fi
+
+      - name: Save state (encrypted)
+        # Only after a clean restore + run, so a failure never overwrites good data
+        if: steps.restore.outcome == 'success' && steps.pipeline.outcome == 'success'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          jobpipe state export --out /tmp/state.bin
+          work="$(mktemp -d)" && cd "$work"
+          git init -q && git checkout -q --orphan pipeline-data
+          cp /tmp/state.bin state.bin
+          printf 'Encrypted job-pipeline state from the scheduled runs.\nDecrypt with `jobpipe sync` (needs JOBPIPE_STATE_KEY).\n' > README.md
+          git add state.bin README.md
+          git -c user.name="job-pipeline bot" -c user.email="actions@users.noreply.github.com" \
+              commit -qm "state $(date -u +%FT%TZ)"
+          git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:pipeline-data

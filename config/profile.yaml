@@ -73,12 +73,13 @@ stack:
   tools: ["Jenkins", "Git", "Linux", "Terraform"]
 
 # ── Scoring Weights ──
-scoring:
-  stack_match: 0.30
+scoring:                     # relative weights; normalized, so they needn't sum to 1
+  stack_match: 0.25
   experience_alignment: 0.15
-  sponsorship_likelihood: 0.25
-  location_match: 0.15
+  sponsorship_likelihood: 0.20
+  location_match: 0.10
   role_type_match: 0.15
+  recency: 0.15              # newer postings rank higher (today 100 → 30+ days 15)
 
 # ── Resume Components ──
 resume:
@@ -138,6 +139,7 @@ ats:
   smartrecruiters: []   # slugs are case-sensitive, e.g. "Visa"
   workable: []          # e.g. "huggingface"
   bamboohr: []          # subdomain only, e.g. "acme" for acme.bamboohr.com
+  workday: []           # host/site, e.g. "nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite"
 
 # ── Sponsorship Filter Toggle ──
 # Set to false to disable sponsorship filtering entirely

@@ -7,7 +7,24 @@ import logging
 from typing import Any
 
 from pipeline.models import Job, SponsorshipLikelihood
+from pipeline.utils.dates import job_age
 from pipeline.utils.text import extract_experience_years
+
+# Default weight for each dimension when the config doesn't set one
+DEFAULT_WEIGHTS = {
+    "stack_match": 0.25,
+    "sponsorship_likelihood": 0.20,
+    "experience_alignment": 0.15,
+    "location_match": 0.10,
+    "role_type_match": 0.15,
+    "recency": 0.15,
+}
+
+# (max age in days, score). Early applicants get seen first, so a job posted
+# today is worth more than an identical one from last month.
+RECENCY_CURVE = [(1, 100.0), (3, 90.0), (7, 75.0), (14, 55.0), (30, 35.0)]
+RECENCY_OLD = 15.0
+RECENCY_UNKNOWN = 50.0
 
 logger = logging.getLogger(__name__)
 
@@ -53,11 +70,14 @@ class FitScorer:
         # Role type match (0-100)
         breakdown["role_type_match"] = self._score_role_type(job.title, job.department)
 
-        # Weighted composite
-        total = 0.0
-        for key, score in breakdown.items():
-            weight = self.weights.get(key, 0.2)
-            total += score * weight
+        # Freshness (0-100) — newer postings rank higher
+        breakdown["recency"] = self._score_recency(job)
+
+        # Weighted average, normalized so the result stays 0-100 whatever
+        # weights the config sets (or omits)
+        weights = {k: self.weights.get(k, DEFAULT_WEIGHTS[k]) for k in breakdown}
+        total_weight = sum(weights.values()) or 1.0
+        total = sum(breakdown[k] * w for k, w in weights.items()) / total_weight
 
         job.fit_score = round(total, 1)
         job.fit_breakdown = breakdown
@@ -135,6 +155,17 @@ class FitScorer:
             SponsorshipLikelihood.UNKNOWN: 60.0,  # No data = neutral-positive
             SponsorshipLikelihood.LOW: 40.0,       # Low filings but JD didn't block
         }[job.sponsorship]
+
+    def _score_recency(self, job: Job) -> float:
+        """Score by posting age. Undated jobs get a neutral score."""
+        age = job_age(job)
+        if age is None:
+            return RECENCY_UNKNOWN
+        days = age.total_seconds() / 86400
+        for max_days, score in RECENCY_CURVE:
+            if days <= max_days:
+                return score
+        return RECENCY_OLD
 
     def _score_location(self, location: str) -> float:
         """Score location match."""

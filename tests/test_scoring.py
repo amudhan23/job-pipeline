@@ -49,11 +49,13 @@ def _make_job(**kwargs) -> Job:
 
 
 def test_high_fit_job(scorer):
+    from datetime import datetime, timezone
     job = _make_job(
         title="Backend Software Engineer",
         location="New York, NY",
         description="We use Java, Spring Boot, PostgreSQL, Redis, Docker, Kubernetes, and AWS.",
         sponsorship=SponsorshipLikelihood.HIGH,
+        posted_at=datetime.now(timezone.utc),  # great on every dimension, incl. freshness
     )
     score = scorer.score(job)
     assert score > 70, f"Expected > 70 for a great fit, got {score}"
@@ -68,6 +70,31 @@ def test_low_fit_job(scorer):
     )
     score = scorer.score(job)
     assert score < 40, f"Expected < 40 for a poor fit, got {score}"
+
+
+def test_fresher_job_outranks_identical_older_one(scorer):
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    base = dict(title="Backend Engineer", description="Java Spring Boot PostgreSQL",
+                sponsorship=SponsorshipLikelihood.HIGH)
+    today = _make_job(id="today", posted_at=now - timedelta(hours=4), **base)
+    stale = _make_job(id="stale", posted_at=now - timedelta(days=25), **base)
+    ranked = scorer.score_jobs([stale, today])
+    assert [j.id for j in ranked] == ["today", "stale"]
+    assert today.fit_breakdown["recency"] == 100
+    assert stale.fit_breakdown["recency"] == 35
+
+
+def test_undated_job_gets_neutral_recency(scorer):
+    job = _make_job()
+    scorer.score(job)
+    assert job.fit_breakdown["recency"] == 50
+
+
+def test_score_stays_within_0_100_with_any_weights():
+    s = FitScorer({"scoring": {"stack_match": 5, "recency": 5}})  # odd, unnormalized weights
+    job = _make_job(description="Java Rust TypeScript Python")
+    assert 0 <= s.score(job) <= 100
 
 
 def test_scoring_sorts_correctly(scorer):

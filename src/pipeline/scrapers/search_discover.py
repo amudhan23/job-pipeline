@@ -26,7 +26,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from urllib.parse import unquote
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -42,6 +42,13 @@ class ATSDomain:
     slug_pattern: str       # regex to extract slug from a URL
     scrapable: bool = True   # whether we have a scraper for it yet
     lowercase: bool = True   # whether slugs are case-insensitive (SmartRecruiters is NOT)
+    extractor: Callable[[str], str | None] | None = None  # custom slug parser
+
+
+def _workday_slug(url: str) -> str | None:
+    """Workday board identity from a job URL (lazy import avoids a cycle)."""
+    from pipeline.scrapers.workday import board_slug_from_url
+    return board_slug_from_url(url)
 
 
 ATS_DOMAINS: list[ATSDomain] = [
@@ -54,6 +61,9 @@ ATS_DOMAINS: list[ATSDomain] = [
     ATSDomain("smartrecruiters", "jobs.smartrecruiters.com", r"jobs\.smartrecruiters\.com/([^/?#]+)", lowercase=False),
     ATSDomain("workable", "apply.workable.com", r"apply\.workable\.com/([^/?#]+)"),
     ATSDomain("bamboohr", "bamboohr.com", r"https?://([^.]+)\.bamboohr\.com"),
+    # Workday: one board = tenant + server + career site, so a custom parser
+    ATSDomain("workday", "myworkdayjobs.com", "", extractor=_workday_slug),
+    ATSDomain("workday", "myworkdaysite.com", "", extractor=_workday_slug),
     # Platforms the a16z post lists — login/key required, scrapers are a follow-up
     ATSDomain("jobvite", "jobs.jobvite.com", r"jobs\.jobvite\.com/([^/?#]+)", scrapable=False),
     ATSDomain("icims", "careers.icims.com", r"careers\.icims\.com/([^/?#]+)", scrapable=False),
@@ -156,6 +166,10 @@ def generate_queries(
 def _extract_slug(url: str) -> tuple[str, str] | None:
     """Extract (platform, slug) from a result URL, or None."""
     for ats in ATS_DOMAINS:
+        if ats.extractor:
+            if ats.domain in url and (slug := ats.extractor(url)):
+                return ats.name, slug
+            continue
         m = re.search(ats.slug_pattern, url)
         if m:
             slug = m.group(1).strip()

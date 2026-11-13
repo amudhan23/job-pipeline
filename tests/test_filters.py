@@ -63,6 +63,9 @@ class TestLocationFilter:
         assert not s.passes_filters("Software Engineer", "Bangalore, India",
                                     description="This role is remote-friendly")
 
+    def test_workday_hyphenated_location(self, s):
+        assert s.passes_filters("Software Engineer", "US-NY-New-York")
+
     def test_plain_remote_kept(self, s):
         assert s.passes_filters("Software Engineer", "Remote")
 

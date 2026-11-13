@@ -115,11 +115,11 @@ class TestSimplifyFeed:
         jobs, boards = SimplifyFeed().parse([jv], _accept_all)
         assert boards == set() and jobs[0].platform == ATSPlatform.OTHER
 
-    def test_workday_roles_kept_as_feed_jobs(self):
+    def test_workday_roles_register_their_board(self):
         wd = _listing(url="https://acme.wd1.myworkdayjobs.com/en-US/careers/job/123")
         jobs, boards = SimplifyFeed().parse([wd], _accept_all)
         assert jobs[0].platform == ATSPlatform.WORKDAY
-        assert boards == set()
+        assert boards == {("workday", "acme.wd1.myworkdayjobs.com/careers")}
 
 
 # ── Query generation for discovery ─────────────────────────────────────

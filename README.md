@@ -47,6 +47,8 @@ jobpipe dashboard
 | `jobpipe run --no-discover` | Skip web search; just re-scrape boards already found |
 | `jobpipe scrape` | Discover + scrape only (no scoring) |
 | `jobpipe boards` | List every company board discovered so far |
+| `jobpipe sync` | Pull the latest cloud run's results to this machine |
+| `jobpipe state-key --save` | Make the key that encrypts cloud-run data |
 | `jobpipe dashboard` | Web dashboard at localhost:8050 |
 | `jobpipe status` | Latest run's stats and top jobs (`--all` for every saved job) |
 | `jobpipe export jobs.csv` | Export to CSV |
@@ -118,7 +120,7 @@ data/h1b_seed.json   # H-1B filing data for 93 tech companies
 
 ## ATS coverage
 
-Six public, no-login ATS platforms are scraped directly:
+Seven platforms are scraped directly through their public, no-login job APIs:
 
 | Platform | API | Notes |
 |----------|-----|-------|
@@ -128,10 +130,10 @@ Six public, no-login ATS platforms are scraped directly:
 | SmartRecruiters | `api.smartrecruiters.com` | Paginated; detail call per job; feed is tier-dependent |
 | Workable | `apply.workable.com` | Full descriptions with `details=true` |
 | BambooHR | `{slug}.bamboohr.com` | Subdomain slug; detail call per job |
+| Workday | `{tenant}.wdN.myworkdayjobs.com/wday/cxs/…` | Searches per role keyword; undocumented API, parsed defensively |
 
-Login/key-gated platforms (iCIMS, Jobvite, Jazz, Workday, LinkedIn) are
-discovery-only for now — `discover` will find companies on them, but there's
-no scraper yet.
+iCIMS, Jobvite, Jazz and LinkedIn have no public job API — discovery finds
+companies on them and the feed supplies their roles, but they aren't scraped.
 
 ## How discovery works
 
@@ -145,9 +147,9 @@ There is no company list. Every `jobpipe run` starts from the web:
    `SERPAPI_KEY` for Google results. If the search engine starts throttling,
    discovery stops early and the run carries on with boards already known.
 2. **Job feeds** — the SimplifyJobs New-Grad list (updated daily, ~500 companies
-   a month). Feed jobs are kept directly — including Workday and iCIMS roles we
-   can't scrape — and every feed link that points at a scrapable board
-   registers that company's whole board.
+   a month). Feed jobs are kept directly — including iCIMS and custom-site
+   roles we can't scrape — and every feed link that points at a scrapable board
+   (including Workday) registers that company's whole board.
 3. **Board registry** (`data/registry.db`) — every board found is saved and
    scraped on every later run, so a company found once keeps being checked.
    A board that fails 3 runs in a row (company left that ATS) is retired.
@@ -166,6 +168,33 @@ Every run prints a one-line web search report, e.g.
 `Web search (duckduckgo): 63/63 queries, 410 result links, 88 on job boards → 31 companies`,
 plus a warning explaining why if it found nothing (blocked, no results, or
 results that weren't job boards).
+
+## Scheduled runs (GitHub Actions)
+
+`.github/workflows/pipeline.yml` runs the pipeline in the cloud — every 3
+hours it re-checks every known board; twice a day it also searches the web
+for new companies. Your laptop can be off.
+
+Between runs the databases are saved as **one encrypted file** on the
+`pipeline-data` branch (force-pushed, so it never grows). The repo is public,
+so the workflow refuses to run without the encryption key, and its logs print
+counts only — no job list.
+
+One-time setup:
+
+```bash
+jobpipe state-key --save     # prints a key and saves it on this machine
+```
+
+1. GitHub → repo → **Settings → Secrets and variables → Actions → New
+   repository secret**: name `JOBPIPE_STATE_KEY`, value = the printed key.
+2. **Actions** tab → enable workflows if asked → **job-pipeline → Run workflow**.
+3. When it finishes: `jobpipe sync` pulls the results to your laptop, then
+   `jobpipe dashboard`.
+
+Cloud runs use the `config/profile.yaml` on GitHub, so push config changes.
+Optional secret: `SERPER_API_KEY` for better web search (datacenter IPs are
+often blocked by DuckDuckGo; the run carries on with known boards if so).
 
 ## Freshness
 

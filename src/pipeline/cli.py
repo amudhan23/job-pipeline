@@ -56,7 +56,7 @@ def scrape(ctx: click.Context, limit: int, no_discover: bool, recency: str | Non
         discover=not no_discover, recency=recency, max_age_days=days))
     _print_run_summary(pipeline)
     console.print(f"\n[bold green]Scraped {len(jobs)} matching jobs[/bold green]\n")
-    if jobs:
+    if jobs and limit > 0:  # --limit 0: counts only (used by public CI logs)
         console.print(_jobs_table(jobs[:limit]))
 
 
@@ -71,7 +71,7 @@ def run(ctx: click.Context, limit: int, no_discover: bool, recency: str | None,
         discover=not no_discover, recency=recency, max_age_days=days))
     _print_run_summary(pipeline)
     console.print(f"\n[bold green]Pipeline complete: {len(jobs)} jobs processed[/bold green]\n")
-    if jobs:
+    if jobs and limit > 0:  # --limit 0: counts only (used by public CI logs)
         console.print(_jobs_table(jobs[:limit]))
 
 
@@ -340,6 +340,78 @@ def boards(ctx: click.Context, platform: str | None, limit: int) -> None:
         table.add_row(b.display_name, b.platform, b.slug, b.source, b.first_seen[:10],
                       str(b.last_job_count), status)
     console.print(table)
+
+
+@main.command("state-key")
+@click.option("--save", is_flag=True, help="Also save it to ~/.config/jobpipe/state_key")
+def state_key(save: bool) -> None:
+    """Make the key that encrypts the job data stored by cloud runs."""
+    from pipeline.state import new_key, save_key
+    key = new_key()
+    console.print(f"\n[bold]{key}[/bold]\n")
+    if save:
+        console.print(f"Saved to {save_key(key)}")
+    console.print("Add it in GitHub → your repo → Settings → Secrets and variables → Actions "
+                  "→ New repository secret, named [bold]JOBPIPE_STATE_KEY[/bold].")
+    console.print("[dim]Keep it private: anyone with this key can read your saved job data.[/dim]")
+
+
+@main.group()
+def state() -> None:
+    """Export/import the encrypted job databases (used by cloud runs)."""
+
+
+@state.command("export")
+@click.option("--out", "out_path", required=True, type=click.Path(dir_okay=False))
+def state_export(out_path: str) -> None:
+    from pipeline.state import StateError, export_state, load_key
+    try:
+        Path(out_path).write_bytes(export_state(load_key()))
+    except StateError as e:
+        raise click.ClickException(str(e))
+    console.print(f"Encrypted state written to {out_path}")
+
+
+@state.command("import")
+@click.option("--in", "in_path", required=True, type=click.Path(exists=True, dir_okay=False))
+def state_import(in_path: str) -> None:
+    from pipeline.state import StateError, import_state, load_key
+    try:
+        restored = import_state(Path(in_path).read_bytes(), load_key())
+    except StateError as e:
+        raise click.ClickException(str(e))
+    console.print(f"Restored: {', '.join(restored) or 'nothing'}")
+
+
+@main.command()
+def sync() -> None:
+    """Pull the latest cloud run's results into this machine (for the dashboard)."""
+    import subprocess
+    from pipeline.state import REPO_ROOT, StateError, import_state, load_key
+
+    def git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(REPO_ROOT), *args], capture_output=True)
+
+    try:
+        key = load_key()
+    except StateError as e:
+        raise click.ClickException(str(e))
+    fetch = git("fetch", "--depth=1", "origin", "pipeline-data")
+    if fetch.returncode != 0:
+        raise click.ClickException(
+            "No cloud results yet (no pipeline-data branch). Has the GitHub Action run? "
+            + fetch.stderr.decode().strip())
+    blob = git("show", "FETCH_HEAD:state.bin")
+    if blob.returncode != 0:
+        raise click.ClickException("pipeline-data branch has no state.bin")
+    try:
+        restored = import_state(blob.stdout, key)
+    except StateError as e:
+        raise click.ClickException(str(e))
+    stamp = git("log", "-1", "--format=%cd", "--date=local", "FETCH_HEAD").stdout.decode().strip()
+    console.print(f"[green]Synced {', '.join(restored)} from the cloud run of {stamp}.[/green]")
+    console.print("[dim]Your previous local databases are in data/backup-*/. "
+                  "Run `jobpipe dashboard` to browse.[/dim]")
 
 
 def _jobs_table(jobs: list) -> Table:

@@ -64,26 +64,27 @@ class BaseScraper(ABC):
         jobs, _ = await self.scrape_many(company_slugs)
         return jobs
 
-    def passes_filters(self, title: str, location: str, description: str = "") -> bool:
-        """Check if a job passes the configured filters."""
+    def passes_title(self, title: str) -> bool:
+        """Role keyword present and no exclude keyword (whole words)."""
         title_lower = title.lower()
-
-        # Must match at least one role keyword
         role_keywords = self.filters.get("role_keywords", [])
         if role_keywords and not any(kw.lower() in title_lower for kw in role_keywords):
             return False
-
-        # Must not match any exclude keyword — whole words, so "sr" catches
-        # "Sr Software Engineer" but not "Israel"
+        # Whole words, so "sr" catches "Sr Software Engineer" but not "Israel"
         exclude = self.filters.get("exclude_keywords", [])
-        if any(_has_word(title_lower, exc) for exc in exclude):
+        return not any(_has_word(title_lower, exc) for exc in exclude)
+
+    def passes_filters(self, title: str, location: str, description: str = "") -> bool:
+        """Check if a job passes the configured filters."""
+        if not self.passes_title(title):
             return False
 
         target_locations = self.filters.get("locations", [])
         if not target_locations:
             return True
 
-        loc_lower = location.lower()
+        # "US-NY-New-York" (Workday style) should match "New York"
+        loc_lower = re.sub(r"[-_]+", " ", location.lower())
         if not loc_lower.strip():
             # No location given — fall back to the JD saying it's remote
             return "remote" in description.lower()[:500]

@@ -6,6 +6,7 @@ from .lever import LeverScraper
 from .smartrecruiters import SmartRecruitersScraper
 from .workable import WorkableScraper
 from .bamboohr import BambooHRScraper
+from .workday import WorkdayScraper
 from .base import BaseScraper
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "SmartRecruitersScraper",
     "WorkableScraper",
     "BambooHRScraper",
+    "WorkdayScraper",
     "BaseScraper",
 ]

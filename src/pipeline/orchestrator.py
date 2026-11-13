@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from typing import Any
 
 from pipeline.discovery import BoardRegistry, SimplifyFeed, normalize_url
@@ -28,28 +28,17 @@ from pipeline.discovery.registry import pretty_slug
 from pipeline.models import Job
 from pipeline.scrapers import (
     GreenhouseScraper, AshbyScraper, LeverScraper,
-    SmartRecruitersScraper, WorkableScraper, BambooHRScraper,
+    SmartRecruitersScraper, WorkableScraper, BambooHRScraper, WorkdayScraper,
 )
 from pipeline.scrapers.search_discover import discover as web_discover
 from pipeline.filters import SponsorshipFilter
 from pipeline.scoring import FitScorer
 from pipeline.tracker import Tracker
+from pipeline.utils.dates import job_age  # noqa: F401  (re-exported for the CLI)
 
 logger = logging.getLogger(__name__)
 
 RECENCY_DAYS = {"day": 1, "week": 7, "month": 30, "year": 365}
-
-
-def _as_utc(dt: datetime) -> datetime:
-    """Scrapers return a mix of tz-aware and naive datetimes; normalize."""
-    return dt.astimezone(timezone.utc) if dt.tzinfo else dt.astimezone().astimezone(timezone.utc)
-
-
-def job_age(job: Job) -> timedelta | None:
-    """How long ago a job was posted, or None if the source gave no date."""
-    if not job.posted_at:
-        return None
-    return datetime.now(timezone.utc) - _as_utc(job.posted_at)
 
 
 @dataclass
@@ -84,6 +73,7 @@ class Pipeline:
             "smartrecruiters": SmartRecruitersScraper(config),
             "workable": WorkableScraper(config),
             "bamboohr": BambooHRScraper(config),
+            "workday": WorkdayScraper(config),
         }
         self.sponsorship = SponsorshipFilter(
             blocklist=config.get("sponsorship_blocklist", []),
