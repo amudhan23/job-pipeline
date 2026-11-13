@@ -603,3 +603,20 @@ def test_applied_job_not_offered_again(tmp_path, monkeypatch):
     _submit_cli(tmp_path, monkeypatch, SUBMIT.resolve().as_uri(), ["--submit", "--yes"])
     again = CliRunner().invoke(main, ["apply", "--submit", "--yes"])
     assert again.exit_code != 0 and "No matching jobs" in again.output
+
+
+def test_round4_answers():
+    d = {"city": "New York, NY", "pronouns": "Decline to self-identify", "referral_source": "LinkedIn"}
+    st = answer_for("Which U.S. State or Canadian Province do you reside in?*", d)
+    assert st.value == "New York" and st.alternates == ["NY"]
+    assert answer_for("Pronouns *", d).value == "Decline to self-identify"
+    assert pick_option("Decline to self-identify", ["He/him", "She/her", "Prefer not to say"]) == "Prefer not to say"
+    assert answer_for("How did you first learn about Affirm as an employer? *", d).value == "LinkedIn"
+    affirm = ["I have not previously been employed at Affirm", "I have previously been employed at Affirm"]
+    assert pick_option("No", affirm) == affirm[0]
+    assert pick_option("Yes", affirm) == affirm[1]
+    assert pick_option("No", ["I have not previously been employed at Affirm"]) == \
+        "I have not previously been employed at Affirm"
+    # a lone statement isn't a Yes
+    assert pick_option("Yes", ["I have not previously been employed at Affirm"]) is None
+    assert answer_for("Where are you located?", d).value == "New York, NY"     # still the city rule

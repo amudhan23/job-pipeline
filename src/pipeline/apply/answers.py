@@ -56,9 +56,10 @@ _RULES: list[tuple[str, str]] = [
     (r"^country\b|country of residence|country you live|\bcountry\b(?!.*citizen)", "country"),
     (r"veteran", "veteran"),
     (r"disabilit", "disability"),
+    (r"pronoun", "pronouns"),
     (r"gender|\bsex\b", "gender"),
     (r"\brace\b|ethnicit|hispanic|latino", "race"),
-    (r"hear about|how did you (find|learn)|referr?al source|^source\b|application source", "referral_source"),
+    (r"hear about|how did you (first )?(find|learn|hear|discover)|referr?al source|^source\b|application source", "referral_source"),
     (r"start date|available to start|earliest|notice period|when can you start", "start_date"),
     (r"relocat", "relocate"),
     (r"salary|compensation|pay (range|expectation)|desired pay", "salary"),
@@ -67,6 +68,8 @@ _RULES: list[tuple[str, str]] = [
     (r"discipline|major|field of study|area of study", "major"),
     (r"\bdegree\b", "degree"),
     (r"school|university|college|institution", "school"),
+    (r"\b(state|province)\b.*\b(reside|live|located|based)\b|\b(reside|live)\b.*\b(state|province)\b|"
+     r"^state\b|state of residence", "state"),
     (r"location|city|where are you (based|located)|current address|address", "city"),
 ]
 
@@ -105,7 +108,7 @@ def answer_for(label: str, details: dict[str, str], company: str = "",
             return _sponsorship(text, details)
         if field in ("current_employer", "past_employers"):
             return _employer(text, field, details, company)
-        if field in ("us_person", "clearance", "in_us"):
+        if field in ("us_person", "clearance", "in_us", "state"):
             return _derived(field, details)
         value = details.get(field, "")
         if not value:
@@ -123,6 +126,16 @@ def answer_for(label: str, details: dict[str, str], company: str = "",
     return None
 
 
+_STATES = dict(pair.split(":") for pair in (
+    "AL:Alabama,AK:Alaska,AZ:Arizona,AR:Arkansas,CA:California,CO:Colorado,CT:Connecticut,"
+    "DE:Delaware,DC:District of Columbia,FL:Florida,GA:Georgia,HI:Hawaii,ID:Idaho,IL:Illinois,"
+    "IN:Indiana,IA:Iowa,KS:Kansas,KY:Kentucky,LA:Louisiana,ME:Maine,MD:Maryland,"
+    "MA:Massachusetts,MI:Michigan,MN:Minnesota,MS:Mississippi,MO:Missouri,MT:Montana,"
+    "NE:Nebraska,NV:Nevada,NH:New Hampshire,NJ:New Jersey,NM:New Mexico,NY:New York,"
+    "NC:North Carolina,ND:North Dakota,OH:Ohio,OK:Oklahoma,OR:Oregon,PA:Pennsylvania,"
+    "RI:Rhode Island,SC:South Carolina,SD:South Dakota,TN:Tennessee,TX:Texas,UT:Utah,"
+    "VT:Vermont,VA:Virginia,WA:Washington,WV:West Virginia,WI:Wisconsin,WY:Wyoming"
+).split(","))
 _US = {"united states", "united states of america", "usa", "us", "u.s.", "u.s.a."}
 
 
@@ -139,6 +152,16 @@ def _derived(field: str, details: dict[str, str]) -> Answer | None:
         if citizenship and not any(c.strip() in _US for c in citizenship.split(",")):
             return Answer("No", "citizenship (clearances need U.S. citizenship)")
         return None
+    if field == "state":
+        # From "City, ST" on My details: "New York, NY" → "New York" (or "NY")
+        parts = [p.strip() for p in details.get("city", "").split(",")]
+        if len(parts) < 2 or not parts[1]:
+            return None
+        abbr = parts[1].upper()
+        name = _STATES.get(abbr)
+        if name:
+            return Answer(name, "city (state)", alternates=[abbr])
+        return Answer(parts[1], "city (state)")
     if field == "us_person":
         if citizenship and any(c.strip() in _US for c in citizenship.split(",")):
             return Answer("U.S. citizen or national", "citizenship")
@@ -180,6 +203,9 @@ _DECLINE_OPT = re.compile(r"decline|do not wish|don.t wish|prefer not|not to (an
                           r"choose not|rather not", re.I)
 
 
+_NEGATED = re.compile(r"\b(not|never|haven.t|hasn.t|don.t|doesn.t|didn.t|am not|isn.t|wasn.t|weren.t)\b", re.I)
+
+
 def pick_option(answer: str, options: list[str]) -> str | None:
     """Choose the option that means `answer`. None if nothing fits safely."""
     opts = [o for o in options if o and o.strip() and not re.fullmatch(r"(select|choose)\b.*|-+|—.*", o.strip(), re.I)]
@@ -192,7 +218,19 @@ def pick_option(answer: str, options: list[str]) -> str | None:
         if o.strip().lower() == a:
             return o
     if a in ("yes", "no"):                           # "Yes, I am authorized…"
-        return next((o for o in opts if re.match(rf"\s*{a}\b", o, re.I)), None)
+        lead = next((o for o in opts if re.match(rf"\s*{a}\b", o, re.I)), None)
+        if lead:
+            return lead
+        # Options written as statements: "I have not previously been employed
+        # at Affirm" / "I have previously…". Only when the negative one is
+        # unambiguous: exactly one negated option, or one plain one.
+        neg = [o for o in opts if _NEGATED.search(o)]
+        pos = [o for o in opts if not _NEGATED.search(o) and not _DECLINE_OPT.search(o)]
+        if a == "no" and len(neg) == 1:
+            return neg[0]
+        if a == "yes" and len(pos) == 1 and neg:
+            return pos[0]
+        return None
     # The answer inside an option: the shortest such option is the closest
     # ("United States" → "United States +1", not "United States Minor
     # Outlying Islands +1", wherever they sit in the list)

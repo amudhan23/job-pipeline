@@ -81,6 +81,8 @@ FIELDS: list[dict[str, Any]] = [
      "default": "Online job board"},
 
     {"section": "Voluntary self-identification (optional)"},
+    {"key": "pronouns", "label": "Pronouns", "kind": "choice",
+     "options": [DECLINE, "He/him", "She/her", "They/them"], "default": DECLINE},
     {"key": "gender", "label": "Gender", "kind": "choice",
      "options": [DECLINE, "Male", "Female", "Non-binary"], "default": DECLINE},
     {"key": "race", "label": "Race / ethnicity", "kind": "choice",
