@@ -37,10 +37,11 @@ logger = logging.getLogger(__name__)
 # Each entry: the search domain, and a regex whose group(1) is the slug.
 @dataclass
 class ATSDomain:
-    name: str              # our internal platform key (greenhouse/ashby/lever)
-    domain: str            # the site: domain to search
-    slug_pattern: str      # regex to extract slug from a URL
-    scrapable: bool = True  # whether we have a scraper for it yet
+    name: str               # our internal platform key (greenhouse/ashby/lever)
+    domain: str             # the site: domain to search
+    slug_pattern: str       # regex to extract slug from a URL
+    scrapable: bool = True   # whether we have a scraper for it yet
+    lowercase: bool = True   # whether slugs are case-insensitive (SmartRecruiters is NOT)
 
 
 ATS_DOMAINS: list[ATSDomain] = [
@@ -49,7 +50,8 @@ ATS_DOMAINS: list[ATSDomain] = [
     ATSDomain("greenhouse", "job-boards.greenhouse.io", r"job-boards\.greenhouse\.io/([^/?#]+)"),
     ATSDomain("ashby", "jobs.ashbyhq.com", r"jobs\.ashbyhq\.com/([^/?#]+)"),
     ATSDomain("lever", "jobs.lever.co", r"jobs\.lever\.co/([^/?#]+)"),
-    ATSDomain("smartrecruiters", "jobs.smartrecruiters.com", r"jobs\.smartrecruiters\.com/([^/?#]+)"),
+    # SmartRecruiters slugs are case-sensitive (e.g. "Visa") — do not lowercase.
+    ATSDomain("smartrecruiters", "jobs.smartrecruiters.com", r"jobs\.smartrecruiters\.com/([^/?#]+)", lowercase=False),
     ATSDomain("workable", "apply.workable.com", r"apply\.workable\.com/([^/?#]+)"),
     ATSDomain("bamboohr", "bamboohr.com", r"https?://([^.]+)\.bamboohr\.com"),
     # Platforms the a16z post lists — login/key required, scrapers are a follow-up
@@ -136,9 +138,12 @@ def _extract_slug(url: str) -> tuple[str, str] | None:
     for ats in ATS_DOMAINS:
         m = re.search(ats.slug_pattern, url)
         if m:
-            slug = m.group(1).strip().lower()
-            if slug and slug not in _SLUG_BLOCKLIST:
-                return ats.name, slug
+            slug = m.group(1).strip()
+            # Case-insensitive platforms normalize to lowercase; SmartRecruiters
+            # keeps its original case because its API slugs are case-sensitive.
+            key = slug.lower() if ats.lowercase else slug
+            if key and key.lower() not in _SLUG_BLOCKLIST:
+                return ats.name, key
     return None
 
 

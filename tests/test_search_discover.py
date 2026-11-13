@@ -65,8 +65,9 @@ class TestSlugExtraction:
     def test_lever(self):
         assert _extract_slug("https://jobs.lever.co/spotify/uuid") == ("lever", "spotify")
 
-    def test_smartrecruiters_lowercases(self):
-        assert _extract_slug("https://jobs.smartrecruiters.com/Square/123") == ("smartrecruiters", "square")
+    def test_smartrecruiters_preserves_case(self):
+        # SmartRecruiters slugs are case-sensitive — must NOT be lowercased
+        assert _extract_slug("https://jobs.smartrecruiters.com/Visa/123") == ("smartrecruiters", "Visa")
 
     def test_workable(self):
         assert _extract_slug("https://apply.workable.com/huggingface/") == ("workable", "huggingface")
