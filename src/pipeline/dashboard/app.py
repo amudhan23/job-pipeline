@@ -116,6 +116,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <div class="header">
     <h1>🎯 Job <span>Pipeline</span></h1>
     <div style="color:var(--muted);font-size:13px">
+      <a href="/profile" style="margin-right:16px">My details →</a>
       Last refresh: <span id="refreshTime">—</span>
     </div>
   </div>
@@ -317,21 +318,246 @@ setInterval(loadJobs, 60000);
 </html>"""
 
 
+PROFILE_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>My details · Job Pipeline</title>
+<style>
+  :root { --bg:#0f172a; --surface:#1e293b; --border:#334155; --text:#e2e8f0;
+          --muted:#94a3b8; --accent:#38bdf8; --green:#4ade80; --red:#f87171; --yellow:#fbbf24; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
+  .wrap { max-width:760px; margin:0 auto; padding:24px 20px 80px; }
+  a { color:var(--accent); text-decoration:none; }
+  h1 { font-size:24px; margin-bottom:6px; }
+  .sub { color:var(--muted); font-size:14px; margin-bottom:22px; line-height:1.5; }
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:20px; margin-bottom:18px; }
+  .drop { border:2px dashed var(--border); border-radius:10px; padding:22px; text-align:center; cursor:pointer; color:var(--muted); }
+  .drop:hover, .drop.over { border-color:var(--accent); color:var(--text); }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); margin:6px 0 14px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .full { grid-column:1 / -1; }
+  label { display:block; font-size:13px; margin-bottom:5px; }
+  input, select { width:100%; background:var(--bg); border:1px solid var(--border); color:var(--text);
+                  padding:9px 11px; border-radius:6px; font-size:14px; outline:none; }
+  input:focus, select:focus { border-color:var(--accent); }
+  .filled { border-color:var(--yellow) !important; box-shadow:0 0 0 2px rgba(251,191,36,.15); }
+  .help { color:var(--muted); font-size:12px; margin-top:4px; }
+  .bar { position:sticky; bottom:0; background:var(--bg); padding:14px 0; display:flex; gap:12px; align-items:center;
+         border-top:1px solid var(--border); }
+  button { background:var(--accent); color:#0f172a; border:0; padding:10px 22px; border-radius:6px; font-weight:600; font-size:14px; cursor:pointer; }
+  #status { font-size:13px; }
+  .ok { color:var(--green); } .err { color:var(--red); } .warn { color:var(--yellow); }
+  .lock { font-size:12px; color:var(--muted); margin-top:10px; }
+  @media (max-width:600px) { .grid { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a href="/">← Jobs</a>
+  <h1 style="margin-top:14px">My details</h1>
+  <p class="sub">The answers application forms ask for. Upload your resume to pre-fill what it contains —
+    pre-filled boxes are <span class="warn">highlighted</span> so you can check them.
+    Nothing you typed is ever overwritten.</p>
+
+  <div class="card">
+    <div class="drop" id="drop">
+      <strong id="resumeLabel">Upload resume (PDF)</strong><br>
+      <span style="font-size:13px">Click or drop a file · it's stored on this machine and attached to applications</span>
+    </div>
+    <input type="file" id="file" accept="application/pdf" hidden>
+    <div class="lock">🔒 Saved only on this computer (data/private/, excluded from git). Never committed to your public repo.</div>
+  </div>
+
+  <div id="missing" class="card warn" style="display:none"></div>
+  <form id="form"></form>
+
+  <div class="bar"><button id="save">Save</button><span id="status"></span></div>
+</div>
+
+<script>
+let fields = [];
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }
+
+function render(data) {
+  fields = data.fields;
+  const form = document.getElementById('form');
+  let html = '', open = false;
+  for (const f of fields) {
+    if (f.section) {
+      if (open) html += '</div></div>';
+      html += `<div class="card"><h2>${esc(f.section)}</h2><div class="grid">`;
+      open = true; continue;
+    }
+    const v = data.values[f.key] ?? '';
+    const wide = f.label.length > 38 ? ' full' : '';
+    let input;
+    if (f.kind === 'choice') {
+      input = `<select id="${f.key}">` + f.options.map(o =>
+        `<option value="${esc(o)}"${o === v ? ' selected' : ''}>${o ? esc(o) : '— choose —'}</option>`).join('') + '</select>';
+    } else {
+      const type = {email:'email', tel:'tel', url:'url'}[f.kind] || 'text';
+      input = `<input id="${f.key}" type="${type}" value="${esc(v)}">`;
+    }
+    html += `<div class="${wide.trim()}"><label for="${f.key}">${esc(f.label)}</label>${input}` +
+            (f.help ? `<div class="help">${esc(f.help)}</div>` : '') + '</div>';
+  }
+  if (open) html += '</div></div>';
+  form.innerHTML = html;
+  showMeta(data);
+}
+
+function showMeta(data) {
+  document.getElementById('resumeLabel').textContent =
+    data.has_resume ? '✓ Resume on file — click to replace' : 'Upload resume (PDF)';
+  const m = document.getElementById('missing');
+  if (data.missing && data.missing.length) {
+    m.style.display = 'block';
+    m.innerHTML = '<strong>Auto-apply still needs:</strong> ' + data.missing.map(esc).join(', ');
+  } else { m.style.display = 'none'; }
+}
+
+function values() {
+  const out = {};
+  for (const f of fields) if (f.key) out[f.key] = document.getElementById(f.key).value;
+  return out;
+}
+
+function status(msg, cls) { const s = document.getElementById('status'); s.textContent = msg; s.className = cls; }
+
+async function load() {
+  const r = await fetch('/api/profile');
+  render(await r.json());
+}
+
+async function save(e) {
+  e && e.preventDefault();
+  const r = await fetch('/api/profile', {method:'POST', headers:{'Content-Type':'application/json'},
+                                         body: JSON.stringify(values())});
+  const data = await r.json();
+  if (!r.ok) return status(data.error || 'Save failed', 'err');
+  document.querySelectorAll('.filled').forEach(el => el.classList.remove('filled'));
+  showMeta(data);
+  status('Saved ✓', 'ok');
+}
+
+async function upload(file) {
+  if (!file) return;
+  if (file.type !== 'application/pdf') return status('Please choose a PDF', 'err');
+  status('Reading resume…', '');
+  const r = await fetch('/api/resume', {method:'POST', headers:{'Content-Type':'application/pdf'}, body:file});
+  const data = await r.json();
+  if (!r.ok) return status(data.error || 'Upload failed', 'err');
+  let n = 0;
+  for (const [k, v] of Object.entries(data.found || {})) {
+    const el = document.getElementById(k);
+    if (el && !el.value.trim()) { el.value = v; el.classList.add('filled'); n++; }
+  }
+  document.getElementById('resumeLabel').textContent = '✓ Resume on file — click to replace';
+  status(n ? `Resume saved. Pre-filled ${n} field${n>1?'s':''} — check the highlighted boxes, then Save.`
+           : 'Resume saved. Nothing new to pre-fill.', n ? 'warn' : 'ok');
+}
+
+const drop = document.getElementById('drop'), file = document.getElementById('file');
+drop.onclick = () => file.click();
+file.onchange = () => upload(file.files[0]);
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); upload(e.dataTransfer.files[0]); };
+document.getElementById('save').onclick = save;
+document.getElementById('form').onsubmit = save;
+load();
+</script>
+</body>
+</html>"""
+
+
 class DashboardHandler(SimpleHTTPRequestHandler):
     """HTTP handler serving the dashboard and API."""
 
     db_path: Path = DEFAULT_DB_PATH
+    private_dir: Path | None = None  # None → applicant.PRIVATE_DIR
+
+    # ── Local-only guard ────────────────────────────────────────────────
+    # The server binds 127.0.0.1, and also rejects requests whose Host or
+    # Origin isn't localhost (stops DNS-rebinding and cross-site reads of
+    # your private details from other websites open in your browser).
+    _LOCAL = {"localhost", "127.0.0.1", "[::1]"}
+
+    def _is_local_request(self) -> bool:
+        host = (self.headers.get("Host") or "").rsplit(":", 1)[0].lower()
+        if host not in self._LOCAL:
+            return False
+        origin = self.headers.get("Origin")
+        if origin:
+            o = urlparse(origin).hostname or ""
+            if o.lower() not in {"localhost", "127.0.0.1", "::1"}:
+                return False
+        return True
+
+    def _pdir(self) -> Path:
+        from pipeline import applicant
+        return self.private_dir or applicant.PRIVATE_DIR
 
     def do_GET(self) -> None:
+        if not self._is_local_request():
+            return self.send_error(403, "Dashboard only answers requests from this machine")
         parsed = urlparse(self.path)
 
         if parsed.path == "/" or parsed.path == "/index.html":
             self._send_html(DASHBOARD_HTML)
+        elif parsed.path == "/profile":
+            self._send_html(PROFILE_HTML)
         elif parsed.path == "/api/jobs":
             scope = parse_qs(parsed.query).get("scope", ["latest"])[0]
             self._send_json(self._get_jobs_data(scope))
+        elif parsed.path == "/api/profile":
+            self._send_json(self._profile_payload())
         else:
             self.send_error(404)
+
+    def do_POST(self) -> None:
+        from pipeline import applicant
+        if not self._is_local_request():
+            return self.send_error(403, "Dashboard only answers requests from this machine")
+        path = urlparse(self.path).path
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > applicant.MAX_RESUME_BYTES + 1024:
+            return self._send_json({"error": "Upload too large (max 10 MB)"}, 413)
+        body = self.rfile.read(length)
+
+        try:
+            if path == "/api/profile":
+                if ctype != "application/json":  # forces a CORS preflight for cross-site posts
+                    return self._send_json({"error": "Expected application/json"}, 415)
+                applicant.save(json.loads(body or b"{}"), self._pdir())
+                return self._send_json(self._profile_payload())
+            if path == "/api/resume":
+                if ctype != "application/pdf":
+                    return self._send_json({"error": "Upload a PDF"}, 415)
+                applicant.save_resume(body, self._pdir())
+                try:
+                    found = applicant.parse_resume(applicant.resume_text(body))
+                except Exception:
+                    found = {}  # unreadable PDF text (e.g. scanned image) — still saved
+                return self._send_json({"found": found, "has_resume": True})
+        except (ValueError, json.JSONDecodeError) as e:
+            return self._send_json({"error": str(e)}, 400)
+        self.send_error(404)
+
+    def _profile_payload(self) -> dict[str, Any]:
+        from pipeline import applicant
+        values = applicant.load(self._pdir())
+        return {
+            "fields": applicant.FIELDS,
+            "values": values,
+            "has_resume": applicant.has_resume(self._pdir()),
+            "missing": applicant.missing_required(values),
+        }
 
     def _get_jobs_data(self, scope: str = "latest") -> dict[str, Any]:
         """Jobs from the latest pipeline run (default) or every saved job."""
@@ -374,10 +600,12 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(content.encode())
 
-    def _send_json(self, data: dict) -> None:
-        self.send_response(200)
+    def _send_json(self, data: dict, status: int = 200) -> None:
+        # No Access-Control-Allow-Origin header: other websites must not be
+        # able to read this API through your browser.
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(json.dumps(data, default=str).encode())
 
@@ -386,7 +614,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         pass
 
 
-def run_dashboard(host: str = "0.0.0.0", port: int = 8050, db_path: Path | None = None) -> None:
+def run_dashboard(host: str = "127.0.0.1", port: int = 8050, db_path: Path | None = None) -> None:
     """Start the dashboard web server."""
     if db_path:
         DashboardHandler.db_path = db_path

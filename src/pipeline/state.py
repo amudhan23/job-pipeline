@@ -22,6 +22,10 @@ from cryptography.fernet import Fernet, InvalidToken
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = REPO_ROOT / "data"
+# Pipeline databases only. Your application details (data/private/) are NOT
+# here: they're written on your laptop, and `sync` copies cloud → laptop, so
+# including them would overwrite local edits with a stale cloud copy. They'll
+# get their own one-way laptop → cloud push when auto-apply runs in the cloud.
 STATE_FILES = ("registry.db", "tracker.db", "h1b_cache.db")
 KEY_FILE = Path.home() / ".config" / "jobpipe" / "state_key"
 KEEP_BACKUPS = 3
@@ -85,10 +89,16 @@ def import_state(blob: bytes, key: str, data_dir: Path = DATA_DIR) -> list[str]:
             backup = data_dir / f"backup-{datetime.now():%Y%m%d-%H%M%S-%f}"
             backup.mkdir()
             for path in existing:
-                shutil.move(str(path), backup / path.name)
+                dest = backup / path.relative_to(data_dir)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(path), dest)
             for old in sorted(data_dir.glob("backup-*"))[:-KEEP_BACKUPS]:
                 shutil.rmtree(old, ignore_errors=True)
         for member in members:
             src = tar.extractfile(member)
-            (data_dir / member.name).write_bytes(src.read())
+            target = data_dir / member.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(src.read())
+            if member.name.startswith("private/"):
+                target.chmod(0o600)
     return [m.name for m in members]

@@ -209,16 +209,16 @@ class ResumeGenerator:
 
         # 1. Fill in bullet text from config
         ibm_bullets = self.resume_config.get("ibm_bullets", {})
-        result = result.replace("[IBM_OWN]", ibm_bullets.get("own", ""))
-        result = result.replace("[IBM_MIG]", ibm_bullets.get("mig", ""))
-        result = result.replace("[IBM_DBG]", ibm_bullets.get("dbg", ""))
-        result = result.replace("[IBM_CI]", ibm_bullets.get("ci", ""))
-        result = result.replace("[IBM_DB]", ibm_bullets.get("db", ""))
+        result = result.replace("[IBM_OWN]", self._escape_latex(ibm_bullets.get("own", "")))
+        result = result.replace("[IBM_MIG]", self._escape_latex(ibm_bullets.get("mig", "")))
+        result = result.replace("[IBM_DBG]", self._escape_latex(ibm_bullets.get("dbg", "")))
+        result = result.replace("[IBM_CI]", self._escape_latex(ibm_bullets.get("ci", "")))
+        result = result.replace("[IBM_DB]", self._escape_latex(ibm_bullets.get("db", "")))
 
         sahara_bullets = self.resume_config.get("sahara_bullets", {})
-        result = result.replace("[SAHARA_SHIP]", sahara_bullets.get("ship", ""))
-        result = result.replace("[SAHARA_INT]", sahara_bullets.get("int", ""))
-        result = result.replace("[SAHARA_TX]", sahara_bullets.get("tx", ""))
+        result = result.replace("[SAHARA_SHIP]", self._escape_latex(sahara_bullets.get("ship", "")))
+        result = result.replace("[SAHARA_INT]", self._escape_latex(sahara_bullets.get("int", "")))
+        result = result.replace("[SAHARA_TX]", self._escape_latex(sahara_bullets.get("tx", "")))
 
         # Fill project descriptions
         projects_config = self.resume_config.get("projects", {})
@@ -298,7 +298,7 @@ class ResumeGenerator:
                     start_marker.split("_")[0].lower() + "_bullets", {}
                 )
                 bullet_text = bullet_config.get(key, "")
-                if bullet_text and bullet_text[:30] in line:
+                if bullet_text and self._escape_latex(bullet_text)[:30] in line:
                     key_map[key] = line
                     break
 

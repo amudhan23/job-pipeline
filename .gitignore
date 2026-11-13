@@ -15,6 +15,9 @@ env/
 # Data (local databases, don't commit)
 data/*.db
 *.db
+# Your application details + resume — NEVER commit (repo is public)
+data/private/
+data/backup-*/
 # But track seed files
 !data/h1b_seed.json
 
