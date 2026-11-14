@@ -1,0 +1,28 @@
+# Fly.io: one always-on machine with a volume for the databases and your details.
+#   fly launch --no-deploy --copy-config        (pick a unique app name)
+#   fly volumes create jobpipe_data --size 1 --region ewr
+#   fly secrets set JOBPIPE_DASHBOARD_TOKEN=$(openssl rand -hex 24)
+#   fly deploy
+app = "jobpipe-change-me"
+primary_region = "ewr"            # Newark, close to New York
+
+[build]
+
+[env]
+  PORT = "8050"
+  JOBPIPE_HEADLESS_ONLY = "1"
+
+[http_service]
+  internal_port = 8050
+  force_https = true
+  auto_stop_machines = "off"      # the crawler must keep running
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[mounts]]
+  source = "jobpipe_data"
+  destination = "/app/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"                  # headless Chromium for auto-apply needs the room

@@ -1,0 +1,27 @@
+# Any Linux server (a $4–6/month VPS is plenty):
+#   echo "JOBPIPE_DASHBOARD_TOKEN=$(openssl rand -hex 24)" > .env
+#   docker compose up -d --build
+# The dashboard is only published on the server's localhost. Reach it with an
+# SSH tunnel (ssh -L 8050:localhost:8050 you@server, then http://localhost:8050),
+# or uncomment the caddy service for HTTPS on your own domain.
+services:
+  jobpipe:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    ports:
+      - "127.0.0.1:8050:8050"
+    volumes:
+      - ./data:/app/data
+
+  # caddy:
+  #   image: caddy:2
+  #   restart: unless-stopped
+  #   ports: ["80:80", "443:443"]
+  #   command: caddy reverse-proxy --from jobs.example.com --to jobpipe:8050
+  #   volumes: ["caddy_data:/data"]
+
+# volumes:
+#   caddy_data:

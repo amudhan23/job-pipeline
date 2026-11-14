@@ -41,3 +41,6 @@ select = ["E", "F", "I", "N", "W"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
+
+[tool.setuptools.package-data]
+pipeline = ["dashboard/static/*"]

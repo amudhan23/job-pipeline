@@ -33,8 +33,11 @@ jobpipe seed-h1b
 # Run the full pipeline
 jobpipe run
 
-# Open the dashboard
+# Open the dashboard (http://localhost:8050)
 jobpipe dashboard
+
+# Or: watch every board continuously (new postings within minutes)
+jobpipe watch
 ```
 
 ## CLI commands
@@ -49,7 +52,11 @@ jobpipe dashboard
 | `jobpipe boards` | List every company board discovered so far |
 | `jobpipe sync` | Pull the latest cloud run's results to this machine |
 | `jobpipe state-key --save` | Make the key that encrypts cloud-run data |
+| `jobpipe watch` | Crawl every known board continuously; new postings print as they open |
+| `jobpipe serve` | Crawler + dashboard in one process (what runs in the cloud) |
 | `jobpipe dashboard` | Web dashboard at localhost:8050 |
+| `jobpipe apply --handoff -j ID` | Fill a form, then you finish and submit it in the browser |
+| `jobpipe cloud-push URL` | Copy your details, resume and answers to your cloud dashboard |
 | `jobpipe status` | Latest run's stats and top jobs (`--all` for every saved job) |
 | `jobpipe export jobs.csv` | Export to CSV |
 | `jobpipe resume -j JOB_ID` | Generate tailored resume for a job |
@@ -107,7 +114,11 @@ src/pipeline/
   scoring/           # Weighted fit scorer (stack, experience, location, role type)
   resume/            # LaTeX template engine with marker-based reordering
   tracker/           # SQLite application tracker
-  dashboard/         # Web UI (zero dependencies, stdlib HTTP server)
+  crawler/           # Real-time crawler: frontier policy, polite fetcher, sources, loop
+  dashboard/         # Web UI (stdlib HTTP server + static/ SPA, token auth for remote)
+  apply/             # Form filler (Playwright), answers, submit + handoff
+  ai/                # Claude API: fit check, drafts, picks, budget
+  autoapply.py       # Auto-apply settings, job picking, background runs
   orchestrator.py    # Coordinates all stages
   cli.py             # Click CLI
   models.py          # Core dataclasses (Job, ResumeConfig, Profile)
@@ -117,6 +128,102 @@ config/profile.yaml  # Your profile, filters, stack, company lists
 templates/generic.tex # LaTeX resume template with markers
 data/h1b_seed.json   # H-1B filing data for 93 tech companies
 ```
+
+## Real-time crawler (`jobpipe watch`)
+
+Applying in the first hours matters, so the crawler watches each company's
+own job board — the source, before LinkedIn or aggregators copy it — and
+records the minute a posting appears.
+
+```
+ feeds (5 min, 304 when unchanged) ─┐        ┌─ web discovery (every 6 h)
+                                    ▼        ▼
+                          frontier (registry.db: one row per board,
+                          next_due_at · interval · posting rate · ETag · hash)
+                                    │  most overdue first
+                                    ▼
+                    fetcher: per-host limits, backoff on 429/503,
+                    conditional GET, retries
+                                    │
+                                    ▼
+          source: light listing → body unchanged? stop. Else parse,
+          fetch descriptions only for postings new to us (Greenhouse)
+                                    │
+                                    ▼
+          tracker.observe_board: new → first_seen_at + "new" event,
+          vanished → closed, back → reopened; score + sponsorship on arrival
+                                    │
+                                    ▼
+          reschedule from the board's posting rate · status file · auto-apply hook
+```
+
+- **Revisit policy.** Each board keeps an estimate λ of relevant new postings
+  per day (exponentially weighted). Its revisit interval is
+  `10 min / √(λ + 0.02)`, clamped to 2 min – 3 h, ×0.6 during U.S. office hours
+  and ×1.6 at night/weekends. Sublinear in λ is what minimises the age of
+  missed postings (Cho & Garcia-Molina); quiet boards are still read about
+  hourly. Workday/SmartRecruiters/BambooHR/Workable (a request per job) are
+  never read more than every 30 min.
+- **Cheap reads.** Conditional GETs (`If-None-Match`/`If-Modified-Since`) and a
+  body hash mean an unchanged board costs one small request and no parsing.
+  Greenhouse is polled without descriptions; a description is fetched once,
+  when the posting first appears.
+- **Politeness.** At most 4 requests in flight per host with a minimum gap;
+  a 429/503 pauses that host (honouring `Retry-After`) and widens its gap.
+- **Baseline.** Postings already on a board the first time it's read are
+  saved but not announced as new. From the second read on, every new posting
+  is an event with the minute it was seen; postings that disappear are closed,
+  so the bot never tries a dead job.
+- **Feeds speed it up.** A feed listing a fresh posting makes that company's
+  board due immediately.
+- Tuning lives under `crawler:` in `config/profile.yaml` (`feed_minutes`,
+  `discover_hours`, `concurrency`, `per_host`, `policy: {base_minutes: …}`).
+
+## Dashboard
+
+`jobpipe dashboard` (or `jobpipe serve`) → http://localhost:8050
+
+- **Live jobs** — open postings, freshest first, with “Just opened” cards for
+  the last hour, minutes since each opened, score, AI fit and H-1B data.
+  Optional browser notifications for new matches. Per job: **Fill form**
+  (background, nothing sent), **Open and finish** (a browser opens with the
+  form filled; you answer what's left and press Submit — your new answers are
+  saved and the job is marked applied when the site confirms), Applied, Skip.
+- **Needs you** — forms the bot prepared and what each still needs, plus every
+  waiting question once per company. **Fill with AI** suggests answers from
+  your resume; nothing is saved until you press Save.
+- **Applied** — everything submitted, how (bot / you / marked), the tailored
+  resume that was sent, a screenshot, and status (interview, offer, rejected).
+- **Auto-apply** — switch on applying as new jobs open (prepare forms, or submit
+  complete ones), with score, freshness, daily and per-company caps; run a
+  batch now and watch its log.
+- **Crawler** — boards watched, reads, unchanged share, new postings, what just
+  opened or closed, and each board's estimated posting rate and revisit time.
+- **My details** — your answers, resume, saved answers and AI settings.
+
+## Run it in the cloud
+
+The crawler only catches jobs while it runs, so put it on a small always-on
+machine. `jobpipe serve` runs the crawler and the dashboard together; the
+dashboard then needs an access token (it holds your private details), and a
+visible browser isn't available there, so **Open and finish** stays a laptop
+feature while auto-apply runs headless.
+
+**Fly.io** (one 1 GB machine + 1 GB volume):
+
+```bash
+fly launch --no-deploy --copy-config      # pick an app name
+fly volumes create jobpipe_data --size 1 --region ewr
+fly secrets set JOBPIPE_DASHBOARD_TOKEN=$(openssl rand -hex 24)
+fly deploy
+jobpipe cloud-push https://<app>.fly.dev --with-ai-key   # your details, resume, answers
+```
+
+**Any VPS** (Docker): `echo "JOBPIPE_DASHBOARD_TOKEN=$(openssl rand -hex 24)" > .env && docker compose up -d --build`,
+then reach it through an SSH tunnel or the Caddy service in `docker-compose.yml`.
+
+The image installs Chromium and LaTeX (`--build-arg WITH_LATEX=0` for a
+smaller image without tailored resumes) and keeps everything in `/app/data`.
 
 ## ATS coverage
 

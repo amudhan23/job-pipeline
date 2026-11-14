@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import click
+from datetime import datetime
 from rich.console import Console
 from rich.table import Table
 
@@ -192,11 +193,115 @@ def seed_h1b(ctx: click.Context, file: str | None) -> None:
 
 @main.command()
 @click.option("--port", "-p", default=8050, help="Port to run on")
+@click.option("--host", default="127.0.0.1",
+              help="Address to listen on. Anything but this machine needs JOBPIPE_DASHBOARD_TOKEN set.")
 @click.pass_context
-def dashboard(ctx: click.Context, port: int) -> None:
-    """Open the web dashboard for browsing jobs."""
+def dashboard(ctx: click.Context, port: int, host: str) -> None:
+    """Open the web dashboard (http://localhost:8050)."""
     from pipeline.dashboard.app import run_dashboard
-    run_dashboard(port=port)
+    run_dashboard(host=host, port=port)
+
+
+def _make_crawler(config: dict, auto: bool = True):
+    """The crawler plus what happens after each pass: print new postings,
+    AI fit-check them in the background, and start auto-apply runs."""
+    from concurrent.futures import ThreadPoolExecutor
+    from pipeline import autoapply
+    from pipeline.crawler.worker import Crawler
+    pool = ThreadPoolExecutor(max_workers=1)
+
+    def fit_check(ids: list[str]) -> None:
+        from pipeline import applicant
+        from pipeline.ai import client as ai_client
+        from pipeline.ai.context import load_resume_text
+        from pipeline.ai.fitcheck import ensure_checked
+        settings = autoapply.load_settings()
+        if not settings.get("fit_check") or not ai_client.status()[0]:
+            return
+        resume_text = load_resume_text()
+        if not resume_text.strip():
+            return
+        tracker, details = Tracker(), applicant.load()
+        for i in ids:
+            job = tracker.get_job(i)
+            if job and job["fit_score"] >= settings["min_score"]:
+                ensure_checked(job, tracker, details, resume_text)
+
+    def after_tick(new_ids: list[str]) -> None:
+        if new_ids:
+            tracker = Tracker()
+            for i in new_ids:
+                j = tracker.get_job(i)
+                if j:
+                    console.print(f"[bold magenta]NEW[/bold magenta] {datetime.now():%H:%M} "
+                                  f"{j['company']} — {j['title']}  [dim]({j['fit_score']:.0f}, {j['location']})[/dim]")
+            pool.submit(fit_check, new_ids)
+        if auto:
+            meta = autoapply.maybe_autoapply(Tracker())
+            if meta:
+                console.print(f"[cyan]Auto-apply started:[/cyan] {meta['label']}")
+
+    return Crawler(config, after_tick=after_tick)
+
+
+@main.command()
+@click.option("--once", is_flag=True, help="One pass over the boards that are due, then exit")
+@click.option("--no-discover", is_flag=True, help="Don't search the web for new boards")
+@click.option("--no-auto", is_flag=True, help="Never start auto-apply runs")
+@click.pass_context
+def watch(ctx: click.Context, once: bool, no_discover: bool, no_auto: bool) -> None:
+    """Watch every known job board continuously — new postings show up
+    within minutes of going live (Ctrl+C to stop)."""
+    import asyncio
+    import signal
+    config = ctx.obj["config"]
+    if no_discover:
+        config.setdefault("discovery", {})["enabled"] = False
+    crawler = _make_crawler(config, auto=not no_auto)
+    stats = crawler.registry.frontier_stats()
+    console.print(f"[bold]Watching {stats['boards']} job boards[/bold] — new postings print here; "
+                  "the dashboard shows them live. Ctrl+C stops.")
+
+    async def main_loop() -> None:
+        stop = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, stop.set)
+            except (NotImplementedError, RuntimeError):
+                pass
+        await crawler.run(stop, max_ticks=1 if once else None)
+
+    asyncio.run(main_loop())
+    console.print("Stopped.")
+
+
+@main.command()
+@click.option("--port", "-p", default=8050, help="Dashboard port")
+@click.option("--host", default="127.0.0.1",
+              help="Dashboard address (0.0.0.0 on a server — then JOBPIPE_DASHBOARD_TOKEN is required)")
+@click.option("--no-auto", is_flag=True, help="Never start auto-apply runs")
+@click.pass_context
+def serve(ctx: click.Context, port: int, host: str, no_auto: bool) -> None:
+    """Crawler and dashboard together — what runs in the cloud."""
+    import asyncio
+    import threading
+    from pipeline.dashboard.app import run_dashboard
+    crawler = _make_crawler(ctx.obj["config"], auto=not no_auto)
+    loop = asyncio.new_event_loop()
+    stop = asyncio.Event()
+
+    def crawl() -> None:
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(crawler.run(stop))
+
+    t = threading.Thread(target=crawl, name="crawler", daemon=True)
+    t.start()
+    try:
+        run_dashboard(host=host, port=port)
+    finally:
+        loop.call_soon_threadsafe(stop.set)
+        t.join(timeout=15)
 
 
 @main.command()
@@ -376,8 +481,13 @@ def _one_per_application(jobs: list[dict]) -> list[dict]:
               help="AI fit check first; skip jobs with a dealbreaker (default: on with AI)")
 @click.option("--tailor/--no-tailor", "use_tailor", default=True,
               help="Upload a resume arranged for each job (default: on when pdflatex is installed)")
+@click.option("--handoff", is_flag=True,
+              help="Fill what it can, then you finish in the browser and press Submit yourself; "
+                   "it saves your new answers and marks the job applied when the site confirms")
+@click.option("--handoff-minutes", default=30, help="How long --handoff waits for you")
 def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, submit: bool,
-          yes: bool, use_ai: bool, trust_ai: bool, use_fit: bool, use_tailor: bool) -> None:
+          yes: bool, use_ai: bool, trust_ai: bool, use_fit: bool, use_tailor: bool,
+          handoff: bool, handoff_minutes: int) -> None:
     """Fill job applications from your saved details.
 
     Without --submit (practice): fills every question it can, attaches your
@@ -397,6 +507,10 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
 
     if yes and not submit:
         raise click.ClickException("--yes only makes sense with --submit.")
+    if handoff:
+        if submit:
+            raise click.ClickException("--handoff means you press Submit yourself; drop --submit.")
+        headed = True
     try:
         import playwright  # noqa: F401
     except ImportError:
@@ -418,8 +532,8 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
         jobs = [j for j in (tracker.get_job(i) for i in job_id) if j]
         jobs = [j for j in jobs if not (submit and j["status"] == "applied")]
     else:
-        run = tracker.latest_run()
-        candidates = tracker.get_jobs(run["id"] if run else None)
+        # Open postings (crawler or latest run), best score first
+        candidates = sorted(tracker.open_jobs(), key=lambda j: j["fit_score"], reverse=True)
         jobs = [j for j in candidates
                 if j["fit_score"] >= min_score and application_url(j)
                 and j["status"] not in ("applied", "interview", "offer", "rejected", "skipped")]
@@ -477,14 +591,14 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
             if f.source.startswith(("no saved answer", "no option matching")) and f.kind != "file":
                 pending.append({"question": applicant.normalize_question(f.label, job["company"]),
                                 "label": f.label, "options": f.options, "company": job["company"],
-                                "multi": f.kind == "checkboxes"})
+                                "multi": f.kind == "checkboxes", "job_id": job["id"]})
         for f in report.filled:
             if f.label in report.ai_written:
                 console.print(f"  [magenta]✎ {f.source}:[/magenta] {f.label[:70]}")
                 console.print(f"    [dim]{f.value[:300]}[/dim]")
                 pending.append({"question": applicant.normalize_question(f.label, job["company"]),
                                 "label": f.label, "options": [], "company": job["company"],
-                                "draft": f.value})
+                                "draft": f.value, "job_id": job["id"]})
         totals["ai"] += len(report.ai_written)
         applicant.add_pending(pending)
         totals["questions"] += len(pending) - len(report.ai_written)
@@ -536,6 +650,10 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
         def on_filled(report, job=job, shown=shown) -> bool:
             show(report, job)
             shown["done"] = True
+            if handoff:
+                console.print("  [bold yellow]→ Your turn: finish the form in the browser and press Submit "
+                              "there. I'll watch for the confirmation and save your new answers.[/bold yellow]")
+                return False
             if not submit:
                 return False
             if report.ready_to_submit:
@@ -560,7 +678,16 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
             from pipeline.ai.writer import make_writer
             writer = make_writer(job, details)
         report = practice_apply(job, details, upload, folder, headless=not headed, saved=saved,
-                                on_filled=on_filled, ask_human=ask_human, writer=writer)
+                                on_filled=on_filled, ask_human=ask_human, writer=writer,
+                                handoff_s=handoff_minutes * 60 if handoff else None)
+        if report.captured:
+            # Your answers to the questions the bot didn't know — kept for this company
+            keep = [{"question": applicant.normalize_question(label, job["company"]), "answer": value,
+                     "company": job["company"], "everywhere": False}
+                    for label, value in report.captured.items() if value]
+            applicant.save_answers(keep)
+            saved = applicant.load_answers()
+            console.print(f"  [green]✓ saved {len(keep)} answer(s) you typed, for next time[/green]")
         if report.closed:
             tracker.update_status(job["id"], ApplicationStatus.SKIPPED, notes="posting closed")
         if report.error:
@@ -740,6 +867,51 @@ def fit(job_id: tuple[str, ...], top: int, min_score: float, recheck: bool) -> N
     console.print(table)
     cost = ai_client.spend_summary()["total_spent"] - spent0
     console.print(f"[dim]Cost: ${cost:.4f}. `jobpipe apply` skips jobs marked skip.[/dim]")
+
+
+@main.command("cloud-push")
+@click.argument("url")
+@click.option("--with-ai-key", is_flag=True, help="Also send your Anthropic API key")
+def cloud_push(url: str, with_ai_key: bool) -> None:
+    """Copy your details, resume, saved answers and auto-apply settings from
+    this computer to your jobpipe in the cloud (its dashboard URL)."""
+    import httpx
+    from pipeline import applicant, autoapply
+    from pipeline.ai import client as ai_client
+    url = url.rstrip("/")
+    if not url.startswith("https://") and not url.startswith("http://localhost"):
+        raise click.ClickException("Use the https:// address of your cloud dashboard.")
+    token = click.prompt("Dashboard access token (JOBPIPE_DASHBOARD_TOKEN, input hidden)", hide_input=True)
+    headers = {"Authorization": f"Bearer {token}"}
+    sent = []
+    with httpx.Client(timeout=60, headers=headers) as c:
+        def post(path: str, **kw) -> None:
+            r = c.post(url + path, **kw)
+            if r.status_code == 401:
+                raise click.ClickException("The cloud dashboard rejected that token.")
+            if r.status_code >= 400:
+                raise click.ClickException(f"{path}: {r.status_code} {r.text[:200]}")
+        post("/api/profile", json=applicant.load())
+        sent.append("details")
+        resume = applicant.PRIVATE_DIR / applicant.RESUME_FILE
+        if resume.exists():
+            post("/api/resume", content=resume.read_bytes(), headers={"Content-Type": "application/pdf"})
+            sent.append("resume")
+        saved = applicant.load_answers()
+        items = [{"question": q, "answer": a, "company": "", "everywhere": True} for q, a in saved["all"].items()]
+        for company_key, qs in saved["companies"].items():
+            items += [{"question": q, "answer": a, "company": company_key, "everywhere": False} for q, a in qs.items()]
+        if items:
+            post("/api/answers", json={"answers": items})
+            sent.append(f"{len(items)} answers")
+        ai = {k: v for k, v in ai_client.load_settings().items() if k in ("model", "monthly_budget", "enabled")}
+        if with_ai_key and ai_client.get_key():
+            ai["key"] = ai_client.get_key()
+            sent.append("AI key")
+        post("/api/ai", json=ai)
+        post("/api/autoapply", json=autoapply.load_settings())
+        sent.append("AI and auto-apply settings")
+    console.print(f"[green]Sent to {url}:[/green] {', '.join(sent)}.")
 
 
 @main.command("state-key")

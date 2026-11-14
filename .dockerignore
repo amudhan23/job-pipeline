@@ -1,0 +1,11 @@
+.git
+.venv
+venv
+data/*.db
+data/*.db-*
+data/private
+data/backup-*
+data/crawler_status.json
+output
+**/__pycache__
+tests

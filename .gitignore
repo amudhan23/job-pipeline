@@ -41,3 +41,7 @@ Thumbs.db
 
 # Exports
 *.csv
+data/crawler_status.json
+data/*.tmp
+data/*.db-wal
+data/*.db-shm

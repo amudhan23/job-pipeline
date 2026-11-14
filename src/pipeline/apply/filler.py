@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -344,6 +345,7 @@ class FillReport:
     submitted: bool = False      # the site confirmed the application
     submit_note: str = ""        # what happened when submitting (or why it didn't)
     ai_written: list[str] = field(default_factory=list)   # questions answered with an AI draft
+    captured: dict[str, str] = field(default_factory=dict)  # handoff: what you typed for open questions
 
     @property
     def resume_attached(self) -> bool:
@@ -749,6 +751,82 @@ def submit_application(page, report: FillReport, out_dir: Path,
         pass
 
 
+# What you entered for the questions the bot couldn't answer (handoff mode)
+_READ_VALUES_JS = "(items) => {\n" + _HELPERS_JS + r"""
+  const comboValue = """ + _COMBO_VALUE_JS + r""";
+  const q = id => document.querySelector(`[data-jp="${id}"]`);
+  const out = {};
+  for (const it of items) {
+    let v = '';
+    if (it.kind === 'radio' || it.kind === 'checkboxes') {
+      v = it.opts.filter(o => q(o.id)?.checked).map(o => o.text).join(', ');
+    } else if (it.kind === 'buttons') {
+      v = it.opts.filter(o => { const b = q(o.id);
+        return b && (b.getAttribute('aria-pressed') === 'true' || /selected|active|checked/i.test(b.className)); })
+        .map(o => o.text).join(', ');
+    } else {
+      const el = q(it.id);
+      if (!el || el.type === 'file') continue;
+      if (el.tagName === 'SELECT') v = el.selectedIndex >= 0 ? el.options[el.selectedIndex].text : '';
+      else if (el.getAttribute('role') === 'combobox' || el.getAttribute('aria-autocomplete')) v = comboValue(el);
+      else if (el.type === 'checkbox') v = el.checked ? 'Yes' : '';
+      else v = el.value;
+    }
+    v = (v || '').trim();
+    if (v && !/^(select|choose)\b/i.test(v)) out[it.key] = v;
+  }
+  return out;
+}
+"""
+
+
+def wait_for_you(page, report: FillReport, fields: list[dict], out_dir: Path,
+                 timeout_s: int = 1800) -> None:
+    """Handoff: the form is filled as far as the bot can go. You finish it in
+    the open browser and press Submit yourself. Meanwhile this watches the
+    questions you're answering (so they can be saved for next time) and the
+    page, until the site confirms the application, the browser is closed,
+    or the time runs out."""
+    report.mode = "handoff"
+    open_labels = {_norm_label(f.label) for f in report.needs_attention}
+    items = []
+    for f in fields:
+        if _norm_label(f.get("label", "")) not in open_labels or f["kind"] == "file":
+            continue
+        opts = [o for o in f.get("options") or [] if isinstance(o, dict)]
+        items.append({"key": f["label"], "kind": f["kind"], "id": f.get("id"), "opts": opts})
+    try:
+        before_url, before = page.url, _body_text(page)
+    except Exception:
+        report.submit_note = "the browser closed before you submitted"
+        return
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            page.wait_for_timeout(1000)
+            if items:
+                try:
+                    report.captured.update(page.evaluate(_READ_VALUES_JS, items) or {})
+                except Exception:
+                    pass                          # mid-navigation
+            text, url = _body_text(page), page.url
+        except Exception:
+            report.submit_note = "the browser closed before the site confirmed — not marked applied"
+            return
+        if (url != before_url and _CONFIRM_URL.search(url)) or _new_match(_CONFIRM_TEXT, text, before):
+            report.submitted = True
+            report.submit_note = "you submitted it and the site confirmed"
+            break
+    else:
+        report.submit_note = f"no confirmation within {timeout_s // 60} minutes — not marked applied"
+    try:
+        shot = out_dir / "submitted.png"
+        page.screenshot(path=str(shot), full_page=True)
+        report.screenshot = str(shot)
+    except Exception:
+        pass
+
+
 def recheck(page, fields: list[dict]) -> list[str]:
     """Labels of required questions still empty right now (after you've
     had a chance to fill them in the browser)."""
@@ -765,7 +843,8 @@ def practice_apply(job: dict[str, Any], details: dict[str, str], resume_path: Pa
                    saved: dict[str, str] | None = None,
                    on_filled: Callable[[FillReport], bool] | None = None,
                    ask_human: Callable[[str], bool] | None = None,
-                   writer: Callable[..., Any] | None = None) -> FillReport:
+                   writer: Callable[..., Any] | None = None,
+                   handoff_s: int | None = None) -> FillReport:
     """Open the application, fill it, screenshot it.
 
     Submits only if on_filled(report) — called while the filled form is
@@ -824,7 +903,11 @@ def practice_apply(job: dict[str, Any], details: dict[str, str], resume_path: Pa
                 report.error = "found the page but no questions it could read — see the screenshot"
             page.screenshot(path=str(shot), full_page=True)
             report.screenshot = str(shot)
-            if on_filled and not report.error and on_filled(report):
+            if handoff_s and not report.error:
+                if on_filled:
+                    on_filled(report)            # prints what's filled / what needs you
+                wait_for_you(page, report, fields, out_dir, handoff_s)
+            elif on_filled and not report.error and on_filled(report):
                 missing = recheck(page, fields)
                 if missing:
                     report.submit_note = ("not sent — still empty: " + "; ".join(m[:60] for m in missing[:5]))

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jobpipe</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%23e8336d'/></svg>">
+</head>
+<body>
+<div class="frame">
+  <nav class="rail" aria-label="Pages">
+    <div class="brand">job<span>pipe</span></div>
+    <a href="#/jobs" data-page="jobs">Live jobs <span class="count hot" id="c-new"></span></a>
+    <a href="#/attention" data-page="attention">Needs you <span class="count" id="c-att"></span></a>
+    <a href="#/applied" data-page="applied">Applied <span class="count" id="c-app"></span></a>
+    <a href="#/auto" data-page="auto">Auto-apply</a>
+    <a href="#/crawler" data-page="crawler">Crawler</a>
+    <a href="/profile">My details</a>
+    <div class="foot" id="rail-foot"><span class="dot"></span>Checking crawler…</div>
+  </nav>
+  <main id="page" tabindex="-1"></main>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

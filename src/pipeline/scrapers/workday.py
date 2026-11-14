@@ -131,6 +131,10 @@ _MULTI_LOCATION = re.compile(r"^\d+\s+locations?$", re.IGNORECASE)
 
 class WorkdayScraper(BaseScraper):
     """Scrape a Workday careers site through its public CXS API."""
+    # Searched by keyword with page limits: a job missing from one read
+    # isn't proof it closed
+    complete_listing = False
+
 
     def _search_terms(self) -> list[str]:
         terms = [k for k in dict.fromkeys(self.filters.get("role_keywords", [])) if k]

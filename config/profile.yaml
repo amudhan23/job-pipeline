@@ -149,3 +149,13 @@ sponsorship_filter_enabled: true
 # Companies confirmed to not sponsor (supplementary info, not a blocker)
 sponsorship_blocklist:
   - "palantir"  # Example — verify before adding
+
+# Real-time crawler (`jobpipe watch` / `jobpipe serve`)
+crawler:
+  feed_minutes: 5          # job feed poll (cheap: 304 when unchanged)
+  discover_hours: 6        # web search for new company boards
+  concurrency: 12          # boards read at once
+  per_host: 4              # requests in flight per API host
+  min_gap_seconds: 0.25    # between requests to one host
+  policy:
+    base_minutes: 10       # revisit at 1 new posting/day; scales with 1/sqrt(rate)

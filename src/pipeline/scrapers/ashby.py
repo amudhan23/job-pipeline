@@ -29,41 +29,36 @@ class AshbyScraper(BaseScraper):
 
     async def scrape_company(self, company_slug: str) -> list[Job]:
         """Scrape all matching jobs from an Ashby job board."""
-        jobs: list[Job] = []
         url = f"{ASHBY_API}/{company_slug}"
-
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(url)
             resp.raise_for_status()
-            data = resp.json()
+            return self.parse_listing(company_slug, resp.json())
 
-            for item in data.get("jobs", []):
-                title = item.get("title", "")
-                location = item.get("location", "")
-                # Ashby may have locationName or location as a string
-                if isinstance(location, dict):
-                    location = location.get("name", "")
-
-                desc = item.get("descriptionPlain", "") or item.get("description", "")
-
-                if not self.passes_filters(title, location, desc):
-                    continue
-
-                job_id = item.get("id", "")
-                job = Job(
-                    id=f"ab-{company_slug}-{job_id}",
-                    title=title,
-                    company=data.get("organization", {}).get("name", company_slug),
-                    company_slug=company_slug,
-                    location=location,
-                    url=item.get("jobUrl", f"https://jobs.ashbyhq.com/{company_slug}/{job_id}"),
-                    platform=ATSPlatform.ASHBY,
-                    description=desc,
-                    department=item.get("department", ""),
-                    posted_at=_parse_date(item.get("publishedAt")),
-                )
-                jobs.append(job)
-
+    def parse_listing(self, company_slug: str, data: dict[str, Any], light: bool = False) -> list[Job]:
+        jobs: list[Job] = []
+        for item in data.get("jobs", []):
+            title = item.get("title", "")
+            location = item.get("location", "")
+            # Ashby may have locationName or location as a string
+            if isinstance(location, dict):
+                location = location.get("name", "")
+            desc = item.get("descriptionPlain", "") or item.get("description", "")
+            if not self.passes_filters(title, location or "", desc):
+                continue
+            job_id = item.get("id", "")
+            jobs.append(Job(
+                id=f"ab-{company_slug}-{job_id}",
+                title=title,
+                company=(data.get("organization") or {}).get("name", company_slug),
+                company_slug=company_slug,
+                location=location or "",
+                url=item.get("jobUrl", f"https://jobs.ashbyhq.com/{company_slug}/{job_id}"),
+                platform=ATSPlatform.ASHBY,
+                description=desc,
+                department=item.get("department", ""),
+                posted_at=_parse_date(item.get("publishedAt")),
+            ))
         return jobs
 
 
