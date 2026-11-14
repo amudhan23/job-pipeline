@@ -228,6 +228,7 @@ function renderRows(fresh = new Set()) {
         <button data-act="fill" title="Fill the form in the background; nothing is sent">Fill form</button>
         <button data-act="handoff" ${canOpenBrowser ? "title='Opens a browser with the form filled; you press Submit'" : "disabled title='Needs the dashboard running on your computer'"}>Open and finish</button>` :
         `<a class="btn" href="${esc(j.url)}" target="_blank" rel="noopener">Open posting</a>`}
+        <button data-act="resume" class="quiet" title="The resume made for this job">Resume</button>
         <button data-act="applied" class="quiet" title="I applied to this">Applied</button>
         <button data-act="skip" class="quiet" title="Don't show this again">Skip</button></td>
     </tr>`).join("");
@@ -236,6 +237,7 @@ function renderRows(fresh = new Set()) {
     const act = b.dataset.act;
     if (act === "fill") runApply([id], "practice", `Fill: ${j.company}`);
     if (act === "handoff") runApply([id], "handoff", `Open and finish: ${j.company}`);
+    if (act === "resume") showResume(id, `${j.company}: ${j.title}`);
     if (act === "applied" && await setStatus(id, "applied")) { j.status = "applied"; renderRows(); }
     if (act === "skip" && await setStatus(id, "skipped")) { j.status = "skipped"; renderRows(); }
   });
@@ -283,6 +285,7 @@ async function pageAttention() {
           <button data-act="handoff" class="primary" ${canOpenBrowser ? "" : "disabled title='Needs the dashboard running on your computer'"}>Open and finish</button>
           ${it.ready ? `<button data-act="submit">Submit now</button>` : `<button data-act="fill" title="Fill again with your newest answers">Fill again</button>`}
           ${it.screenshot ? `<a class="btn" href="${esc(it.screenshot)}" target="_blank">Screenshot</a>` : ""}
+          <button data-act="resume" class="quiet">Resume</button>
           <button data-act="skip" class="quiet">Skip job</button>
         </div></div>
       ${it.needs.length ? `<ul>${it.needs.map(n => `<li>${esc(n.label)} <span class="why">${esc(n.source)}</span></li>`).join("")}</ul>` : ""}
@@ -313,6 +316,7 @@ async function pageAttention() {
       if (!confirm(`Submit the ${it.job.company} application now? It's sent as filled (see the screenshot).`)) return;
       runApply([id], "submit", `Submit: ${it.job.company}`);
     }
+    if (act === "resume") showResume(id, `${it.job.company}: ${it.job.title}`);
     if (act === "skip" && await setStatus(id, "skipped")) b.closest(".job-block").remove();
   });
   $$("button[data-ai]").forEach(b => b.onclick = () => suggest(b.closest(".q-company")));
@@ -449,12 +453,16 @@ async function pageAuto() {
         <div class="field"><label for="max_per_company">Per company per day</label><input type="number" id="max_per_company" min="1" max="20" value="${s.max_per_company}"></div>
         <div class="field choice row wide"><label style="width:100%;margin:0">Extras</label>
           <label class="check"><input type="checkbox" id="fit_check" ${s.fit_check ? "checked" : ""}> AI fit check first (skips dealbreakers)</label>
-          <label class="check"><input type="checkbox" id="tailor" ${s.tailor ? "checked" : ""}> Upload a resume arranged for each job</label>
+          <label class="check"><input type="checkbox" id="tailor" ${s.tailor ? "checked" : ""}> Upload a resume made for each job</label>
+          <label class="check"><input type="checkbox" id="craft" ${s.craft ? "checked" : ""}> Reword resume bullets toward the job (facts kept)</label>
           <label class="check"><input type="checkbox" id="trust_ai" ${s.trust_ai ? "checked" : ""}> Submit forms with AI-written answers</label>
         </div>
       </div>
       <div class="bar"><button class="primary" id="saveAuto">Save settings</button></div>
     </div>
+
+    <h2>Alerts on your phone</h2>
+    <div class="panel" id="tg">Loading…</div>
 
     <h2>Next in line</h2>
     ${data.candidates.length ? `<div class="table-wrap"><table><tbody>${data.candidates.map(j => `
@@ -479,7 +487,7 @@ async function pageAuto() {
   $("#saveAuto").onclick = async () => {
     const body = { enabled: $("#enabled").checked, mode: $("input[name=mode]:checked").value };
     ["min_score", "fresh_hours", "max_per_day", "max_per_company"].forEach(k => body[k] = +$("#" + k).value);
-    ["fit_check", "tailor", "trust_ai"].forEach(k => body[k] = $("#" + k).checked);
+    ["fit_check", "tailor", "craft", "trust_ai"].forEach(k => body[k] = $("#" + k).checked);
     try { await api("/api/autoapply", body); toast(body.enabled ? "Saved. Auto-apply is on." : "Saved. Auto-apply is off."); pageAuto(); }
     catch (e) { toast(e.message, true); }
   };
@@ -495,6 +503,153 @@ async function pageAuto() {
   };
   bindRuns();
   every(5000, pageAutoRuns);
+  telegramCard();
+}
+
+async function telegramCard() {
+  const box = $("#tg");
+  let t;
+  try { t = await api("/api/telegram"); } catch (e) { box.textContent = e.message; return; }
+  if (!t.connected) {
+    box.innerHTML = `<p class="note" style="margin-top:0">Get a Telegram message the minute a matching job opens,
+      with buttons to submit, prepare or skip it, and answer form questions by replying.</p>
+      <ol class="note" style="padding-left:18px"><li>In Telegram, open <b>@BotFather</b>, send <code>/newbot</code>, and follow the steps.</li>
+      <li>Paste the token it gives you here.</li><li>Open your new bot and press Start.</li></ol>
+      <div class="bar"><input type="password" id="tg_token" placeholder="Bot token, like 123456:ABC-…" style="width:340px">
+      <button class="primary" id="tg_connect">Connect</button><span class="note" id="tg_note"></span></div>`;
+    $("#tg_connect").onclick = async () => {
+      const note = $("#tg_note");
+      try {
+        const r = await api("/api/telegram/connect", { token: $("#tg_token").value.trim() });
+        note.innerHTML = `Now open <a href="https://t.me/${esc(r.bot)}" target="_blank" rel="noopener">t.me/${esc(r.bot)}</a> and press Start. Waiting…`;
+        for (let i = 0; i < 8; i++) {
+          const w = await api("/api/telegram/wait", {});
+          if (w.connected) { toast("Telegram connected."); return telegramCard(); }
+        }
+        note.textContent = "No message arrived. Press Start in the bot, then Connect again.";
+      } catch (e) { note.textContent = e.message; }
+    };
+    return;
+  }
+  box.innerHTML = `<p class="note" style="margin-top:0">Connected to <b>@${esc(t.bot)}</b>. Alerts arrive while the crawler runs.</p>
+    <div class="grid2">
+      <div class="field"><label for="tg_min">Alert for jobs scoring at least</label><input type="number" id="tg_min" min="0" max="100" value="${t.min_score}"></div>
+      <div class="field"><label for="tg_hour">Morning summary at (hour, 0–23)</label><input type="number" id="tg_hour" min="0" max="23" value="${t.summary_hour}"></div>
+      <div class="field choice row wide"><label style="width:100%;margin:0">Send me</label>
+        <label class="check"><input type="checkbox" id="tg_new" ${t.new_jobs ? "checked" : ""}> New matching jobs</label>
+        <label class="check"><input type="checkbox" id="tg_applied" ${t.applied ? "checked" : ""}> Each application sent</label>
+        <label class="check"><input type="checkbox" id="tg_needs" ${t.needs ? "checked" : ""}> Questions a form needs answered</label>
+        <label class="check"><input type="checkbox" id="tg_on" ${t.enabled ? "checked" : ""}> Alerts on</label></div>
+    </div>
+    <div class="bar"><button class="primary" id="tg_save">Save alerts</button><button id="tg_test">Send a test</button></div>`;
+  $("#tg_save").onclick = async () => {
+    try {
+      await api("/api/telegram", { min_score: +$("#tg_min").value, summary_hour: +$("#tg_hour").value,
+        new_jobs: $("#tg_new").checked, applied: $("#tg_applied").checked, needs: $("#tg_needs").checked, enabled: $("#tg_on").checked });
+      toast("Alerts saved.");
+    } catch (e) { toast(e.message, true); }
+  };
+  $("#tg_test").onclick = async () => {
+    try { const r = await api("/api/telegram/test", {}); toast(r.sent ? "Sent. Check Telegram." : "Telegram didn't take it.", !r.sent); }
+    catch (e) { toast(e.message, true); }
+  };
+}
+
+/* ── Resume view ─────────────────────────────────────────── */
+
+async function showResume(jobId, title) {
+  const dlg = $("#modal"), body = $("#modal-body");
+  const render = r => {
+    const changes = (r.changes || []).filter(c => !c.error);
+    const err = (r.changes || []).find(c => c.error);
+    body.innerHTML = `<h2>Resume for ${esc(title)}</h2>
+      ${r.exists ? `<p class="note">${esc(r.note || "")}</p>
+        <div class="bar" style="margin-top:6px"><a class="btn" href="${esc(r.file)}" target="_blank">Open the PDF</a>
+        <button data-rb="1">Rebuild</button><button data-rb="0" class="quiet">Rebuild without rewording</button>
+        <button class="quiet" data-close style="margin-left:auto">Close</button></div>
+        ${r.projects ? `<p class="note">Projects: ${r.projects.map(esc).join(", ")}. Languages lead with ${(r.languages || []).slice(0, 3).map(esc).join(", ")}.</p>` : ""}
+        ${err ? `<p class="note warn">Rewording was skipped: ${esc(err.error)}</p>` : ""}
+        ${changes.length ? `<h2>What changed</h2>${changes.map(c => `<div class="change">
+          <div class="before">${esc(c.before)}</div>
+          ${c.kept ? `<div class="after">${esc(c.after)}</div>` : `<div class="kept-no">Kept the original: the rewrite ${esc(c.why)}.</div>`}</div>`).join("")}` :
+          `<p class="note">No bullet was reworded; they're chosen and ordered for the job.</p>`}` :
+      `<p class="note">No resume has been made for this job yet. Building one takes about 15 seconds.</p>
+        <div class="bar"><button class="primary" data-rb="1">Build resume</button><button class="quiet" data-close>Close</button></div>`}`;
+    $$("[data-rb]", body).forEach(b => b.onclick = async () => {
+      b.disabled = true; b.textContent = "Building…";
+      try { render(await api(`/api/resume/${encodeURIComponent(jobId)}/build`, { reword: b.dataset.rb === "1" })); }
+      catch (e) { toast(e.message, true); b.disabled = false; b.textContent = "Try again"; }
+    });
+    $$("[data-close]", body).forEach(b => b.onclick = () => dlg.close());
+  };
+  body.innerHTML = "Loading…";
+  dlg.showModal();
+  try { render(await api(`/api/resume/${encodeURIComponent(jobId)}`)); } catch (e) { body.textContent = e.message; }
+}
+
+/* ── Search companies ────────────────────────────────────── */
+
+async function pageSearch() {
+  page.innerHTML = `<div class="head"><div><h1>Search companies</h1>
+    <p class="lede">Name the companies and roles you want. It finds each company's job portal, pulls the matching roles,
+    and keeps watching those companies so a new opening shows up within 15 minutes.</p></div></div>
+    <div class="panel search-form"><div class="grid2">
+      <div class="field wide"><label for="s_co">Companies</label>
+        <textarea id="s_co" placeholder="Stripe, Jane Street, Datadog, Ramp"></textarea>
+        <div class="hint">Separate with commas or new lines.</div></div>
+      <div class="field wide"><label for="s_roles">Roles</label>
+        <input type="text" id="s_roles" style="width:100%" placeholder="software engineer, backend engineer, platform engineer">
+        <div class="hint">Leave empty to use the roles in your profile.</div></div>
+      <div class="field choice row wide">
+        <label class="check"><input type="checkbox" id="s_any"> Any location</label>
+        <label class="check"><input type="checkbox" id="s_watch" checked> Keep watching these companies</label></div>
+    </div><div class="bar"><button class="primary" id="s_go">Search</button></div></div>
+    <div id="searches">Loading…</div>`;
+  $("#s_go").onclick = async () => {
+    try {
+      await api("/api/searches", { companies: $("#s_co").value, roles: $("#s_roles").value,
+        anywhere: $("#s_any").checked, watch: $("#s_watch").checked });
+      toast("Searching. Results fill in below as each company is found.");
+      $("#s_co").value = ""; drawSearches();
+    } catch (e) { toast(e.message, true); }
+  };
+  await drawSearches();
+  every(4000, drawSearches);
+}
+
+async function drawSearches() {
+  const box = $("#searches");
+  if (!box) return;
+  let d;
+  try { d = await api("/api/searches"); } catch (e) { box.textContent = e.message; return; }
+  if (!d.searches.length) { box.innerHTML = `<div class="panel empty"><strong>No searches yet.</strong>Add a few companies above.</div>`; return; }
+  box.innerHTML = d.searches.map(s => `<div class="search" data-id="${esc(s.id)}">
+    <h2>${s.companies.map(esc).join(", ")}</h2>
+    <p class="note">Roles: ${s.roles.length ? s.roles.map(esc).join(", ") : "your profile's roles"}. ${s.anywhere ? "Any location." : "Your locations."}
+      ${s.watch ? "Watched by the crawler." : ""} ${s.running ? `<b>${esc(s.running)}</b>` : s.last_run ? `Last searched ${esc(new Date(s.last_run).toLocaleString())}.` : ""}</p>
+    <div class="bar" style="margin-top:4px"><button data-s="run" ${s.running ? "disabled" : ""}>Search again</button><button data-s="delete" class="quiet">Delete</button></div>
+    ${s.results.map(r => `<div class="result-co"><h3>${esc(r.company)}</h3>
+      <span class="note">${r.boards.length ? r.boards.map(b => esc(b[0])).join(", ") : esc(r.error)}</span></div>
+      ${r.jobs.length ? `<div class="table-wrap"><table><tbody>${r.jobs.map(j => `<tr data-id="${esc(j.id)}">
+        <td class="title-cell"><a href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a> ${statusTag(j.status)}</td>
+        <td class="loc">${esc(j.location)}</td><td><span class="score ${scoreClass(j.fit_score)}">${j.fit_score}</span></td>
+        <td class="actions"><button data-act="fill">Fill form</button><button data-act="handoff" ${canOpenBrowser ? "" : "disabled"}>Open and finish</button>
+          <button data-act="resume" class="quiet">Resume</button></td></tr>`).join("")}</tbody></table></div>` :
+        r.boards.length ? `<p class="note">No open roles match right now${s.watch ? "; you'll see new ones here and on Live jobs" : ""}.</p>` : ""}`).join("")}
+  </div>`).join("");
+  $$(".search").forEach(el => {
+    const id = el.dataset.id;
+    $$("button[data-s]", el).forEach(b => b.onclick = async () => {
+      if (b.dataset.s === "delete" && !confirm("Delete this search? Its companies stay on the crawler's list.")) return;
+      try { await api(`/api/searches/${id}/${b.dataset.s}`, {}); drawSearches(); } catch (e) { toast(e.message, true); }
+    });
+    $$("button[data-act]", el).forEach(b => b.onclick = () => {
+      const row = b.closest("tr"), jid = row.dataset.id, title = $("a", row).textContent;
+      if (b.dataset.act === "fill") runApply([jid], "practice", `Fill: ${title}`);
+      if (b.dataset.act === "handoff") runApply([jid], "handoff", `Open and finish: ${title}`);
+      if (b.dataset.act === "resume") showResume(jid, title);
+    });
+  });
 }
 
 function runsTable(runs) {
@@ -598,7 +753,7 @@ async function refreshCounts() {
   } catch { /* offline */ }
 }
 
-const routes = { jobs: pageJobs, attention: pageAttention, applied: pageApplied, auto: pageAuto, crawler: pageCrawler };
+const routes = { jobs: pageJobs, attention: pageAttention, applied: pageApplied, search: pageSearch, auto: pageAuto, crawler: pageCrawler };
 
 function route() {
   timers.forEach(clearInterval); timers = [];

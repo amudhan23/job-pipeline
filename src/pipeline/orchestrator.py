@@ -61,14 +61,9 @@ class RunStats:
 class Pipeline:
     """Orchestrate the full job application pipeline."""
 
-    def __init__(self, config: dict[str, Any], registry: BoardRegistry | None = None) -> None:
-        self.config = config
-        self.discovery_cfg = config.get("discovery", {})
-        self.tracker = Tracker()
-        self.registry = registry or BoardRegistry()
-        self.stats = RunStats()
-
-        self.scrapers = {
+    @staticmethod
+    def make_scrapers(config: dict[str, Any]) -> dict[str, Any]:
+        return {
             "greenhouse": GreenhouseScraper(config),
             "ashby": AshbyScraper(config),
             "lever": LeverScraper(config),
@@ -77,6 +72,15 @@ class Pipeline:
             "bamboohr": BambooHRScraper(config),
             "workday": WorkdayScraper(config),
         }
+
+    def __init__(self, config: dict[str, Any], registry: BoardRegistry | None = None) -> None:
+        self.config = config
+        self.discovery_cfg = config.get("discovery", {})
+        self.tracker = Tracker()
+        self.registry = registry or BoardRegistry()
+        self.stats = RunStats()
+
+        self.scrapers = self.make_scrapers(config)
         self.sponsorship = SponsorshipFilter(
             blocklist=config.get("sponsorship_blocklist", []),
             enabled=config.get("sponsorship_filter_enabled", True),

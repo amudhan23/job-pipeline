@@ -103,10 +103,115 @@ def can_build() -> tuple[bool, str]:
     return True, ""
 
 
+# ── Rewording bullets toward the job (with a fact guard) ───────────────
+
+_REWRITE_SYSTEM = """You tune one applicant's resume bullets toward one job description.
+
+Rules — break any and the bullet is thrown away:
+- Keep every fact exactly: same numbers, same technologies, same scope, same \
+outcome. Never add a skill, tool, language, metric, team size or claim the \
+original bullet doesn't state.
+- You MAY: lead with the part the job cares about, use a stronger accurate \
+verb, and use the job description's wording for something the bullet \
+already says (e.g. "REST APIs" → "RESTful APIs").
+- At most the original length plus 10 characters. One sentence, no ending period.
+- If a bullet already fits or can't be improved honestly, return it unchanged.
+
+Reply with JSON only:
+{"ibm": {"<key>": "<bullet>"}, "sahara": {"<key>": "<bullet>"}, "projects": {"<key>": "<description>"}}"""
+
+# Technology words a rewrite may only use if the original bullet already has them
+_TECH = set("""java python go golang rust kotlin scala ruby php swift c c++ c# typescript javascript sql nosql
+bash shell node node.js nodejs react angular vue next.js spring springboot django flask fastapi rails .net
+kubernetes k8s docker terraform ansible helm aws azure gcp lambda s3 ec2 kafka rabbitmq spark hadoop
+airflow flink postgres postgresql mysql redis mongodb dynamodb cassandra elasticsearch snowflake bigquery
+graphql grpc rest restful jenkins github gitlab ci/cd ci cd linux unix microservices serverless
+pytorch tensorflow ml ai llm llms nlp gemini openai elevenlabs ethereum blockchain solidity webassembly
+html css tailwind redux jest pytest junit selenium playwright prometheus grafana datadog splunk
+oauth saml sso jwt elf""".split())
+_NUM = re.compile(r"\d[\d,.]*\s*(?:%|k|m|x|\+)?", re.I)
+_WORD = re.compile(r"[A-Za-z][A-Za-z0-9+#./-]*")
+
+
+def faithful(original: str, rewrite: str) -> tuple[bool, str]:
+    """Does the rewrite keep to the original's facts? (ok, reason if not)"""
+    if not rewrite or not rewrite.strip():
+        return False, "empty"
+    if len(rewrite) > len(original) * 1.15 + 10:
+        return False, "too long for one page"
+    norm = lambda n: re.sub(r"[\s,]", "", n.lower()).rstrip(".")   # noqa: E731
+    have = {norm(n) for n in _NUM.findall(original)}
+    for n in _NUM.findall(rewrite):
+        if norm(n) not in have:
+            return False, f"new number {n.strip()!r}"
+    orig_words = {w.lower().rstrip(".") for w in _WORD.findall(original)}
+    for w in _WORD.findall(rewrite):
+        lw = w.lower().rstrip(".")
+        techy = lw in _TECH or any(ch.isdigit() or ch in "+#" for ch in w) or \
+            (any(ch.isupper() for ch in w[1:]) and len(w) > 1)
+        # "RESTful" for "REST", "PostgreSQL" for "Postgres": the same thing, worded like the JD
+        same_thing = any(len(o) >= 3 and (o in lw or lw in o) for o in orig_words)
+        if techy and lw not in orig_words and not same_thing:
+            return False, f"adds {w!r}"
+    # Every technology in the original must survive
+    new_words = {x.lower().rstrip(".") for x in _WORD.findall(rewrite)}
+    for w in orig_words:
+        if w in _TECH and not any(w == n or (len(w) >= 3 and w in n) for n in new_words):
+            return False, f"drops {w!r}"
+    return True, ""
+
+
+def ai_rewrite(job: dict[str, Any], config: dict[str, Any], private_dir: Path | None = None,
+               client: Any = None) -> tuple[dict[str, Any], list[dict]]:
+    """Reworded copy of config["resume"] for this job, plus the change log.
+    Rewrites that fail the fact guard keep the original wording."""
+    import copy
+    from pipeline.ai import client as ai
+    from pipeline.ai.context import job_block
+    r = config.get("resume", {})
+    bank = {"ibm": dict(r.get("ibm_bullets", {})), "sahara": dict(r.get("sahara_bullets", {})),
+            "projects": {k: p.get("desc", "") for k, p in (r.get("projects") or {}).items() if isinstance(p, dict)}}
+    prompt = f"{job_block(job, limit=10000)}\n\n<bullets>\n{json.dumps(bank, indent=1)}\n</bullets>"
+    reply = ai.complete(_REWRITE_SYSTEM, prompt, purpose=f"resume: {job.get('company')} — "
+                        f"{job.get('title', '')[:50]}", max_tokens=1200, private_dir=private_dir, client=client)
+    m = re.search(r"\{.*\}", reply.text, re.S)
+    data = json.loads(m.group(0)) if m else {}
+    new = copy.deepcopy(config)
+    nr = new.setdefault("resume", {})
+    changes: list[dict] = []
+    for section, target in (("ibm", "ibm_bullets"), ("sahara", "sahara_bullets"), ("projects", "projects")):
+        for key, before in bank[section].items():
+            after = str((data.get(section) or {}).get(key, "") or "").strip().rstrip(".")
+            if not after or after == before:
+                continue
+            ok, why = faithful(before, after)
+            changes.append({"section": section, "key": key, "before": before, "after": after,
+                            "kept": ok, "why": why})
+            if ok:
+                if section == "projects":
+                    nr[target][key]["desc"] = after
+                else:
+                    nr[target][key] = after
+    return new, changes
+
+
+def _pages(pdf: Path) -> int:
+    try:
+        from pypdf import PdfReader
+        return len(PdfReader(str(pdf)).pages)
+    except Exception:
+        return 1
+
+
 def tailored_resume(job: dict[str, Any], config: dict[str, Any], details: dict[str, str],
                     folder: Path, use_ai: bool = True, private_dir: Path | None = None,
-                    client: Any = None) -> tuple[Path | None, str]:
-    """Build (or reuse) this job's resume. Returns (pdf, note); pdf None on failure."""
+                    client: Any = None, rewrite: bool = True) -> tuple[Path | None, str]:
+    """Craft (or reuse) this job's resume:
+      1. choose and order bullets, projects and languages for the JD;
+      2. with AI and rewrite=True, reword bullets toward the JD — any rewrite
+         that adds a number or technology the original lacks is discarded;
+      3. build the PDF; if rewording pushed it past one page, rebuild without it.
+    Returns (pdf, note); pdf None on failure."""
     from pipeline.resume.generator import ResumeGenerator
     name = resume_filename(details)
     pdf, info = folder / name, folder / "tailor.json"
@@ -115,19 +220,38 @@ def tailored_resume(job: dict[str, Any], config: dict[str, Any], details: dict[s
     ok, why = can_build()
     if not ok:
         return None, why
-    chosen = ai_config(job, config, private_dir, client) if use_ai else None
-    gen = ResumeGenerator(TEMPLATE, config)
     fields = {k: v for k, v in job.items() if k in Job.__dataclass_fields__}
     for k in ("title", "company", "company_slug", "location", "url", "description"):
         fields[k] = fields.get(k) or ""
     fields.setdefault("platform", job.get("platform") or "other")
     job_obj = Job(**fields)
-    rc, note = chosen if chosen else (gen.analyze_job(job_obj), "arranged by keyword rules")
+
+    chosen = ai_config(job, config, private_dir, client) if use_ai else None
+    rc, note = chosen if chosen else (ResumeGenerator(TEMPLATE, config).analyze_job(job_obj),
+                                      "arranged by keyword rules")
+    changes: list[dict] = []
+    worded = config
+    from pipeline.ai import client as ai
+    if use_ai and rewrite and (job.get("description") or "").strip() and ai.status(private_dir)[0]:
+        try:
+            worded, changes = ai_rewrite(job, config, private_dir, client)
+        except Exception as e:                     # no AI / API error / bad reply: keep the wording
+            changes = [{"error": str(e)[:200]}]
     folder.mkdir(parents=True, exist_ok=True)
-    built = gen.build(job_obj, folder, config=rc, filename=name)
+    built = ResumeGenerator(TEMPLATE, worded).build(job_obj, folder, config=rc, filename=name)
+    kept = [c for c in changes if c.get("kept")]
+    if built and kept and _pages(built) > 1:
+        built = ResumeGenerator(TEMPLATE, config).build(job_obj, folder, config=rc, filename=name)
+        for c in kept:
+            c["kept"], c["why"] = False, "pushed the resume past one page"
+        kept = []
     if not built:
         return None, "the PDF didn't build (see the log)"
-    info.write_text(json.dumps({"note": note, "by": "ai" if chosen else "keywords",
+    if kept:
+        note += f" Reworded {len(kept)} bullet{'s' if len(kept) > 1 else ''} toward the job."
+    info.write_text(json.dumps({"note": note, "by": "ai" if chosen else "keywords", "pdf_name": name,
                                 "ibm": rc.ibm_bullet_order, "sahara": rc.sahara_bullet_order,
-                                "projects": rc.projects, "languages": rc.language_order}, indent=2))
+                                "projects": rc.projects, "languages": rc.language_order,
+                                "changes": changes, "built_at": __import__("datetime").datetime.now()
+                                .isoformat(timespec="seconds")}, indent=2))
     return built, note

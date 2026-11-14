@@ -57,6 +57,8 @@ jobpipe watch
 | `jobpipe dashboard` | Web dashboard at localhost:8050 |
 | `jobpipe apply --handoff -j ID` | Fill a form, then you finish and submit it in the browser |
 | `jobpipe cloud-push URL` | Copy your details, resume and answers to your cloud dashboard |
+| `jobpipe search "A, B" -r "roles"` | Find these companies' portals and their matching roles; watch them |
+| `jobpipe telegram setup` | Connect a Telegram bot for alerts and replies |
 | `jobpipe status` | Latest run's stats and top jobs (`--all` for every saved job) |
 | `jobpipe export jobs.csv` | Export to CSV |
 | `jobpipe resume -j JOB_ID` | Generate tailored resume for a job |
@@ -200,6 +202,72 @@ records the minute a posting appears.
 - **Crawler** — boards watched, reads, unchanged share, new postings, what just
   opened or closed, and each board's estimated posting rate and revisit time.
 - **My details** — your answers, resume, saved answers and AI settings.
+
+## Search companies by name
+
+Dashboard → **Search companies** (or `jobpipe search "Stripe, Jane Street, Datadog" -r "software engineer, backend"`).
+For each company it finds the job portal — boards already known, then each
+ATS's URL pattern (Greenhouse, Ashby, Lever, SmartRecruiters, Workable), then a
+web search (which also finds Workday tenants) — and reads it with **your**
+roles (optionally any location). Matching jobs are scored and listed per
+company with Fill form / Open and finish / Resume. Kept searches are a
+watchlist: the crawler reads those boards at least every 15 minutes with the
+search's roles added, so a new opening at a company you named shows up fast.
+
+## A resume made for each application
+
+For every application (and on demand: **Resume** on any job, or
+`jobpipe resume -j <id>`):
+
+1. Claude (Haiku) picks which IBM / Sahara AI bullets lead, the 3 projects,
+   and the language order for the job description.
+2. Claude rewords bullets toward the JD — leading with what the job asks
+   for, using its wording for things you already did. A **fact guard** throws
+   away any rewrite that adds a number, technology or tool the original bullet
+   doesn't have, or drops one it does ("Kafka" can't appear unless you wrote
+   it; "40%" can't become "60%").
+3. pdflatex builds `<First>_<Last>_Resume.pdf`; if rewording pushed it past one
+   page it's rebuilt without the rewording.
+
+The dialog shows each bullet before → after, and the ones kept as written and
+why. Turn rewording off on Auto-apply (“Reword resume bullets”) or with
+`--no-reword`. A crafted resume costs about a cent.
+
+## Telegram
+
+`jobpipe telegram setup` (or Auto-apply → Alerts on your phone): make a bot
+with @BotFather, paste its token, press Start in the bot. While the crawler
+runs you get:
+
+- **a message the minute a matching job opens** (score threshold you set),
+  with **Submit it · Prepare · Skip · Open posting** buttons;
+- **Applied** messages, with what Claude wrote; **Not sent** messages with why;
+- **each question a form needs** — tap an option or reply with your answer.
+  It's saved for that company and the application is retried automatically;
+- **security codes**: when a site emails one during an unattended submit, the
+  bot asks you; reply with the code and it's typed in;
+- a morning summary, and `/status`, `/pause`, `/resume`.
+
+Only your own chat is obeyed.
+
+## Fully unattended (applies while you sleep)
+
+1. **Keep it running.** Either the cloud (below), or this laptop:
+   `powershell -ExecutionPolicy Bypass -File scripts\windows-always-on.ps1`
+   starts `jobpipe serve` at login, restarts it if it stops, and stops the
+   laptop sleeping while plugged in (lid closed too).
+2. **Auto-apply → on, “Submit complete forms”,** with your score, freshness and
+   daily caps; tick **Submit forms with AI-written answers** if you trust
+   Claude's drafts (each one is sent to you on Telegram).
+3. **Connect Telegram** so questions, security codes and results reach you.
+
+What it does on its own: new posting → fit check → resume crafted for it →
+form filled (saved answers, then Claude for open questions and anything your
+resume settles) → submitted if every required question is answered → you get
+a message. Forms it can't finish wait under Needs you, and their questions
+come to your phone; once you answer, they're retried (up to 3 tries). It never
+ticks consent boxes, and a CAPTCHA challenge stops that application — those
+need you.
 
 ## Run it in the cloud
 

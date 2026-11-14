@@ -220,3 +220,17 @@ body.login { display: grid; place-items: center; min-height: 100vh; }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* ── Dialog (resume view) ──────────────────────────────── */
+dialog { border: 1px solid var(--line); border-radius: var(--radius); padding: 0; width: min(760px, 94vw);
+  max-height: 86vh; color: var(--ink); box-shadow: 0 18px 48px rgba(23, 32, 46, .22); }
+dialog::backdrop { background: rgba(23, 32, 46, .35); }
+#modal-body { padding: 20px 22px; overflow: auto; max-height: 86vh; }
+#modal-body h2 { margin-top: 0; }
+.change { padding: 10px 0; border-top: 1px solid var(--line-soft); font-size: 13px; }
+.change .before { color: var(--muted); text-decoration: line-through; text-decoration-color: rgba(92,103,121,.5); }
+.change .after { margin-top: 4px; }
+.change .kept-no { color: var(--caution); font-size: 12px; margin-top: 3px; }
+.search-form textarea { min-height: 70px; }
+.result-co { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin: 22px 0 8px; }
+.result-co h3 { margin: 0; font-size: 16px; }

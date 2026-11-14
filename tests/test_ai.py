@@ -379,7 +379,7 @@ def test_tailored_resume_builds_and_is_reused(pdir, tmp_path):
     assert "Python" in text and note == "AI role."
     again, _ = tailor.tailored_resume(job, _config(), {"first_name": "Amudhan", "last_name": "Muthaiah"},
                                       folder, private_dir=pdir, client=fake)
-    assert again == pdf and len(fake.calls) == 1                          # reused, no new call
+    assert again == pdf and len(fake.calls) == 2      # arrange + reword once; reused, no new call
 
 
 @pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")

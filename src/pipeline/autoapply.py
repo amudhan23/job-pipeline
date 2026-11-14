@@ -14,6 +14,7 @@ Settings (data/private/autoapply.json):
   max_per_company   per company per day
   trust_ai          submit forms containing AI-written answers
   fit_check/tailor  AI fit check first / tailored resume per job
+  craft             also reword resume bullets toward each job (fact-guarded)
 
 Runs are subprocesses (`python -m pipeline.cli apply …`), one at a time,
 logged to data/private/runs/<id>.log.
@@ -35,7 +36,7 @@ from typing import Any
 DEFAULTS: dict[str, Any] = {
     "enabled": False, "mode": "prepare", "min_score": 65, "fresh_hours": 24,
     "max_per_day": 15, "max_per_company": 2, "trust_ai": False,
-    "fit_check": True, "tailor": True, "batch": 3,
+    "fit_check": True, "tailor": True, "craft": True, "batch": 3,
 }
 JOB_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,200}$")
 TERMINAL = ("applied", "interview", "offer", "rejected", "skipped")
@@ -83,8 +84,58 @@ def attempted(job_id: str, private_dir: Path | None = None) -> bool:
     return (folder / "report.json").exists()
 
 
+MAX_ATTEMPTS = 3
+
+
+def _folder(job_id: str, private_dir: Path | None) -> Path:
+    return _pdir(private_dir) / "applications" / re.sub(r"[^A-Za-z0-9_.-]", "_", job_id)
+
+
+def attempts(job_id: str, private_dir: Path | None = None) -> int:
+    try:
+        return int((_folder(job_id, private_dir) / "attempts").read_text())
+    except (OSError, ValueError):
+        return 1 if attempted(job_id, private_dir) else 0
+
+
+def count_attempt(job_id: str, private_dir: Path | None = None) -> None:
+    f = _folder(job_id, private_dir)
+    f.mkdir(parents=True, exist_ok=True)
+    (f / "attempts").write_text(str(attempts(job_id, private_dir) + 1))
+
+
+def worth_retrying(job: dict, settings: dict[str, Any], private_dir: Path | None = None) -> bool:
+    """A job already tried once comes back when trying again can now succeed:
+    every question it stopped on has an answer (you replied on your phone or
+    on Needs you), or it was prepared complete and auto-apply now submits."""
+    from pipeline import applicant
+    if attempts(job["id"], private_dir) >= MAX_ATTEMPTS:
+        return False
+    try:
+        rep = json.loads((_folder(job["id"], private_dir) / "report.json").read_text())
+    except (OSError, ValueError):
+        return False
+    if rep.get("submitted") or rep.get("closed") or rep.get("error"):
+        return False
+    if rep.get("mode") == "practice" and rep.get("ready_to_submit"):
+        return settings["mode"] == "submit"
+    needs = rep.get("needs_attention") or []
+    if not needs:
+        return False
+    saved = applicant.load_answers(private_dir)
+    company = job["company"]
+    for n in needs:
+        if n.get("kind") in ("file", "checkbox") or "consent" in (n.get("source") or ""):
+            return False                      # only you can do these
+        q = applicant.normalize_question(n["label"], company)
+        if not applicant.lookup_answer(saved, q, company):
+            return False
+    return True
+
+
 def candidates(tracker, settings: dict[str, Any], private_dir: Path | None = None) -> list[dict]:
-    """Fresh, open, well-scoring jobs not yet tried, best first, one per application."""
+    """Fresh, open, well-scoring jobs — new ones, plus earlier tries that can
+    now succeed — best first, one per application."""
     from pipeline.ai.fitcheck import stored
     from pipeline.apply.filler import application_url
     jobs = tracker.open_jobs(max_age_hours=settings["fresh_hours"])
@@ -92,7 +143,9 @@ def candidates(tracker, settings: dict[str, Any], private_dir: Path | None = Non
     for j in jobs:
         if j["status"] in TERMINAL or j["fit_score"] < settings["min_score"]:
             continue
-        if not application_url(j) or attempted(j["id"], private_dir):
+        if not application_url(j):
+            continue
+        if attempted(j["id"], private_dir) and not worth_retrying(j, settings, private_dir):
             continue
         fit = stored(j)
         if fit and fit.get("verdict") == "skip":
@@ -240,14 +293,52 @@ def apply_args(job_ids: list[str] | None = None, *, top: int = 5, min_score: flo
     return args
 
 
-def maybe_autoapply(tracker, private_dir: Path | None = None, runner: Runner | None = None) -> dict | None:
-    """Called by the crawler after each tick: start one background batch if
-    auto-apply is on, nothing is running, and today's caps allow it."""
+# Jobs you asked for from your phone (Submit it / Prepare), run before anything else
+def enqueue(job_id: str, mode: str, private_dir: Path | None = None) -> None:
+    if not JOB_ID.match(job_id) or mode not in ("submit", "practice"):
+        raise ValueError("bad queue entry")
+    p = _pdir(private_dir) / "apply_queue.json"
+    try:
+        q = json.loads(p.read_text())
+    except (OSError, ValueError):
+        q = []
+    q = [x for x in q if x["job_id"] != job_id] + [{"job_id": job_id, "mode": mode}]
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(q))
+
+
+def _take_queue(private_dir: Path | None) -> list[dict]:
+    p = _pdir(private_dir) / "apply_queue.json"
+    try:
+        q = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return []
+    p.write_text("[]")
+    return q
+
+
+def maybe_autoapply(tracker, private_dir: Path | None = None, runner: Runner | None = None,
+                    allow_auto: bool = True) -> dict | None:
+    """Called by the crawler after each tick: run what you queued from your
+    phone first; otherwise start one background batch if auto-apply is on,
+    nothing is running, and today's caps allow it."""
     settings = load_settings(private_dir)
-    if not settings["enabled"]:
-        return None
     runner = runner or Runner(private_dir)
     if runner.busy():
+        return None
+    queued = _take_queue(private_dir)
+    if queued:
+        mode = "submit" if any(q["mode"] == "submit" for q in queued) else "practice"
+        ids = [q["job_id"] for q in queued if q["mode"] == mode]
+        rest = [q for q in queued if q["mode"] != mode]
+        for q in rest:                                   # the other mode waits for the next pass
+            enqueue(q["job_id"], q["mode"], private_dir)
+        jobs = [tracker.get_job(i) for i in ids]
+        companies = [j["company"] for j in jobs if j]
+        args = apply_args(ids, mode=mode, trust_ai=settings["trust_ai"], fit=False, tailor=settings["tailor"])
+        return runner.start(args, ("From your phone — submit: " if mode == "submit" else "From your phone — prepare: ")
+                            + ", ".join(companies), auto=False, companies=companies)
+    if not settings["enabled"] or not allow_auto:
         return None
     done_today = today_attempts(private_dir)
     room = settings["max_per_day"] - sum(done_today.values())
@@ -266,6 +357,8 @@ def maybe_autoapply(tracker, private_dir: Path | None = None, runner: Runner | N
     if not picked:
         return None
     mode = "submit" if settings["mode"] == "submit" else "practice"
+    for j in picked:
+        count_attempt(j["id"], private_dir)
     args = apply_args([j["id"] for j in picked], mode=mode, trust_ai=settings["trust_ai"],
                       fit=settings["fit_check"], tailor=settings["tailor"])
     label = ("Auto-submit: " if mode == "submit" else "Auto-prepare: ") + \

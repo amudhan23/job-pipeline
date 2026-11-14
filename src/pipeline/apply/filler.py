@@ -695,9 +695,35 @@ def _submit_button(page):
     return None
 
 
+_ENTER_CODE_JS = r"""
+(code) => {
+  const vis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 &&
+                      getComputedStyle(el).visibility !== 'hidden'; };
+  const boxes = [...document.querySelectorAll('input')].filter(el =>
+    vis(el) && ['text', 'tel', 'number', ''].includes((el.type || '').toLowerCase()) && !el.value && !el.disabled);
+  const set = (el, v) => {
+    const proto = Object.getPrototypeOf(el);
+    Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, v);
+    el.dispatchEvent(new Event('input', {bubbles: true}));
+    el.dispatchEvent(new Event('change', {bubbles: true}));
+  };
+  if (boxes.length >= code.length && boxes.slice(0, code.length).every(b => (b.maxLength || 99) <= 2)) {
+    [...code].forEach((ch, i) => set(boxes[i], ch));
+  } else if (boxes.length) {
+    set(boxes[0], code);
+  } else return false;
+  const btn = [...document.querySelectorAll('button, input[type=submit]')].find(b => vis(b) &&
+    /submit|verify|confirm|continue/i.test(b.innerText || b.value || ''));
+  if (btn) btn.click();
+  return true;
+}
+"""
+
+
 def submit_application(page, report: FillReport, out_dir: Path,
                        ask_human: Callable[[str], bool] | None = None,
-                       wait_seconds: int = 60) -> None:
+                       wait_seconds: int = 60,
+                       get_code: Callable[[str], str | None] | None = None) -> None:
     """Click Submit and wait for the site to confirm. A CAPTCHA challenge or
     an emailed verification code is handed to the person (ask_human shows
     the message and returns once they're done) — never worked around."""
@@ -729,6 +755,15 @@ def submit_application(page, report: FillReport, out_dir: Path,
                                   "(and press Submit again if it asks).")
         if handoff:
             asked.add(handoff[0])
+            if handoff[0] == "code" and get_code:
+                # Unattended: the code reaches you by phone, you reply, it's typed in here
+                code = (get_code(f"{report.company}: the site emailed you a security code to finish "
+                                 f"submitting {report.title}.") or "").strip()
+                if code and page.evaluate(_ENTER_CODE_JS, code):
+                    limit = waited + 45
+                    continue
+                report.submit_note = "stopped: the site wants the emailed security code and none arrived in time"
+                break
             if ask_human and ask_human(handoff[1]):
                 limit = waited + 30            # give the site time to confirm after you
                 continue
@@ -844,7 +879,8 @@ def practice_apply(job: dict[str, Any], details: dict[str, str], resume_path: Pa
                    on_filled: Callable[[FillReport], bool] | None = None,
                    ask_human: Callable[[str], bool] | None = None,
                    writer: Callable[..., Any] | None = None,
-                   handoff_s: int | None = None) -> FillReport:
+                   handoff_s: int | None = None,
+                   get_code: Callable[[str], str | None] | None = None) -> FillReport:
     """Open the application, fill it, screenshot it.
 
     Submits only if on_filled(report) — called while the filled form is
@@ -912,7 +948,7 @@ def practice_apply(job: dict[str, Any], details: dict[str, str], resume_path: Pa
                 if missing:
                     report.submit_note = ("not sent — still empty: " + "; ".join(m[:60] for m in missing[:5]))
                 else:
-                    submit_application(page, report, out_dir, ask_human)
+                    submit_application(page, report, out_dir, ask_human, get_code=get_code)
         except PWError as e:
             report.error = str(e).splitlines()[0][:300]
         finally:

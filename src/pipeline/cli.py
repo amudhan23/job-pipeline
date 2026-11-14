@@ -227,19 +227,43 @@ def _make_crawler(config: dict, auto: bool = True):
             if job and job["fit_score"] >= settings["min_score"]:
                 ensure_checked(job, tracker, details, resume_text)
 
+    from pipeline.notify.telegram import Telegram
+    tg = Telegram()
+
+    def on_phone(job_id: str, action: str) -> str:
+        """A button tapped in Telegram."""
+        from pipeline.models import ApplicationStatus
+        tracker = Tracker()
+        job = tracker.get_job(job_id)
+        if not job:
+            return "That job is gone from the list."
+        if action == "skip":
+            tracker.update_status(job_id, ApplicationStatus.SKIPPED, notes="skipped from Telegram")
+            return f"Skipped {job['company']}."
+        if job["status"] == "applied":
+            return f"Already applied to {job['company']}."
+        autoapply.enqueue(job_id, "submit" if action == "submit" else "practice")
+        return (f"Submitting {job['company']} next — you'll get a message when it's done."
+                if action == "submit" else f"Preparing {job['company']}; it'll wait under Needs you.")
+
     def after_tick(new_ids: list[str]) -> None:
+        tracker = Tracker()
         if new_ids:
-            tracker = Tracker()
-            for i in new_ids:
-                j = tracker.get_job(i)
-                if j:
-                    console.print(f"[bold magenta]NEW[/bold magenta] {datetime.now():%H:%M} "
-                                  f"{j['company']} — {j['title']}  [dim]({j['fit_score']:.0f}, {j['location']})[/dim]")
+            fresh = [j for j in (tracker.get_job(i) for i in new_ids) if j]
+            for j in fresh:
+                console.print(f"[bold magenta]NEW[/bold magenta] {datetime.now():%H:%M} "
+                              f"{j['company']} — {j['title']}  [dim]({j['fit_score']:.0f}, {j['location']})[/dim]")
             pool.submit(fit_check, new_ids)
-        if auto:
-            meta = autoapply.maybe_autoapply(Tracker())
-            if meta:
-                console.print(f"[cyan]Auto-apply started:[/cyan] {meta['label']}")
+            try:
+                tg.notify_new(fresh)
+            except Exception as e:
+                console.print(f"[yellow]Telegram: {e}[/yellow]")
+        if tg.configured():
+            tg.poll_once(on_phone)
+            tg.maybe_summary(tracker)
+        meta = autoapply.maybe_autoapply(tracker, allow_auto=auto)
+        if meta:
+            console.print(f"[cyan]Auto-apply started:[/cyan] {meta['label']}")
 
     return Crawler(config, after_tick=after_tick)
 
@@ -308,8 +332,9 @@ def serve(ctx: click.Context, port: int, host: str, no_auto: bool) -> None:
 @click.option("--job-id", "-j", required=True, help="Job ID to generate resume for")
 @click.option("--output-dir", "-o", default=None, help="Where to write it (default: the job's application folder)")
 @click.option("--ai/--no-ai", "use_ai", default=True, help="Let Claude arrange it (default: on with a key)")
+@click.option("--reword/--no-reword", default=True, help="Reword bullets toward the job (fact-guarded)")
 @click.pass_context
-def resume(ctx: click.Context, job_id: str, output_dir: str | None, use_ai: bool) -> None:
+def resume(ctx: click.Context, job_id: str, output_dir: str | None, use_ai: bool, reword: bool) -> None:
     """Build a resume arranged for one job (bullets, projects, languages).
     Only reorders and selects what's in your resume — nothing is rewritten."""
     import json as _json
@@ -323,13 +348,23 @@ def resume(ctx: click.Context, job_id: str, output_dir: str | None, use_ai: bool
         applicant.PRIVATE_DIR / "applications" / _re.sub(r"[^A-Za-z0-9_.-]", "_", job_id)
     for stale in (folder / "tailor.json",):          # an explicit request always rebuilds
         stale.unlink(missing_ok=True)
-    pdf, note = tailored_resume(job, ctx.obj["config"], applicant.load(), folder, use_ai=use_ai)
+    for old in folder.glob("*Resume.pdf") if folder.exists() else []:
+        old.unlink()
+    pdf, note = tailored_resume(job, ctx.obj["config"], applicant.load(), folder, use_ai=use_ai,
+                                rewrite=reword)
     if not pdf:
         raise click.ClickException(f"Resume not built: {note}")
     info = _json.loads((folder / "tailor.json").read_text())
     console.print(f"[bold green]Built {pdf}[/bold green]  ({'Claude' if info['by'] == 'ai' else 'keyword rules'})")
     console.print(f"  {note}")
     console.print(f"  [dim]projects: {', '.join(info['projects'])} · languages: {', '.join(info['languages'][:4])}…[/dim]")
+    for c in info.get("changes", []):
+        if "error" in c:
+            console.print(f"  [yellow]rewording skipped: {c['error']}[/yellow]")
+        elif c["kept"]:
+            console.print(f"  [green]reworded[/green] {c['before']}\n        → {c['after']}")
+        else:
+            console.print(f"  [dim]kept original ({c['why']}): {c['before'][:70]}…[/dim]")
 
 
 @main.command()
@@ -553,6 +588,8 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
                       "nothing will be submitted.\n")
 
     totals = {"questions": 0, "submitted": 0, "ai": 0}
+    from pipeline.notify.telegram import Telegram
+    tg = Telegram()
     if use_ai:
         from pipeline.ai import client as ai_client
         ready, why = ai_client.status()
@@ -575,6 +612,8 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
             console.print(f"[dim]Tailored resumes off: {why} — uploading your saved resume[/dim]\n")
             use_tailor = False
     config = click.get_current_context().obj.get("config", {}) if click.get_current_context().obj else {}
+    from pipeline import autoapply as _aa
+    autoapply_settings = _aa.load_settings()
 
     def show(report, job) -> None:
         """Print what was filled and what needs you; remember open questions."""
@@ -602,6 +641,11 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
         totals["ai"] += len(report.ai_written)
         applicant.add_pending(pending)
         totals["questions"] += len(pending) - len(report.ai_written)
+        if not headed:                       # unattended: ask on your phone
+            try:
+                tg.notify_questions(job, [p for p in pending if not p.get("draft")])
+            except Exception:
+                pass
         if report.captcha:
             console.print("  [dim]this site runs a bot check (CAPTCHA) on submit — "
                           "it may ask you to solve one[/dim]")
@@ -640,7 +684,8 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
         upload = resume
         if use_tailor:
             from pipeline.resume.tailor import tailored_resume
-            pdf, note = tailored_resume(job, config, details, folder, use_ai=use_ai)
+            pdf, note = tailored_resume(job, config, details, folder, use_ai=use_ai,
+                                        rewrite=autoapply_settings.get("craft", True))
             if pdf:
                 upload = pdf
                 console.print(f"  [green]📄 tailored resume:[/green] {pdf.name} [dim]— {note[:150]}[/dim]")
@@ -660,6 +705,12 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
                 if yes and report.ai_written and not trust_ai:
                     console.print("  [yellow]has AI-written answers — not auto-submitting. Review them "
                                   "(run without --yes) or pass --trust-ai.[/yellow]")
+                    if not headed:
+                        try:
+                            tg.notify_stopped(job, "it has answers Claude wrote, and auto-apply is set not to "
+                                                   "submit those (turn on “Submit forms with AI-written answers”)")
+                        except Exception:
+                            pass
                     return False
                 if yes:
                     return True
@@ -677,9 +728,12 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
         if use_ai:
             from pipeline.ai.writer import make_writer
             writer = make_writer(job, details)
+        get_code = None
+        if not headed and tg.configured():
+            get_code = lambda msg: tg.ask(f"🔐 {msg}\nReply with the code within 10 minutes.", 600)  # noqa: E731
         report = practice_apply(job, details, upload, folder, headless=not headed, saved=saved,
                                 on_filled=on_filled, ask_human=ask_human, writer=writer,
-                                handoff_s=handoff_minutes * 60 if handoff else None)
+                                handoff_s=handoff_minutes * 60 if handoff else None, get_code=get_code)
         if report.captured:
             # Your answers to the questions the bot didn't know — kept for this company
             keep = [{"question": applicant.normalize_question(label, job["company"]), "answer": value,
@@ -707,9 +761,18 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
                 tracker.update_status(jid, ApplicationStatus.APPLIED, notes=note)
             console.print(f"  [bold green]✓ submitted — {report.submit_note}[/bold green] · "
                           f"screenshot: {report.screenshot}\n")
+            try:
+                tg.notify_applied(job, report)
+            except Exception:
+                pass
         elif report.submit_note:
             console.print(f"  [yellow]not submitted — {report.submit_note}[/yellow] · "
                           f"screenshot: {report.screenshot}\n")
+            if not headed and report.mode == "submit":
+                try:
+                    tg.notify_stopped(job, report.submit_note)
+                except Exception:
+                    pass
         else:
             verdict = "[green]ready to submit[/green]" if report.ready_to_submit \
                 else "[yellow]not ready — see above[/yellow]"
@@ -867,6 +930,77 @@ def fit(job_id: tuple[str, ...], top: int, min_score: float, recheck: bool) -> N
     console.print(table)
     cost = ai_client.spend_summary()["total_spent"] - spent0
     console.print(f"[dim]Cost: ${cost:.4f}. `jobpipe apply` skips jobs marked skip.[/dim]")
+
+
+@main.command()
+@click.argument("companies")
+@click.option("--roles", "-r", default="", help='Comma-separated roles, e.g. "software engineer, backend"')
+@click.option("--anywhere", is_flag=True, help="Any location (default: your profile's locations)")
+@click.option("--no-watch", is_flag=True, help="Search once; don't add these companies to the crawler's watchlist")
+@click.pass_context
+def search(ctx: click.Context, companies: str, roles: str, anywhere: bool, no_watch: bool) -> None:
+    """Search companies you name for roles you name, e.g.
+    jobpipe search "Stripe, Jane Street, Datadog" -r "software engineer, backend"."""
+    import asyncio
+    from rich.table import Table
+    from pipeline.search import run_search, upsert_search
+    s = upsert_search(companies, roles, anywhere=anywhere, watch=not no_watch)
+    if not s["companies"]:
+        raise click.ClickException("Name at least one company.")
+    s = asyncio.run(run_search(s, ctx.obj["config"], progress=lambda m: console.print(f"[dim]{m}[/dim]")))
+    tracker = Tracker()
+    table = Table(title=f"Roles: {', '.join(s['roles']) or 'your profile roles'}")
+    for col in ("Company", "Board", "Score", "Job", "Location"):
+        table.add_column(col, overflow="fold")
+    for company, r in s["results"].items():
+        jobs = sorted((tracker.get_job(i) for i in r["jobs"]), key=lambda j: -(j or {}).get("fit_score", 0))
+        boards = ", ".join(f"{p}/{sl}" for p, sl in r["boards"]) or f"[yellow]{r['error']}[/yellow]"
+        if not jobs:
+            table.add_row(company, boards, "", "[dim]no matching roles open[/dim]" if r["boards"] else "", "")
+        for k, j in enumerate(jobs[:15]):
+            table.add_row(company if k == 0 else "", boards if k == 0 else "", f"{j['fit_score']:.0f}",
+                          f"{j['title']}\n[dim]{j['url']}[/dim]", j["location"])
+    console.print(table)
+    if s["watch"]:
+        console.print("[dim]Watching these companies: the crawler reads them at least every 15 minutes "
+                      "with these roles.[/dim]")
+
+
+@main.group()
+def telegram() -> None:
+    """Job alerts and replies on your phone."""
+
+
+@telegram.command("setup")
+def telegram_setup() -> None:
+    """Connect a Telegram bot: make one with @BotFather, paste its token here,
+    then send /start to it."""
+    from pipeline.notify.telegram import Telegram
+    tg = Telegram()
+    console.print("1. In Telegram, open @BotFather, send /newbot and follow the steps.\n"
+                  "2. It gives you a token like 123456:ABC-…")
+    token = click.prompt("Paste the bot token (input hidden)", hide_input=True)
+    try:
+        bot = tg.connect(token)
+    except Exception as e:
+        raise click.ClickException(f"Telegram didn't accept that token: {e}")
+    console.print(f"3. Now open [bold]https://t.me/{bot}[/bold] and press Start (or send /start). Waiting…")
+    chat = tg.wait_for_start(180)
+    if not chat:
+        raise click.ClickException("No message arrived within 3 minutes. Run `jobpipe telegram setup` again.")
+    console.print("[green]Connected.[/green] You'll get alerts there while `jobpipe watch` or `serve` runs.")
+
+
+@telegram.command("test")
+def telegram_test() -> None:
+    """Send a test message."""
+    from pipeline.notify.telegram import Telegram
+    tg = Telegram()
+    if not tg.configured():
+        raise click.ClickException("Not connected yet: run `jobpipe telegram setup`.")
+    if not tg.send("👋 Test from jobpipe. Alerts are working."):
+        raise click.ClickException("Telegram didn't take the message — check the bot token.")
+    console.print("Sent.")
 
 
 @main.command("cloud-push")

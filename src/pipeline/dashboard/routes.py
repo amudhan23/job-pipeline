@@ -39,6 +39,21 @@ def _report(pdir: Path, job_id: str) -> dict | None:
         return None
 
 
+def _resume_pdf(folder: Path, info: dict | None = None) -> Path | None:
+    """The resume made for this job (named after you, e.g. Amudhan_Muthaiah_Resume.pdf)."""
+    if not folder.exists():
+        return None
+    if info is None:
+        try:
+            info = json.loads((folder / "tailor.json").read_text())
+        except (OSError, ValueError):
+            info = {}
+    named = folder / info["pdf_name"] if info.get("pdf_name") else None
+    if named and named.exists():
+        return named
+    return next(iter(sorted(folder.glob("*Resume.pdf"))), None)
+
+
 def _file_url(job_id: str, path: str | None) -> str | None:
     if not path:
         return None
@@ -141,6 +156,13 @@ class ApiMixin:
             return self._crawler(), 200
         if path == "/api/summary":
             return self._summary(), 200
+        if path == "/api/searches":
+            return self._searches(), 200
+        if path == "/api/telegram":
+            return self._telegram_info(), 200
+        m = re.fullmatch(r"/api/resume/([A-Za-z0-9_.:-]+)", path)
+        if m:
+            return self._resume_info(m.group(1)), 200
         m = re.fullmatch(r"/api/runs/(\d{8}-\d{6})/log", path)
         if m:
             from pipeline.autoapply import Runner
@@ -225,7 +247,7 @@ class ApiMixin:
         for job in self._tracker().by_status(APPLIED):
             rep = _report(pdir, job["id"]) or {}
             folder = _folder(pdir, job["id"])
-            resume = next(iter(sorted(folder.glob("*_Resume.pdf"))), None) if folder.exists() else None
+            resume = _resume_pdf(folder)
             ai = [f for f in rep.get("filled") or [] if f.get("label") in (rep.get("ai_written") or [])]
             out.append({**job_card(job, pdir),
                         "submit_note": rep.get("submit_note", ""), "mode": rep.get("mode", ""),
@@ -311,7 +333,104 @@ class ApiMixin:
                 return {"error": str(e)}, 400
         if path == "/api/attention/suggest":
             return self._suggest(data)
+        if path == "/api/searches":
+            return self._search_save(data)
+        if path.startswith("/api/telegram"):
+            return self._telegram_post(path, data)
+        m = re.fullmatch(r"/api/searches/([a-f0-9]{10})/(run|delete)", path)
+        if m:
+            from pipeline import search as srch
+            if m.group(2) == "delete":
+                return {"deleted": srch.delete_search(m.group(1), pdir)}, 200
+            s = next((x for x in srch.load_searches(pdir) if x["id"] == m.group(1)), None)
+            if not s:
+                return {"error": "no such search"}, 404
+            _start_search(s, pdir)
+            return {"started": True}, 200
+        m = re.fullmatch(r"/api/resume/([A-Za-z0-9_.:-]+)/build", path)
+        if m:
+            return self._resume_build(m.group(1), bool(data.get("reword", True)))
         return None
+
+    # ── Search ─────────────────────────────────────────────────────────
+
+    def _searches(self) -> dict:
+        from pipeline import search as srch
+        pdir, t = self._pdir(), self._tracker()
+        out = []
+        for s in srch.load_searches(pdir):
+            res = []
+            for company, r in (s.get("results") or {}).items():
+                jobs = [j for j in (t.get_job(i) for i in r.get("jobs", [])) if j and not j.get("closed_at")]
+                jobs.sort(key=lambda j: -(j.get("fit_score") or 0))
+                res.append({"company": company, "boards": r.get("boards", []), "error": r.get("error", ""),
+                            "jobs": [job_card(j, pdir) for j in jobs[:40]]})
+            out.append({**{k: s.get(k) for k in ("id", "companies", "roles", "anywhere", "watch", "last_run")},
+                        "running": _SEARCH_PROGRESS.get(s["id"]), "results": res})
+        return {"searches": out}
+
+    def _search_save(self, data: dict):
+        from pipeline import search as srch
+        pdir = self._pdir()
+        companies = srch.parse_list(data.get("companies", ""))
+        if not companies:
+            return {"error": "Add at least one company."}, 400
+        s = srch.upsert_search(companies, data.get("roles", ""), anywhere=bool(data.get("anywhere")),
+                               watch=bool(data.get("watch", True)), search_id=data.get("id"), private_dir=pdir)
+        _start_search(s, pdir)
+        return {"search": s}, 200
+
+    # ── Telegram ───────────────────────────────────────────────────────
+
+    def _telegram_info(self) -> dict:
+        from pipeline.notify.telegram import Telegram
+        s = Telegram(self._pdir()).settings()
+        return {**{k: v for k, v in s.items() if k != "token"}, "has_token": bool(s["token"]),
+                "connected": bool(s["token"] and s["chat_id"])}
+
+    def _telegram_post(self, path: str, data: dict):
+        from pipeline.notify.telegram import Telegram
+        tg = Telegram(self._pdir())
+        try:
+            if path == "/api/telegram/connect":
+                bot = tg.connect(str(data.get("token", "")))
+                return {"bot": bot}, 200
+            if path == "/api/telegram/wait":
+                chat = tg.wait_for_start(25)
+                return {"connected": bool(chat)}, 200
+            if path == "/api/telegram/test":
+                return {"sent": bool(tg.send("👋 Test from jobpipe. Alerts are working."))}, 200
+            if path == "/api/telegram":
+                tg.save_settings({k: v for k, v in data.items() if k not in ("token", "chat_id", "bot")})
+                return self._telegram_info(), 200
+        except RuntimeError as e:
+            return {"error": f"Telegram said: {e}"}, 400
+        return {"error": "unknown"}, 404
+
+    # ── Resumes ────────────────────────────────────────────────────────
+
+    def _resume_info(self, job_id: str) -> dict:
+        folder = _folder(self._pdir(), job_id)
+        info = folder / "tailor.json"
+        data = json.loads(info.read_text()) if info.exists() else {}
+        pdf = _resume_pdf(folder, data)
+        return {"exists": bool(pdf), "file": _file_url(job_id, str(pdf)) if pdf else None, **data}
+
+    def _resume_build(self, job_id: str, reword: bool):
+        from pipeline import applicant
+        from pipeline.resume.tailor import tailored_resume
+        from pipeline.utils.config import load_config
+        job = self._tracker().get_job(job_id)
+        if not job:
+            return {"error": "no such job"}, 404
+        folder = _folder(self._pdir(), job_id)
+        for old in list(folder.glob("*Resume.pdf")) + [folder / "tailor.json"] if folder.exists() else []:
+            old.unlink(missing_ok=True)
+        pdf, note = tailored_resume(job, load_config(None), applicant.load(self._pdir()), folder,
+                                    private_dir=self._pdir(), rewrite=reword)
+        if not pdf:
+            return {"error": f"The resume didn't build: {note}"}, 400
+        return self._resume_info(job_id), 200
 
     def _suggest(self, data: dict):
         """AI suggestions for one company's waiting questions, for you to review."""
@@ -374,3 +493,29 @@ class ApiMixin:
         if root not in target.parents or not target.is_file():
             return None
         return target.read_bytes(), mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+
+
+# Searches run in a background thread; progress messages by search id
+_SEARCH_PROGRESS: dict[str, str] = {}
+
+
+def _start_search(search: dict, pdir: Path) -> None:
+    import asyncio
+    import threading
+    from pipeline.search import run_search
+    from pipeline.utils.config import load_config
+    if _SEARCH_PROGRESS.get(search["id"]):
+        return
+    _SEARCH_PROGRESS[search["id"]] = "Starting…"
+
+    def work() -> None:
+        try:
+            asyncio.run(run_search(search, load_config(None), private_dir=pdir,
+                                   progress=lambda m: _SEARCH_PROGRESS.__setitem__(search["id"], m)))
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).exception(f"search failed: {e}")
+        finally:
+            _SEARCH_PROGRESS.pop(search["id"], None)
+
+    threading.Thread(target=work, name=f"search-{search['id']}", daemon=True).start()

@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from pipeline.crawler.fetcher import Fetcher
-from pipeline.crawler.policy import INITIAL_RATE, Policy
+from pipeline.crawler.policy import INITIAL_RATE, WATCHLIST_MAX_SECONDS, Policy
 from pipeline.crawler.sources import build_sources
 from pipeline.models import ApplicationStatus, Job
 
@@ -70,6 +70,8 @@ class Crawler:
                                           min_gap=self.cfg.get("min_gap_seconds", 0.25))
         self.policy = policy or Policy(**(self.cfg.get("policy") or {}))
         self.sources = build_sources(self.pipeline.scrapers)
+        self.overrides: dict[tuple[str, str], dict] = {}     # watched searches: board → filters
+        self._override_sources: dict[tuple, Any] = {}
         self.status_path = status_path or STATUS_FILE
         self.on_new = on_new
         self.after_tick = after_tick
@@ -90,9 +92,21 @@ class Crawler:
 
     # ── One board ──────────────────────────────────────────────────────
 
+    def source_for(self, platform: str, slug: str):
+        """The board's reader — with a watched search's roles if it has one."""
+        f = self.overrides.get((platform, slug))
+        if not f or platform not in self.sources:
+            return self.sources.get(platform)
+        key = (platform, tuple(f.get("role_keywords", [])), tuple(f.get("locations", [])))
+        if key not in self._override_sources:
+            from pipeline.search import scrapers_for
+            scraper = scrapers_for(self.config, f)[platform]
+            self._override_sources[key] = build_sources({platform: scraper})[platform]
+        return self._override_sources[key]
+
     async def crawl_board(self, board: dict) -> list[str]:
         platform, slug = board["platform"], board["slug"]
-        source = self.sources.get(platform)
+        source = self.source_for(platform, slug)
         now = utcnow()
         if source is None:
             self.registry.schedule(platform, slug, next_due_at=iso(now + timedelta(hours=12)))
@@ -136,6 +150,8 @@ class Crawler:
 
         rate = self.policy.update_rate(rate, len(new_ids), elapsed)
         interval = self.policy.interval(rate, platform)
+        if (platform, slug) in self.overrides and platform not in self.policy.slow_platforms:
+            interval = min(interval, WATCHLIST_MAX_SECONDS)
         interval *= random.uniform(0.9, 1.1)          # spread boards out over time
         fields = dict(next_due_at=iso(now + timedelta(seconds=interval)), interval_s=interval, rate=rate,
                       etag=listing.etag, last_modified=listing.last_modified,
@@ -247,6 +263,11 @@ class Crawler:
     async def tick(self) -> list[str]:
         now = utcnow()
         self.pipeline._register_pins()
+        try:
+            from pipeline.search import watch_overrides
+            self.overrides = watch_overrides(self.config)
+        except Exception as e:
+            logger.debug(f"watchlist unreadable: {e}")
         new_ids: list[str] = []
         # Feed first: boards it just pointed at get read in this same pass
         if utcnow() >= self.next_feed:
@@ -291,7 +312,8 @@ class Crawler:
             waits.append((nxt - utcnow()).total_seconds())
         else:
             waits.append(0 if self.registry.due(iso(utcnow()), 1) else 30)
-        return max(1.0, min(30.0, min(waits)))
+        # Wake at least every 10 s: phone taps and auto-apply are handled between reads
+        return max(1.0, min(10.0, min(waits)))
 
     async def run(self, stop: asyncio.Event | None = None, max_ticks: int | None = None) -> None:
         stop = stop or asyncio.Event()

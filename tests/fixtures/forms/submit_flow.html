@@ -20,9 +20,15 @@
     setTimeout(() => {
       document.body.innerHTML = {
         thanks: '<h1>Thank you for applying!</h1><p>Your application has been received.</p>',
-        code: '<h1>Almost there</h1><p>Enter the 8-character security code we sent to your email.</p><input>',
+        code: '<h1>Almost there</h1><p>Enter the 8-character security code we sent to your email.</p>' +
+              '<input id="code" maxlength="8"><button type="button" id="verify">Verify</button>',
         error: '<h1>Software Engineer</h1><p class="error">There was an error submitting your application.</p>',
       }[mode];
+      const v = document.getElementById('verify');
+      if (v) v.onclick = () => {
+        if (document.getElementById('code').value === 'ABCD1234')
+          document.body.innerHTML = '<h1>Thank you for applying!</h1>';
+      };
     }, 800);
   });
 </script>
