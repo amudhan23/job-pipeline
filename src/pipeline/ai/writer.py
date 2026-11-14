@@ -64,9 +64,9 @@ description says the team does.
 - Output only the answer text."""
 
 
-def _applicant_block(details: dict[str, str], resume_text: str) -> str:
+def _applicant_block(details: dict[str, str], resume_text: str, private_dir: Path | None = None) -> str:
     from pipeline.ai.context import applicant_block
-    return applicant_block(details, resume_text)
+    return applicant_block(details, resume_text, private_dir)
 
 
 def load_drafts(private_dir: Path | None = None) -> dict[str, dict[str, str]]:
@@ -96,7 +96,7 @@ def draft_answer(question: str, job: dict[str, Any], details: dict[str, str], re
     system = [
         {"type": "text", "text": _SYSTEM},
         # Same for every question in a run → cached by the API, billed at ~5%
-        {"type": "text", "text": _applicant_block(details, resume_text),
+        {"type": "text", "text": _applicant_block(details, resume_text, private_dir),
          "cache_control": {"type": "ephemeral"}},
     ]
     prompt = f"{job_block(job)}\n\nQuestion on the application form: {question.strip()}"
@@ -185,7 +185,7 @@ def pick_answer(question: str, kind: str, options: list[str], job: dict[str, Any
         prompt = (f"{job_block(job, limit=3000)}\n\nQuestion{multi}: {question.strip()}\n"
                   f"Options:\n{listing}")
         system = [{"type": "text", "text": _PICK_SYSTEM},
-                  {"type": "text", "text": _applicant_block(details, resume_text),
+                  {"type": "text", "text": _applicant_block(details, resume_text, private_dir),
                    "cache_control": {"type": "ephemeral"}}]
         reply = ai.complete(system, prompt, purpose=f"pick: {company} — {question[:60]}",
                             max_tokens=200, private_dir=private_dir, client=client)

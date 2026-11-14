@@ -14,10 +14,20 @@ _FACTS = ["first_name", "last_name", "city", "country", "citizenship", "authoriz
           "linkedin", "github", "website"]
 
 
-def applicant_block(details: dict[str, str], resume_text: str) -> str:
+def applicant_block(details: dict[str, str], resume_text: str, private_dir: Path | None = None) -> str:
+    """Details + resume, plus the full career profile when you've saved one
+    (so form answers and fit checks know everything, not just the resume)."""
     facts = "\n".join(f"{k}: {details[k]}" for k in _FACTS if details.get(k))
-    return (f"<applicant_details>\n{facts}\n</applicant_details>\n\n"
-            f"<resume>\n{resume_text[:12000]}\n</resume>")
+    out = (f"<applicant_details>\n{facts}\n</applicant_details>\n\n"
+           f"<resume>\n{resume_text[:12000]}\n</resume>")
+    try:
+        from pipeline.resume.writer import has_profile, load_profile
+        if has_profile(private_dir):
+            out += ("\n\n<career_profile>\n" + load_profile(private_dir)[:40000] +
+                    "\n</career_profile>\nThe career profile is the source of truth; follow its Rules.")
+    except Exception:
+        pass
+    return out
 
 
 def job_block(job: dict[str, Any], limit: int = 8000) -> str:

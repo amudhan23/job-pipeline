@@ -80,7 +80,7 @@ def check_job(job: dict[str, Any], details: dict[str, str], resume_text: str,
                 "summary": "Couldn't check: the posting has no description.",
                 "checked_at": datetime.now().isoformat(timespec="seconds"), "model": ""}
     system = [{"type": "text", "text": _SYSTEM},
-              {"type": "text", "text": applicant_block(details, resume_text),
+              {"type": "text", "text": applicant_block(details, resume_text, private_dir),
                "cache_control": {"type": "ephemeral"}}]
     reply = ai.complete(system, job_block(job, limit=12000), purpose=f"fit: {job.get('company')} — "
                         f"{job.get('title', '')[:50]}", max_tokens=500, private_dir=private_dir,

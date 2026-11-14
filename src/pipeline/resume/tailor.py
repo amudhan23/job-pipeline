@@ -220,6 +220,24 @@ def tailored_resume(job: dict[str, Any], config: dict[str, Any], details: dict[s
     ok, why = can_build()
     if not ok:
         return None, why
+    from pipeline.ai import client as _ai
+    from pipeline.resume import writer as pw
+    if use_ai and pw.has_profile(private_dir) and _ai.status(private_dir)[0]:
+        try:
+            built, meta = pw.write_resume(job, details, folder, name, private_dir, client)
+        except Exception as e:                     # bad reply / API error: fall back to the bullet bank
+            built, meta = None, {"error": str(e)[:200]}
+        if built:
+            note = meta.get("note") or "written from your career profile"
+            if meta.get("dropped"):
+                n = len(meta["dropped"])
+                note += f" Dropped {n} line{'s' if n > 1 else ''} the profile didn't support."
+            info.write_text(json.dumps({"note": note, "by": "profile", "pdf_name": name,
+                                        "dropped": meta.get("dropped", []), "trimmed": meta.get("trimmed", []),
+                                        "resume": meta.get("resume"),
+                                        "built_at": __import__("datetime").datetime.now()
+                                        .isoformat(timespec="seconds")}, indent=2))
+            return built, note
     fields = {k: v for k, v in job.items() if k in Job.__dataclass_fields__}
     for k in ("title", "company", "company_slug", "location", "url", "description"):
         fields[k] = fields.get(k) or ""

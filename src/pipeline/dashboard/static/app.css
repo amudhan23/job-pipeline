@@ -71,8 +71,10 @@ button, .btn {
 button:hover { border-color: var(--ink); }
 button.primary { background: var(--action); border-color: var(--action); color: var(--action-ink); }
 button.primary:hover { filter: brightness(1.08); }
-button.quiet { border-color: transparent; background: transparent; color: var(--muted); padding: 6px 8px; }
-button.quiet:hover { color: var(--ink); background: var(--ground); }
+.btn { display: inline-block; text-decoration: none; }
+.btn:hover { border-color: var(--ink); text-decoration: none; }
+.btn.quiet, button.quiet { border-color: transparent; background: transparent; color: var(--muted); padding: 6px 8px; }
+.btn.quiet:hover, button.quiet:hover { color: var(--ink); background: var(--ground); }
 button:disabled { opacity: .45; cursor: not-allowed; }
 input, select, textarea {
   font: inherit; color: var(--ink); background: var(--panel);
@@ -234,3 +236,31 @@ dialog::backdrop { background: rgba(23, 32, 46, .35); }
 .search-form textarea { min-height: 70px; }
 .result-co { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin: 22px 0 8px; }
 .result-co h3 { margin: 0; font-size: 16px; }
+
+/* Career profile */
+.profile-stats { display: flex; gap: 8px 22px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin-bottom: 10px; }
+.profile-stats b { color: var(--ink); }
+.profile-text { width: 100%; min-height: 62vh; font: 13.5px/1.55 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius); background: #fbfcfe; color: var(--ink); resize: vertical; tab-size: 2; }
+.file-btn { cursor: pointer; }
+
+/* Outreach */
+.outreach { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 16px; }
+.outreach > .top { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.outreach h2 { margin: 0 0 4px; font-size: 17px; }
+.outreach h2 a { color: var(--ink); }
+.who-links { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 14px; padding: 10px 12px; background: var(--ground); border-radius: var(--radius); }
+.who { display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap; font-size: 14px; }
+.who b { min-width: 0; flex: 1 1 220px; }
+.add-contact { border-top: 1px solid var(--line-soft); padding-top: 12px; margin-bottom: 6px; }
+.add-contact .bar { margin-top: 10px; }
+.contact { border-top: 1px solid var(--line); padding: 14px 0 4px; margin-top: 12px; }
+.contact > .top { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.contact .name { font-weight: 700; font-size: 15px; }
+.contact .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+.contact .bar { margin-top: 10px; }
+.draft { border-left: 3px solid var(--action); padding: 8px 0 8px 12px; margin: 10px 0; }
+.draft-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+.draft-head b { margin-right: auto; }
+.draft .subj { font-weight: 700; margin-bottom: 4px; }
+.draft .body { white-space: pre-wrap; max-width: 72ch; line-height: 1.55; }

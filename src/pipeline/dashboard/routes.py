@@ -160,6 +160,12 @@ class ApiMixin:
             return self._searches(), 200
         if path == "/api/telegram":
             return self._telegram_info(), 200
+        if path == "/api/career-profile":
+            return self._career_profile(), 200
+        if path == "/api/outreach":
+            from pipeline import outreach
+            return {"records": outreach.overview(self._pdir()), "hunter": bool(outreach.hunter_key(self._pdir())),
+                    "ai": __import__("pipeline.ai.client", fromlist=["status"]).status(self._pdir())[0]}, 200
         m = re.fullmatch(r"/api/resume/([A-Za-z0-9_.:-]+)", path)
         if m:
             return self._resume_info(m.group(1)), 200
@@ -337,6 +343,15 @@ class ApiMixin:
             return self._search_save(data)
         if path.startswith("/api/telegram"):
             return self._telegram_post(path, data)
+        if path == "/api/career-profile":
+            from pipeline.resume import writer as pw
+            text = str(data.get("text", ""))
+            if len(text) > 200_000:
+                return {"error": "That's too long (200,000 characters at most)."}, 400
+            pw.save_profile(text, pdir)
+            return self._career_profile(), 200
+        if path.startswith("/api/outreach"):
+            return self._outreach_post(path, data)
         m = re.fullmatch(r"/api/searches/([a-f0-9]{10})/(run|delete)", path)
         if m:
             from pipeline import search as srch
@@ -408,6 +423,56 @@ class ApiMixin:
         return {"error": "unknown"}, 404
 
     # ── Resumes ────────────────────────────────────────────────────────
+
+    def _career_profile(self) -> dict:
+        from pipeline.resume import writer as pw
+        text = pw.load_profile(self._pdir())
+        secs = pw.sections(text) if text else {}
+        return {"text": text, "ready": pw.has_profile(self._pdir()),
+                "confirm": len(re.findall(r"\[confirm", text, re.I)),
+                "roles": [h for h in secs if not h.startswith("project:") and h not in
+                          ("_top", "Rules", "Experience", "Projects", "Skills by level", "Education")][:20],
+                "never_claim": pw.never_claim(text) if text else []}
+
+    def _outreach_post(self, path: str, data: dict):
+        from pipeline import outreach
+        from pipeline.ai import client as ai_client
+        pdir = self._pdir()
+        if path == "/api/outreach/hunter-key":
+            try:
+                outreach.save_hunter_key(str(data.get("key", "")), pdir)
+            except ValueError as e:
+                return {"error": str(e)}, 400
+            return {"hunter": bool(outreach.hunter_key(pdir))}, 200
+        m = re.fullmatch(r"/api/outreach/([A-Za-z0-9_.:-]+)/(plan|contacts|domain)", path)
+        m2 = re.fullmatch(r"/api/outreach/([A-Za-z0-9_.:-]+)/contacts/([a-f0-9]{8})/(\w+)", path)
+        job_id = (m or m2).group(1) if (m or m2) else None
+        job = self._tracker().get_job(job_id) if job_id else None
+        if not job:
+            return {"error": "no such job"}, 404
+        try:
+            if m and m.group(2) == "plan":
+                return outreach.plan(job, pdir), 200
+            if m and m.group(2) == "contacts":
+                return outreach.add_contact(job, data, pdir), 200
+            if m and m.group(2) == "domain":
+                rec = outreach.record(job, pdir)
+                rec["domain"] = outreach.clean_domain(str(data.get("domain", "")))
+                return outreach._put(rec, pdir), 200
+            cid, action = m2.group(2), m2.group(3)
+            if action == "email":
+                return outreach.find_email(job, cid, pdir, domain=data.get("domain")), 200
+            if action == "draft":
+                if not ai_client.status(pdir)[0]:
+                    return {"error": "Drafts need your Anthropic key (My details, AI)."}, 400
+                return outreach.draft(job, cid, pdir), 200
+            return outreach.update_contact(job, cid, action, pdir, data), 200
+        except KeyError as e:
+            return {"error": str(e).strip("'")}, 404
+        except ValueError as e:
+            return {"error": str(e)}, 400
+        except ai_client.AIUnavailable as e:
+            return {"error": str(e)}, 400
 
     def _resume_info(self, job_id: str) -> dict:
         folder = _folder(self._pdir(), job_id)

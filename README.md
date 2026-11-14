@@ -214,24 +214,61 @@ company with Fill form / Open and finish / Resume. Kept searches are a
 watchlist: the crawler reads those boards at least every 15 minutes with the
 search's roles added, so a new opening at a company you named shows up fast.
 
-## A resume made for each application
+## Your career profile, and resumes written from it
+
+The **Career profile** page (or `jobpipe profile set my_profile.md`) holds
+everything about your work in one markdown file: every role with its stack,
+every project, the real numbers, your skill levels, stories for "Why us?"
+questions, and **Rules** ("3.5 years total", "no em dashes",
+"Never claim: Kubernetes, AWS, GraphQL"). It lives in `data/private/`, never
+in the repo. Resumes, form answers, fit checks and outreach are all written
+from it.
 
 For every application (and on demand: **Resume** on any job, or
-`jobpipe resume -j <id>`):
+`jobpipe resume -j <id>`), Claude reads the job and the profile and writes
+the whole resume: which roles and projects, the bullets, the skill lines led
+by the job's stack. Then **every line is checked against the profile** before
+pdflatex prints it:
 
-1. Claude (Haiku) picks which IBM / Sahara AI bullets lead, the 3 projects,
-   and the language order for the job description.
-2. Claude rewords bullets toward the JD — leading with what the job asks
-   for, using its wording for things you already did. A **fact guard** throws
-   away any rewrite that adds a number, technology or tool the original bullet
-   doesn't have, or drops one it does ("Kafka" can't appear unless you wrote
-   it; "40%" can't become "60%").
-3. pdflatex builds `<First>_<Last>_Resume.pdf`; if rewording pushed it past one
-   page it's rebuilt without the rewording.
+- a bullet under a job may only use numbers and technologies that appear in
+  *that job's* section (so Go from an internship can't move into IBM);
+- a project bullet, only what's in that project's entry;
+- skills, only what the profile lists (not "familiar" or "coursework" items
+  when the Rules forbid them);
+- anything on the Rules' **Never claim** list is rejected everywhere;
+- text inside `[confirm …]` notes never counts as proof.
 
-The dialog shows each bullet before → after, and the ones kept as written and
-why. Turn rewording off on Auto-apply (“Reword resume bullets”) or with
-`--no-reword`. A crafted resume costs about a cent.
+Lines that fail are left out and listed in the Resume dialog with the reason.
+The page is trimmed bullet by bullet until it fits on one page.
+`jobpipe profile check resume.json` runs the same check on any draft.
+
+With no profile saved, the older path runs: Claude picks and rewords bullets
+from `config/profile.yaml`, with a guard that discards any rewrite adding a
+number or technology the original lacked. A resume costs a few cents.
+
+## Outreach
+
+From **Applied** (Reach out) or the **Outreach** page:
+
+1. **Who to contact.** Claude reads the posting and names the team and the
+   likely hiring-manager titles (usually one level above the role). Cold notes
+   to hiring managers tend to help; at big companies and startups, cold notes
+   to recruiters tend not to, so managers come first. Each title gets a
+   LinkedIn people search and a Google search of LinkedIn profiles.
+2. **Their email.** Add the person you found. With a free
+   [Hunter](https://hunter.io) key, the email comes from Hunter with its
+   confidence (or from the company's known pattern). Without one, it's the
+   most common pattern for that domain, always marked **guess**.
+3. **What to say.** A first email (under 120 words, one relevant thing you
+   built and one clear ask), a LinkedIn note under 300 characters, and two
+   follow-ups, written from your profile. Numbers or tools the profile doesn't
+   have are flagged before you send.
+4. **Follow-ups.** You send everything yourself (Open in Gmail, Mail app, or
+   Copy). Mark it sent; follow-ups are due on days 4 and 9 and show up in the
+   Telegram daily summary. A short sequence gets roughly twice the replies of
+   a single email.
+
+Nothing is ever sent from your accounts.
 
 ## Telegram
 

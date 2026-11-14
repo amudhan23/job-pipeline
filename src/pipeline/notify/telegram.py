@@ -254,8 +254,13 @@ class Telegram:
         day = (datetime.now() - timedelta(hours=24)).isoformat(timespec="seconds")
         new = [e for e in tracker.events(since=day, limit=3000) if e["kind"] == "new"]
         applied = [j for j in tracker.by_status(("applied",)) if (j.get("applied_at") or "") >= day]
+        from pipeline import outreach
+        due = outreach.due_followups(self.dir)
         self.send(f"☀️ <b>Last 24 hours</b>\n{len(new)} new matching postings\n{len(applied)} applications sent\n"
-                  + "".join(f"\n• {html.escape(j['company'])}: {html.escape(j['title'][:60])}" for j in applied[:10]))
+                  + "".join(f"\n• {html.escape(j['company'])}: {html.escape(j['title'][:60])}" for j in applied[:10])
+                  + (f"\n\n📬 <b>Follow-ups due ({len(due)})</b>" + "".join(
+                      f"\n• {html.escape(d['contact'])} at {html.escape(d['company'])}: {d['label']}"
+                      for d in due[:10]) + "\nOpen Outreach on the dashboard for the drafts." if due else ""))
 
     def maybe_summary(self, tracker) -> None:
         s = self.settings()

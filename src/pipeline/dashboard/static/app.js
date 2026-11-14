@@ -404,7 +404,7 @@ async function pageApplied() {
     return;
   }
   $("#app").innerHTML = `<div class="table-wrap"><table><thead><tr><th>Applied</th><th>Job</th><th class="hide-sm">How</th>
-    <th>Status</th><th class="hide-sm">Resume sent</th><th class="hide-sm">Proof</th></tr></thead><tbody>
+    <th>Status</th><th class="hide-sm">Resume sent</th><th class="hide-sm">Proof</th><th></th></tr></thead><tbody>
     ${items.map(i => `<tr data-id="${esc(i.id)}">
       <td class="age">${i.applied_at ? esc(new Date(i.applied_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })) : "—"}
         <small>${i.applied_at ? esc(new Date(i.applied_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })) : ""}</small></td>
@@ -417,8 +417,10 @@ async function pageApplied() {
         `<option ${s === i.status ? "selected" : ""}>${s}</option>`).join("")}</select></td>
       <td class="hide-sm">${i.resume_file ? `<a href="${esc(i.resume_file)}" target="_blank">Tailored PDF</a>` : '<span class="note">Your saved resume</span>'}</td>
       <td class="hide-sm">${i.screenshot ? `<a href="${esc(i.screenshot)}" target="_blank">Screenshot</a>` : ""}</td>
+      <td class="actions"><button data-reach>Reach out</button></td>
     </tr>`).join("")}</tbody></table></div>`;
   $$("select[data-status]").forEach(s => s.onchange = () => setStatus(s.closest("tr").dataset.id, s.value));
+  $$("button[data-reach]").forEach(b => b.onclick = () => startOutreach(b.closest("tr").dataset.id, b));
 }
 
 /* ── Auto-apply ──────────────────────────────────────────── */
@@ -567,12 +569,17 @@ async function showResume(jobId, title) {
         <div class="bar" style="margin-top:6px"><a class="btn" href="${esc(r.file)}" target="_blank">Open the PDF</a>
         <button data-rb="1">Rebuild</button><button data-rb="0" class="quiet">Rebuild without rewording</button>
         <button class="quiet" data-close style="margin-left:auto">Close</button></div>
+        ${r.by === "profile" ? `<p class="note">Written from your career profile and checked line by line against it.</p>
+          ${(r.dropped || []).length ? `<h2>Left out by the fact check</h2>${r.dropped.map(d => `<div class="change">
+            <div class="before">${esc(d.where)}: ${esc(d.line)}</div><div class="kept-no">${esc(d.why)}</div></div>`).join("")}` :
+            `<p class="note">Every line passed the check.</p>`}
+          ${(r.trimmed || []).length ? `<p class="note">Trimmed to fit one page: ${r.trimmed.length} line${r.trimmed.length > 1 ? "s" : ""}.</p>` : ""}` : ""}
         ${r.projects ? `<p class="note">Projects: ${r.projects.map(esc).join(", ")}. Languages lead with ${(r.languages || []).slice(0, 3).map(esc).join(", ")}.</p>` : ""}
         ${err ? `<p class="note warn">Rewording was skipped: ${esc(err.error)}</p>` : ""}
         ${changes.length ? `<h2>What changed</h2>${changes.map(c => `<div class="change">
           <div class="before">${esc(c.before)}</div>
           ${c.kept ? `<div class="after">${esc(c.after)}</div>` : `<div class="kept-no">Kept the original: the rewrite ${esc(c.why)}.</div>`}</div>`).join("")}` :
-          `<p class="note">No bullet was reworded; they're chosen and ordered for the job.</p>`}` :
+          r.by === "profile" ? "" : `<p class="note">No bullet was reworded; they're chosen and ordered for the job.</p>`}` :
       `<p class="note">No resume has been made for this job yet. Building one takes about 15 seconds.</p>
         <div class="bar"><button class="primary" data-rb="1">Build resume</button><button class="quiet" data-close>Close</button></div>`}`;
     $$("[data-rb]", body).forEach(b => b.onclick = async () => {
@@ -753,7 +760,222 @@ async function refreshCounts() {
   } catch { /* offline */ }
 }
 
-const routes = { jobs: pageJobs, attention: pageAttention, applied: pageApplied, search: pageSearch, auto: pageAuto, crawler: pageCrawler };
+
+/* ── Career profile ──────────────────────────────────────── */
+
+const PROFILE_TEMPLATE = `# Career profile: Your Name
+
+## Rules
+- Total experience is N years.
+- No em dashes. No summary section. One page.
+- Never claim: (things you must never be credited with, comma separated)
+
+## Experience
+
+### Company: Title
+City | Mon YYYY – Mon YYYY
+Stack: the tools you really used there
+- What you built, for whom, and the result (with the real number).
+
+## Projects
+- **Project name** | stack | link
+  What it does and the result.
+
+## Skills by level
+- **Used in production:**
+- **Used in projects:**
+- **Coursework only:**
+
+## Education
+- **University**: Degree, years. Coursework: ...
+
+## Stories (for "Why us?" and "Tell us about…" questions)
+- **Short title:** what happened, what you did, what changed.
+`;
+
+async function pageCareer() {
+  page.innerHTML = `<div class="head"><div><h1>Career profile</h1>
+    <p class="lede">Everything about your work in one place: every role, project, real number, skill level and rule.
+    Resumes, form answers, fit checks and outreach are written from this, and every resume line is checked against it
+    before it's printed. Facts about one job can only appear under that job.</p></div></div>
+    <div class="panel"><div class="profile-stats" id="cp-stats">Loading…</div>
+      <textarea id="cp-text" class="profile-text" spellcheck="true" aria-label="Career profile"></textarea>
+      <div class="bar"><button class="primary" id="cp-save">Save profile</button>
+        <label class="btn quiet file-btn">Load a .md or .txt file<input type="file" id="cp-file" accept=".md,.txt,text/plain,text/markdown" hidden></label>
+        <button class="quiet" id="cp-tpl">Start from the outline</button>
+        <span class="note" id="cp-dirty"></span></div>
+      <p class="note">Write <b>[confirm …]</b> next to anything you haven't checked; text inside it never counts as proof for a resume line.
+      Stays in your private folder, never in the repo.</p></div>`;
+  const ta = $("#cp-text");
+  const stats = d => {
+    $("#cp-stats").innerHTML = d.ready ? `<span><b>${d.roles.length}</b> sections found</span>
+      <span><b>${d.never_claim.length}</b> never-claim terms${d.never_claim.length ? `: ${d.never_claim.slice(0, 8).map(esc).join(", ")}` : ""}</span>
+      <span class="${d.confirm ? "waiting" : "ready"}">${d.confirm ? `${d.confirm} [confirm] notes left to check` : "Nothing left to confirm"}</span>` :
+      `<span class="waiting">No profile yet.</span><span>Until you add one, resumes reuse the bullets in your config.</span>`;
+  };
+  let d;
+  try { d = await api("/api/career-profile"); } catch (e) { $("#cp-stats").textContent = e.message; return; }
+  ta.value = d.text; stats(d);
+  let saved = ta.value;
+  ta.oninput = () => { $("#cp-dirty").textContent = ta.value !== saved ? "Unsaved changes" : ""; };
+  $("#cp-save").onclick = async () => {
+    try { d = await api("/api/career-profile", { text: ta.value }); saved = ta.value; stats(d); ta.oninput(); toast("Profile saved."); }
+    catch (e) { toast(e.message, true); }
+  };
+  $("#cp-tpl").onclick = () => {
+    if (ta.value.trim() && !confirm("Replace what's in the box with the outline?")) return;
+    ta.value = PROFILE_TEMPLATE; ta.oninput(); ta.focus();
+  };
+  $("#cp-file").onchange = async e => {
+    const f = e.target.files[0]; if (!f) return;
+    if (f.size > 400000) { toast("That file is too big for a profile.", true); return; }
+    ta.value = await f.text(); ta.oninput(); toast(`Loaded ${f.name}. Press Save profile to keep it.`);
+  };
+}
+
+/* ── Outreach ────────────────────────────────────────────── */
+
+async function startOutreach(jobId, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "Planning…"; }
+  try { await api(`/api/outreach/${encodeURIComponent(jobId)}/plan`, {}); location.hash = "#/outreach"; }
+  catch (e) { toast(e.message, true); if (btn) { btn.disabled = false; btn.textContent = "Reach out"; } }
+}
+
+const emailTag = c => c.email ? `<span class="tag ${{ verified: "good", yours: "good", found: "caution", guessed: "caution" }[c.email_status] || "plain"}">${
+  { verified: "verified", yours: "yours", found: "found, unverified", guessed: "guess" }[c.email_status] || ""}</span>` : "";
+
+function copyBtn(text, label = "Copy") {
+  return `<button class="quiet" data-copy="${esc(text)}">${label}</button>`;
+}
+
+function contactCard(r, c) {
+  const d = c.drafts, nx = c.next || {};
+  const due = nx.due ? new Date(nx.due) : null;
+  const step = nx.step === "replied" ? `<span class="tag good">Replied</span>` :
+    nx.step === "done" ? `<span class="tag plain">Sequence finished</span>` :
+    nx.step?.startsWith("followup") ? `<span class="tag ${nx.overdue ? "stop" : "plain"}">${esc(nx.label)} ${nx.overdue ? "due now" : "on " + due.toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>` :
+    `<span class="tag caution">${esc(nx.label || "")}</span>`;
+  const draftBlock = (key, title) => !d || !d[key] ? "" : `<div class="draft"><div class="draft-head"><b>${title}</b>
+      ${copyBtn((key === "email" ? `Subject: ${d.subject}\n\n` : "") + d[key])}
+      ${c.compose && c.compose[key] ? `<a class="btn quiet" href="${esc(c.compose[key].gmail)}" target="_blank" rel="noopener">Open in Gmail</a>
+        <a class="btn quiet" href="${esc(c.compose[key].mailto)}">Mail app</a>` : ""}
+      ${key === "linkedin" && c.linkedin ? `<a class="btn quiet" href="${esc(c.linkedin.startsWith("http") ? c.linkedin : "https://" + c.linkedin)}" target="_blank" rel="noopener">Their profile</a>` : ""}</div>
+    ${key === "email" ? `<div class="subj">${esc(d.subject)}</div>` : ""}<div class="body">${esc(d[key])}</div></div>`;
+  return `<div class="contact" data-cid="${esc(c.id)}">
+    <div class="top"><div><div class="name">${esc(c.name)} <span class="tag plain">${esc(c.kind)}</span></div>
+      <div class="sub">${esc(c.title || "")}${c.linkedin ? ` · <a href="${esc(c.linkedin.startsWith("http") ? c.linkedin : "https://" + c.linkedin)}" target="_blank" rel="noopener">LinkedIn</a>` : ""}</div>
+      <div class="sub">${c.email ? `${esc(c.email)} ${emailTag(c)}` : "No email yet"}${c.email_note ? `<br><span class="note">${esc(c.email_note)}</span>` : ""}</div></div>
+      <div>${step}</div></div>
+    <div class="bar">
+      <button data-c="email">${c.email ? "Find email again" : "Find email"}</button>
+      <button data-c="draft" ${r._ai ? "" : "disabled title='Needs your Anthropic key'"}>${d ? "Rewrite drafts" : "Write drafts"}</button>
+      ${d && !c.sent_at ? `<button class="primary" data-c="sent">I sent the first message</button>` : ""}
+      ${nx.step?.startsWith("followup") ? `<button data-c="followup">I sent ${esc(nx.label.toLowerCase())}</button>` : ""}
+      ${c.sent_at && !c.replied_at ? `<button data-c="replied">They replied</button>` : ""}
+      <button class="quiet" data-c="delete" style="margin-left:auto">Remove</button></div>
+    ${d ? `${d.warnings && d.warnings.length ? `<p class="note warn">Check before sending: ${d.warnings.map(esc).join("; ")}</p>` : ""}
+      <details ${c.sent_at ? "" : "open"}><summary class="note">Drafts</summary>
+      ${draftBlock("email", "First email")}${draftBlock("linkedin", "LinkedIn note")}
+      ${draftBlock("followup1", "Follow-up 1 (day 4)")}${draftBlock("followup2", "Follow-up 2 (day 9)")}</details>` : ""}
+  </div>`;
+}
+
+async function pageOutreach() {
+  page.innerHTML = `<div class="head"><div><h1>Outreach</h1>
+    <p class="lede">For each job: who to contact (usually the hiring manager, one level above the role), their email,
+    and a short first email, LinkedIn note and two follow-ups written from your profile. You send everything yourself;
+    mark it sent and follow-ups are reminded on days 4 and 9.</p></div></div>
+    <div id="or-top"></div><div id="or-list">Loading…</div>`;
+  await drawOutreach();
+}
+
+async function drawOutreach() {
+  let d;
+  try { d = await api("/api/outreach"); } catch (e) { $("#or-list").textContent = e.message; return; }
+  let apps = [];
+  try { apps = (await api("/api/applications")).items; } catch { }
+  const started = new Set(d.records.map(r => r.job_id));
+  const options = apps.filter(a => !started.has(a.id));
+  $("#or-top").innerHTML = `<div class="panel"><div class="grid2">
+    <div class="field"><label for="or-job">Start with a job you applied to</label>
+      <select id="or-job" style="width:100%">${options.length ? options.map(a => `<option value="${esc(a.id)}">${esc(a.company)}: ${esc(a.title)}</option>`).join("") :
+        "<option value=''>No other applications yet</option>"}</select>
+      <div class="hint">Or press Reach out on any row under Applied.</div></div>
+    <div class="field"><label for="or-hunter">Hunter API key (optional)</label>
+      <input type="password" id="or-hunter" style="width:100%" placeholder="${d.hunter ? "Saved. Paste a new one to replace it" : "Free plan: 25 searches a month"}" autocomplete="off">
+      <div class="hint">With a key, emails come from Hunter with a confidence score. Without one, they're pattern guesses marked unverified.</div></div>
+    </div><div class="bar"><button class="primary" id="or-start" ${options.length ? "" : "disabled"}>Plan outreach</button>
+      <button class="quiet" id="or-key">Save key</button>${d.hunter ? `<button class="quiet" id="or-key-del">Remove key</button>` : ""}
+      ${d.ai ? "" : `<span class="note warn">Add your Anthropic key on My details to get team-specific titles and drafts.</span>`}</div></div>`;
+  $("#or-start").onclick = () => $("#or-job").value && startOutreach($("#or-job").value, $("#or-start")).then(drawOutreach);
+  $("#or-key").onclick = async () => {
+    try { await api("/api/outreach/hunter-key", { key: $("#or-hunter").value }); toast("Hunter key saved."); drawOutreach(); }
+    catch (e) { toast(e.message, true); }
+  };
+  if ($("#or-key-del")) $("#or-key-del").onclick = async () => { await api("/api/outreach/hunter-key", { key: "" }); toast("Removed."); drawOutreach(); };
+
+  const box = $("#or-list");
+  if (!d.records.length) { box.innerHTML = `<div class="panel empty"><strong>No outreach yet.</strong>Pick a job above to see whom to contact.</div>`; return; }
+  box.innerHTML = d.records.map(r => {
+    r._ai = d.ai;
+    const p = r.plan || {};
+    return `<section class="outreach" data-job="${esc(r.job_id)}">
+      <div class="top"><div><h2><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.company)}: ${esc(r.title)}</a></h2>
+        ${p.team ? `<p class="note">Team: <b>${esc(p.team)}</b>. ${esc(p.why || "")}</p>` : p.why ? `<p class="note">${esc(p.why)}</p>` : ""}
+        ${p.angle ? `<p class="note">Lead with: ${esc(p.angle)}</p>` : ""}</div>
+        <button class="quiet" data-o="plan">Plan again</button></div>
+      ${(p.links || []).length ? `<div class="who-links">${p.links.map(l => `<div class="who"><b>${esc(l.title)}</b>
+        <a href="${esc(l.linkedin)}" target="_blank" rel="noopener">Search LinkedIn</a>
+        <a href="${esc(l.google)}" target="_blank" rel="noopener">Search Google</a></div>`).join("")}</div>` : ""}
+      <form class="add-contact" autocomplete="off"><div class="grid2">
+        <div class="field"><label>Name</label><input type="text" name="name" required style="width:100%" placeholder="Priya Raman"></div>
+        <div class="field"><label>Their title</label><input type="text" name="title" style="width:100%" placeholder="Engineering Manager, Payments"></div>
+        <div class="field"><label>LinkedIn link</label><input type="text" name="linkedin" style="width:100%" placeholder="linkedin.com/in/…"></div>
+        <div class="field"><label>Email, if you have it</label><input type="text" name="email" style="width:100%"></div>
+        <div class="field"><label>They are a</label><select name="kind" style="width:100%">
+          <option value="manager">Hiring manager</option><option value="engineer">Engineer on the team</option>
+          <option value="recruiter">Recruiter</option><option value="other">Someone else</option></select></div>
+        <div class="field"><label>Company email domain</label><input type="text" name="domain" style="width:100%" value="${esc(r.domain || "")}"></div>
+      </div><div class="bar"><button class="primary">Add person</button></div></form>
+      ${r.contacts.map(c => contactCard(r, c)).join("")}
+    </section>`;
+  }).join("");
+
+  $$(".outreach").forEach(sec => {
+    const job = encodeURIComponent(sec.dataset.job);
+    $("[data-o=plan]", sec).onclick = async e => {
+      e.target.disabled = true; e.target.textContent = "Planning…";
+      try { await api(`/api/outreach/${job}/plan`, {}); } catch (err) { toast(err.message, true); }
+      drawOutreach();
+    };
+    $("form", sec).onsubmit = async e => {
+      e.preventDefault();
+      const body = Object.fromEntries(new FormData(e.target).entries());
+      try { await api(`/api/outreach/${job}/contacts`, body); toast(`Added ${body.name}.`); drawOutreach(); }
+      catch (err) { toast(err.message, true); }
+    };
+    $$(".contact", sec).forEach(card => {
+      const cid = card.dataset.cid;
+      $$("[data-c]", card).forEach(b => b.onclick = async () => {
+        const act = b.dataset.c;
+        if (act === "delete" && !confirm("Remove this person and their drafts?")) return;
+        const busy = { email: "Looking…", draft: "Writing…" }[act];
+        if (busy) { b.disabled = true; b.textContent = busy; }
+        try {
+          await api(`/api/outreach/${job}/contacts/${cid}/${act}`, act === "email" ? { domain: $("[name=domain]", sec).value } : {});
+          if (act === "sent") toast("Marked sent. Follow-up 1 is due in 4 days.");
+          drawOutreach();
+        } catch (err) { toast(err.message, true); if (busy) { b.disabled = false; b.textContent = "Try again"; } }
+      });
+      $$("[data-copy]", card).forEach(b => b.onclick = async () => {
+        try { await navigator.clipboard.writeText(b.dataset.copy); toast("Copied."); } catch { toast("Couldn't copy; select the text instead.", true); }
+      });
+    });
+  });
+}
+
+const routes = { jobs: pageJobs, attention: pageAttention, applied: pageApplied, search: pageSearch, auto: pageAuto,
+  crawler: pageCrawler, career: pageCareer, outreach: pageOutreach };
 
 function route() {
   timers.forEach(clearInterval); timers = [];

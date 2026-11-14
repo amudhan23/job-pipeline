@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 import logging
-import sys
 from pathlib import Path
 
 import click
@@ -886,7 +887,6 @@ def fit(job_id: tuple[str, ...], top: int, min_score: float, recheck: bool) -> N
     citizenship, no sponsorship, years required…). Uses Haiku — a fraction
     of a cent per job. Results show on the dashboard; `jobpipe apply` skips
     jobs marked skip."""
-    import json as _json
     from rich.table import Table
     from pipeline import applicant
     from pipeline.ai import client as ai_client
@@ -1001,6 +1001,47 @@ def telegram_test() -> None:
     if not tg.send("👋 Test from jobpipe. Alerts are working."):
         raise click.ClickException("Telegram didn't take the message — check the bot token.")
     console.print("Sent.")
+
+
+@main.group()
+def profile() -> None:
+    """Your career profile: the source every resume, answer and email is written from."""
+
+
+@profile.command("set")
+@click.argument("path", type=click.Path(exists=True, dir_okay=False))
+def profile_set(path: str) -> None:
+    """Save a markdown file as your career profile (kept in data/private)."""
+    from pipeline.resume import writer as pw
+    text = Path(path).read_text()
+    pw.save_profile(text)
+    left = len(re.findall(r"\[confirm", text, re.I))
+    console.print(f"Saved. {len(pw.never_claim(text))} never-claim terms"
+                  + (f"; [yellow]{left} \\[confirm] notes still to check[/yellow]." if left else "."))
+
+
+@profile.command("show")
+def profile_show() -> None:
+    """Print where the profile is and what the checker reads from it."""
+    from pipeline.resume import writer as pw
+    text = pw.load_profile()
+    if not text:
+        raise click.ClickException("No profile yet: `jobpipe profile set my_profile.md`, or paste it on "
+                                   "the dashboard's Career profile page.")
+    secs = [h for h in pw.sections(text) if not h.startswith("project:") and h != "_top"]
+    console.print(f"Sections: {', '.join(secs)}")
+    console.print(f"Never claim: {', '.join(pw.never_claim(text)) or '(none)'}")
+
+
+@profile.command("check")
+@click.argument("resume_json", type=click.Path(exists=True, dir_okay=False))
+def profile_check(resume_json: str) -> None:
+    """Run the fact check on a resume JSON (same shape the writer uses)."""
+    from pipeline.resume import writer as pw
+    _, dropped = pw.check(json.loads(Path(resume_json).read_text()), pw.load_profile())
+    for d in dropped:
+        console.print(f"[red]✗[/red] {d['where']}: {d['line']}  [dim]({d['why']})[/dim]")
+    console.print("[green]Every line is supported.[/green]" if not dropped else f"{len(dropped)} line(s) would be dropped.")
 
 
 @main.command("cloud-push")
