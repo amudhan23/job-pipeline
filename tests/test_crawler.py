@@ -235,3 +235,12 @@ def test_fetcher_backs_off_on_429():
         await f.aclose()
 
     run(scenario())
+
+
+def test_workday_tenants_share_one_slow_lane():
+    from pipeline.crawler.fetcher import Fetcher
+    f = Fetcher(min_gap=0.25)
+    a = f._host("https://acme.wd5.myworkdayjobs.com/wday/cxs/acme/x/jobs")
+    b = f._host("https://globex.wd1.myworkdayjobs.com/wday/cxs/globex/y/jobs")
+    gh = f._host("https://boards-api.greenhouse.io/v1/boards/acme/jobs")
+    assert a is b and a.gap >= 1.5 and a is not gh and gh.gap == 0.25

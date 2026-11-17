@@ -67,11 +67,20 @@ class Fetcher:
         self.hosts: dict[str, _Host] = {}
         self.stats = {"requests": 0, "not_modified": 0, "errors": 0, "throttled": 0, "bytes": 0}
 
+    # Providers that rate-limit by caller across all their customers'
+    # hostnames (acme.wd5.myworkdayjobs.com, globex.wd1.…): one shared,
+    # slower lane for all of them, so a 429 slows every tenant together.
+    SHARED = {"myworkdayjobs.com": (2, 1.5), "icims.com": (2, 1.0), "smartrecruiters.com": (3, 0.5)}
+
     def _host(self, url: str) -> _Host:
-        name = urlsplit(url).netloc
+        name = urlsplit(url).netloc.lower()
+        per, gap = self.per_host, self.min_gap
+        for suffix, (p, g) in self.SHARED.items():
+            if name == suffix or name.endswith("." + suffix):
+                name, per, gap = suffix, min(per, p), max(gap, g)
+                break
         if name not in self.hosts:
-            self.hosts[name] = _Host(gap=self.min_gap, base_gap=self.min_gap,
-                                     sem=asyncio.Semaphore(self.per_host))
+            self.hosts[name] = _Host(gap=gap, base_gap=gap, sem=asyncio.Semaphore(per))
         return self.hosts[name]
 
     async def _wait_turn(self, host: _Host) -> None:

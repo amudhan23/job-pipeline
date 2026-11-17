@@ -148,14 +148,18 @@ def checks(online: bool = False, private_dir: Path | None = None) -> list[dict[s
                      "Lever": "https://api.lever.co/v0/postings/plaid?mode=json&limit=1",
                      "Ashby": "https://api.ashbyhq.com/posting-api/job-board/ramp"}
             bad = []
-            with httpx.Client(timeout=15, follow_redirects=True) as c:
+            with httpx.Client(timeout=20, follow_redirects=True,
+                              headers={"User-Agent": "Mozilla/5.0 (jobpipe doctor)"}) as c:
                 for name, url in hosts.items():
                     try:
-                        if c.get(url).status_code >= 500:
-                            bad.append(name)
-                    except httpx.HTTPError:
-                        bad.append(name)
-            return (FAIL, f"Can't reach {', '.join(bad)}") if bad else (OK, "Greenhouse, Lever and Ashby reachable")
+                        code = c.get(url).status_code
+                        if code >= 500 or code in (403, 429):
+                            bad.append(f"{name} (HTTP {code})")
+                    except httpx.HTTPError as e:
+                        bad.append(f"{name} ({type(e).__name__})")
+            if not bad:
+                return OK, "Greenhouse, Lever and Ashby reachable"
+            return (FAIL if len(bad) == len(hosts) else WARN), f"Trouble reaching {', '.join(bad)}"
         out.append(_check("Job sites", network))
     return out
 
