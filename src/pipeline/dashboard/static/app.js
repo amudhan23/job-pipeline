@@ -1153,6 +1153,10 @@ async function drawLeads(status) {
         <div class="hint">Pay-per-use, about $0.005 per post read.</div></div>
       <div class="field"><label for="ls-cap">X posts per day at most</label><input type="number" id="ls-cap" min="0" max="5000" value="${s.x_daily_posts}">
         <div class="hint">About $${(s.x_daily_posts * 0.005).toFixed(2)} a day at this cap.</div></div>
+      <div class="field"><label for="ls-bh">Bluesky handle (optional)</label><input type="text" id="ls-bh" value="${esc(s.bsky_handle)}" placeholder="you.bsky.social">
+        <div class="hint">Only needed if Bluesky stops answering searches without signing in.</div></div>
+      <div class="field"><label for="ls-bp">Bluesky app password</label><input type="password" id="ls-bp" autocomplete="off"
+        placeholder="${s.has_bsky_password ? "Saved" : "Settings → Privacy and security → App passwords"}"></div>
       <div class="field"><label for="ls-min">Alert me and watch the company from score</label><input type="number" id="ls-min" min="0" max="100" value="${s.alert_min_score}"></div>
     </div>
     <div class="field"><label for="ls-q">Search phrases for Bluesky and X, one per line</label><textarea id="ls-q" rows="5">${esc(s.queries.join("\n"))}</textarea></div>
@@ -1161,6 +1165,8 @@ async function drawLeads(status) {
     const body = { hn: $("#ls-hn").checked, bluesky: $("#ls-bluesky").checked, x: $("#ls-x").checked,
       x_daily_posts: +$("#ls-cap").value, alert_min_score: +$("#ls-min").value, queries: $("#ls-q").value };
     if ($("#ls-xtok").value) { body.x_token = $("#ls-xtok").value; body.x = true; }
+    body.bsky_handle = $("#ls-bh").value;
+    if ($("#ls-bp").value) body.bsky_app_password = $("#ls-bp").value;
     try { await api("/api/leads/settings", body); toast("Saved."); drawLeads(status); } catch (e) { toast(e.message, true); }
   };
 }

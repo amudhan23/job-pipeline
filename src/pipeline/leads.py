@@ -93,6 +93,11 @@ def save_settings(values: dict[str, Any], private_dir: Path | None = None) -> di
                 raise ValueError("That doesn't look like an X API bearer token.")
             if v or values.get("clear_x_token"):
                 s["x_token"] = v
+        elif k == "bsky_handle":
+            s[k] = str(v).strip().lstrip("@")[:100]
+        elif k == "bsky_app_password":
+            if v:
+                s[k] = str(v).strip()[:64]
         elif k == "queries":
             items = v if isinstance(v, list) else str(v).splitlines()
             s["queries"] = [q.strip()[:120] for q in items if q.strip()][:12]
@@ -112,6 +117,8 @@ def public_settings(private_dir: Path | None = None) -> dict[str, Any]:
     s = load_settings(private_dir)
     out = {k: s[k] for k in DEFAULTS}
     out["has_x_token"] = bool(s.get("x_token"))
+    out["bsky_handle"] = s.get("bsky_handle", "")
+    out["has_bsky_password"] = bool(s.get("bsky_app_password"))
     out["x_today"] = LeadStore().x_reads_today()
     return out
 
@@ -276,12 +283,29 @@ def _bsky_links(post: dict) -> list[str]:
     return links
 
 
-def bluesky_posts(client: httpx.Client, store: LeadStore, queries: list[str]) -> list[dict]:
+def _bsky_session(client: httpx.Client, handle: str, app_password: str) -> str | None:
+    """Sign in with a Bluesky app password (free) when public search is refused."""
+    r = client.post("https://bsky.social/xrpc/com.atproto.server.createSession",
+                    json={"identifier": handle, "password": app_password})
+    return r.json().get("accessJwt") if r.status_code == 200 else None
+
+
+def bluesky_posts(client: httpx.Client, store: LeadStore, queries: list[str],
+                  handle: str = "", app_password: str = "") -> list[dict]:
     out: list[dict] = []
     since = store.get("bsky_since") or (utcnow() - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
     started = utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    url, headers, statuses = BSKY_API, {}, []
     for q in queries:
-        r = client.get(BSKY_API, params={"q": q, "sort": "latest", "limit": 50, "since": since, "lang": "en"})
+        params = {"q": q, "sort": "latest", "limit": 50, "since": since, "lang": "en"}
+        r = client.get(url, params=params, headers=headers)
+        if r.status_code in (401, 403) and handle and app_password and not headers:
+            token = _bsky_session(client, handle, app_password)
+            if token:
+                url = "https://bsky.social/xrpc/app.bsky.feed.searchPosts"
+                headers = {"Authorization": f"Bearer {token}"}
+                r = client.get(url, params=params, headers=headers)
+        statuses.append(r.status_code)
         if r.status_code != 200:
             continue
         for p in r.json().get("posts", []):
@@ -294,6 +318,9 @@ def bluesky_posts(client: httpx.Client, store: LeadStore, queries: list[str]) ->
                         "author_url": f"https://bsky.app/profile/{handle}",
                         "text": text + ("\n" + "\n".join(links) if links else ""),
                         "posted_at": (p.get("record") or {}).get("createdAt", "")})
+    if statuses and all(c != 200 for c in statuses):
+        hint = " (add a Bluesky handle and app password on the Leads page)" if 403 in statuses or 401 in statuses else ""
+        raise RuntimeError(f"Bluesky search answered {statuses[0]}{hint}")
     store.put("bsky_since", started)
     return out
 
@@ -586,7 +613,8 @@ def fetch(sources: list[str] | None = None, private_dir: Path | None = None, sto
                 if src == "hn":
                     posts = hn_posts(client, store)
                 elif src == "bluesky":
-                    posts = bluesky_posts(client, store, s["queries"])
+                    posts = bluesky_posts(client, store, s["queries"], s.get("bsky_handle", ""),
+                                          s.get("bsky_app_password", ""))
                 elif src == "x":
                     posts = x_posts(client, store, s.get("x_token", ""), s["queries"], s["x_daily_posts"])
                 else:

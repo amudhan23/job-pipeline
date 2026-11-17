@@ -185,3 +185,23 @@ def test_fetch_reports_source_errors_without_stopping(pdir, tmp_path):  # noqa: 
                   client=httpx.Client(transport=httpx.MockTransport(handler)), config=CONFIG)
     assert rep["posts"]["hn"] == 2 and "bluesky" in rep["errors"]
     assert any(n["company"] == "Acme" for n in rep["new"])
+
+
+def test_bluesky_refusal_is_an_error_and_app_password_signs_in(tmp_path):
+    store = L.LeadStore(tmp_path / "l.db")
+
+    def refused(req):
+        return httpx.Response(403, json={})
+    with pytest.raises(RuntimeError, match="403"):
+        L.bluesky_posts(httpx.Client(transport=httpx.MockTransport(refused)), store, ["#hiring"])
+
+    def with_login(req):
+        if req.url.host == "api.bsky.app":
+            return httpx.Response(403, json={})
+        if req.url.path.endswith("createSession"):
+            return httpx.Response(200, json={"accessJwt": "jwt"})
+        assert req.headers["Authorization"] == "Bearer jwt"
+        return httpx.Response(200, json={"posts": [{"uri": "at://d/app.bsky.feed.post/1", "author": {"handle": "a"},
+                                                    "record": {"text": "We're hiring engineers", "createdAt": "2026-11-17T00:00:00Z"}}]})
+    posts = L.bluesky_posts(httpx.Client(transport=httpx.MockTransport(with_login)), store, ["#hiring"], "me.bsky.social", "abcd-efgh-ijkl-mnop")
+    assert len(posts) == 1
