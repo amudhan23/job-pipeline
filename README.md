@@ -289,46 +289,76 @@ Only your own chat is obeyed.
 
 ## Fully unattended (applies while you sleep)
 
-1. **Keep it running.** Either the cloud (below), or this laptop:
+1. **Keep it running:** `jobpipe cloud deploy` (below). Or this laptop:
    `powershell -ExecutionPolicy Bypass -File scripts\windows-always-on.ps1`
-   starts `jobpipe serve` at login, restarts it if it stops, and stops the
-   laptop sleeping while plugged in (lid closed too).
+   starts `jobpipe serve` at login and restarts it if it stops.
 2. **Auto-apply → on, “Submit complete forms”,** with your score, freshness and
-   daily caps; tick **Submit forms with AI-written answers** if you trust
-   Claude's drafts (each one is sent to you on Telegram).
-3. **Connect Telegram** so questions, security codes and results reach you.
+   daily caps.
+3. **Connect Telegram** (`jobpipe telegram setup`). For the first 15 complete
+   applications (change it under **Ask me on Telegram before the first**), each
+   one comes to your phone with every answer, the filled form's screenshot and
+   the resume it would attach. Tap **Submit it** or **Skip**. When you approve,
+   the exact answers you saw (Claude's included) are kept for that company, so
+   the submit sends what you approved. After 15 approvals it submits on its own.
+4. **Security codes:** `jobpipe mail setup` (or Auto-apply → Security codes
+   from Gmail) with a Gmail app password. When Greenhouse emails a code before
+   accepting an application, jobpipe reads it: inbox opened read-only, only
+   mail from job sites that arrived after the submit, nothing marked read or
+   kept. Without it, codes are asked for on Telegram.
 
-What it does on its own: new posting → fit check → resume crafted for it →
-form filled (saved answers, then Claude for open questions and anything your
-resume settles) → submitted if every required question is answered → you get
-a message. Forms it can't finish wait under Needs you, and their questions
-come to your phone; once you answer, they're retried (up to 3 tries). It never
-ticks consent boxes, and a CAPTCHA challenge stops that application — those
-need you.
+What it does on its own: new posting → fit check → resume written for it →
+form filled (saved answers, then Claude for open questions) → submitted if
+every required question is answered and the site confirms → you get a
+message. It never ticks consent boxes; a CAPTCHA stops that application.
+
+Guard rails, from what goes wrong with other auto-apply tools:
+
+- **No duplicates:** the same company and role isn't applied to again within
+  45 days (reposts, the same opening on two boards).
+- **Never these companies:** a list on the Auto-apply page.
+- **Only confirmed counts:** an application is marked applied only when the
+  site shows its confirmation.
+- **Every answer is kept:** Applied → **What was sent** shows each answer,
+  the resume and a screenshot.
+- **Watchdog:** after every crawler pass it checks for a stalled crawler,
+  failing board reads, crashing apply runs, AI budget or key problems and low
+  disk, and tells you on Telegram (at most every 6 hours per problem, plus a
+  note when it's fixed). In the cloud, a stalled crawler restarts the machine.
+
+`jobpipe doctor` checks every part of the setup (`--online` also contacts the
+AI, Telegram, Gmail and the job sites). `jobpipe selftest` fetches a live
+Greenhouse posting and fills its real form with your details in a headless
+browser, without pressing Submit (`--fake` uses a made-up applicant).
 
 ## Run it in the cloud
 
-The crawler only catches jobs while it runs, so put it on a small always-on
-machine. `jobpipe serve` runs the crawler and the dashboard together; the
-dashboard then needs an access token (it holds your private details), and a
-visible browser isn't available there, so **Open and finish** stays a laptop
-feature while auto-apply runs headless.
-
-**Fly.io** (one 1 GB machine + 1 GB volume):
+The crawler only catches jobs while it runs, so it lives on an always-on
+machine. **Fly.io**, one command (needs `flyctl` and a Fly account with a
+card; about $14 a month for 1 shared CPU, 2 GB memory and a 3 GB disk):
 
 ```bash
-fly launch --no-deploy --copy-config      # pick an app name
-fly volumes create jobpipe_data --size 1 --region ewr
-fly secrets set JOBPIPE_DASHBOARD_TOKEN=$(openssl rand -hex 24)
-fly deploy
-jobpipe cloud-push https://<app>.fly.dev --with-ai-key   # your details, resume, answers
+jobpipe cloud deploy
 ```
 
-**Any VPS** (Docker): `echo "JOBPIPE_DASHBOARD_TOKEN=$(openssl rand -hex 24)" > .env && docker compose up -d --build`,
-then reach it through an SSH tunnel or the Caddy service in `docker-compose.yml`.
+It creates the app, the disk and a dashboard password, builds and deploys the
+image, waits for `/healthz`, then copies your setup up: details, resume,
+career profile, saved answers, auto-apply, Telegram and Gmail settings, keys,
+outreach, and the list of boards you watch. Run it again to update. Then stop
+`jobpipe watch`/`serve` on your computer, so two copies don't both answer
+Telegram and apply. `jobpipe cloud push` re-sends your setup after you change
+something locally; `fly logs -a <app>` shows what it's doing.
 
-The image installs Chromium and LaTeX (`--build-arg WITH_LATEX=0` for a
-smaller image without tailored resumes) and keeps everything in `/app/data`.
+In the cloud there's no visible browser, so on Needs you **Finish it
+yourself** lists every answer with Copy buttons and a link to the form (works
+from a phone); press **I submitted it** when the site confirms.
+
+**Any VPS** (Docker): `echo "JOBPIPE_DASHBOARD_TOKEN=$(openssl rand -hex 24)" > .env && docker compose up -d --build`,
+or run the published image `ghcr.io/amudhan23/job-pipeline:latest`. Reach it
+through an SSH tunnel or the Caddy service in `docker-compose.yml`.
+
+**CI** (`.github/workflows/ci.yml`) runs the tests on every push, builds this
+image, starts it, and runs `jobpipe selftest --fake` inside it against a live
+Greenhouse form, so the cloud image is tested end to end before you deploy it.
 
 ## ATS coverage
 
@@ -456,9 +486,9 @@ a cent.
 
 ## Scheduled runs (GitHub Actions)
 
-`.github/workflows/pipeline.yml` runs the pipeline in the cloud — every 3
-hours it re-checks every known board; twice a day it also searches the web
-for new companies. Your laptop can be off.
+The Fly.io deployment replaces these, so `.github/workflows/pipeline.yml` is
+manual now (Actions → job-pipeline → Run workflow); uncomment its schedule to
+bring back runs every 3 hours.
 
 Between runs the databases are saved as **one encrypted file** on the
 `pipeline-data` branch (force-pushed, so it never grows). The repo is public,

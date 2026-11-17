@@ -282,7 +282,8 @@ async function pageAttention() {
         <div class="sub">Score ${j.fit_score}. Filled ${it.filled} field${it.filled === 1 ? "" : "s"}${it.resume ? ", resume attached" : ""}.
         ${it.captcha ? "Has a bot check on submit." : ""} ${status}</div></div>
         <div>
-          <button data-act="handoff" class="primary" ${canOpenBrowser ? "" : "disabled title='Needs the dashboard running on your computer'"}>Open and finish</button>
+          ${canOpenBrowser ? `<button data-act="handoff" class="primary">Open and finish</button>` :
+            `<button data-act="finish" class="primary" title="Every answer with Copy buttons, and a link to the form">Finish it yourself</button>`}
           ${it.ready ? `<button data-act="submit">Submit now</button>` : `<button data-act="fill" title="Fill again with your newest answers">Fill again</button>`}
           ${it.screenshot ? `<a class="btn" href="${esc(it.screenshot)}" target="_blank">Screenshot</a>` : ""}
           <button data-act="resume" class="quiet">Resume</button>
@@ -311,6 +312,7 @@ async function pageAttention() {
     const id = b.closest(".job-block").dataset.id, it = data.items.find(i => i.job.id === id);
     const act = b.dataset.act;
     if (act === "handoff") runApply([id], "handoff", `Open and finish: ${it.job.company}`);
+    if (act === "finish") showSent(id, true);
     if (act === "fill") runApply([id], "practice", `Fill again: ${it.job.company}`);
     if (act === "submit") {
       if (!confirm(`Submit the ${it.job.company} application now? It's sent as filled (see the screenshot).`)) return;
@@ -417,10 +419,11 @@ async function pageApplied() {
         `<option ${s === i.status ? "selected" : ""}>${s}</option>`).join("")}</select></td>
       <td class="hide-sm">${i.resume_file ? `<a href="${esc(i.resume_file)}" target="_blank">Tailored PDF</a>` : '<span class="note">Your saved resume</span>'}</td>
       <td class="hide-sm">${i.screenshot ? `<a href="${esc(i.screenshot)}" target="_blank">Screenshot</a>` : ""}</td>
-      <td class="actions"><button data-reach>Reach out</button></td>
+      <td class="actions"><button class="quiet" data-sent>What was sent</button> <button data-reach>Reach out</button></td>
     </tr>`).join("")}</tbody></table></div>`;
   $$("select[data-status]").forEach(s => s.onchange = () => setStatus(s.closest("tr").dataset.id, s.value));
   $$("button[data-reach]").forEach(b => b.onclick = () => startOutreach(b.closest("tr").dataset.id, b));
+  $$("button[data-sent]").forEach(b => b.onclick = () => showSent(b.closest("tr").dataset.id, false));
 }
 
 /* ── Auto-apply ──────────────────────────────────────────── */
@@ -459,12 +462,30 @@ async function pageAuto() {
           <label class="check"><input type="checkbox" id="craft" ${s.craft ? "checked" : ""}> Reword resume bullets toward the job (facts kept)</label>
           <label class="check"><input type="checkbox" id="trust_ai" ${s.trust_ai ? "checked" : ""}> Submit forms with AI-written answers</label>
         </div>
+        <div class="field"><label for="review_first">Ask me on Telegram before the first</label>
+          <input type="number" id="review_first" min="0" max="1000" value="${s.review_first}">
+          <div class="hint">In submit mode, complete forms come to your phone with every answer for a Submit or Skip tap.
+          ${data.needs_review ? `<b>${data.approvals} of ${s.review_first} approved</b>; then it submits on its own.` :
+            s.mode === "submit" && s.review_first ? `Done: ${data.approvals} approved, it now submits on its own.` : ""}
+          0 never asks; 1000 always asks.</div></div>
+        <div class="field"><label for="repost_days">Don't re-apply to the same role within (days)</label>
+          <input type="number" id="repost_days" min="0" max="365" value="${s.repost_days}">
+          <div class="hint">Catches reposts and the same opening listed twice.</div></div>
+        <div class="field wide"><label for="never_companies">Never apply to</label>
+          <textarea id="never_companies" rows="2" placeholder="One company per line, e.g. a past employer">${esc((s.never_companies || []).join("\n"))}</textarea></div>
       </div>
       <div class="bar"><button class="primary" id="saveAuto">Save settings</button></div>
     </div>
 
     <h2>Alerts on your phone</h2>
     <div class="panel" id="tg">Loading…</div>
+
+    <h2>Security codes from Gmail</h2>
+    <div class="panel" id="mail">Loading…</div>
+
+    <h2>Setup check</h2>
+    <div class="panel" id="doctor"><button id="runDoctor">Check everything</button>
+      <span class="note">Checks the browser, resume builder, your details, AI key, Telegram, email codes and job boards.</span></div>
 
     <h2>Next in line</h2>
     ${data.candidates.length ? `<div class="table-wrap"><table><tbody>${data.candidates.map(j => `
@@ -488,12 +509,15 @@ async function pageAuto() {
     <div id="logbox"></div>`;
   $("#saveAuto").onclick = async () => {
     const body = { enabled: $("#enabled").checked, mode: $("input[name=mode]:checked").value };
-    ["min_score", "fresh_hours", "max_per_day", "max_per_company"].forEach(k => body[k] = +$("#" + k).value);
+    ["min_score", "fresh_hours", "max_per_day", "max_per_company", "review_first", "repost_days"].forEach(k => body[k] = +$("#" + k).value);
     ["fit_check", "tailor", "craft", "trust_ai"].forEach(k => body[k] = $("#" + k).checked);
+    body.never_companies = $("#never_companies").value;
     try { await api("/api/autoapply", body); toast(body.enabled ? "Saved. Auto-apply is on." : "Saved. Auto-apply is off."); pageAuto(); }
     catch (e) { toast(e.message, true); }
   };
   $("#enabled").onchange = () => $("#saveAuto").click();
+  mailCard();
+  $("#runDoctor").onclick = runDoctor;
   $("#runNow").onclick = async () => {
     const mode = $("#r_mode").value;
     if (mode === "submit" && !confirm("Submit every complete form in this batch?")) return;
@@ -972,6 +996,76 @@ async function drawOutreach() {
       });
     });
   });
+}
+
+/* ── Gmail security codes ───────────────────────────────── */
+
+async function mailCard() {
+  const box = $("#mail"); if (!box) return;
+  let m;
+  try { m = await api("/api/mail"); } catch (e) { box.textContent = e.message; return; }
+  box.innerHTML = `<p class="note" style="margin-top:0">When a job site emails a security code before accepting an application,
+    jobpipe reads it from your inbox so unattended submits can finish. It opens Gmail read-only, looks only at mail from job sites
+    that arrived after the submit, marks nothing read and keeps nothing. Without this, codes are asked for on Telegram.</p>
+    ${m.configured ? `<p><span class="ready">Connected</span> ${esc(m.email)}</p>` : ""}
+    <div class="grid2">
+      <div class="field"><label for="m_email">Gmail address</label><input type="email" id="m_email" value="${esc(m.email)}" autocomplete="off"></div>
+      <div class="field"><label for="m_pw">App password</label><input type="password" id="m_pw" autocomplete="new-password"
+        placeholder="${m.has_password ? "Saved. Paste a new one to replace it" : "16 letters from Google"}">
+        <div class="hint">Turn on 2-step verification, then make one at myaccount.google.com/apppasswords. Not your normal password.</div></div>
+    </div>
+    <div class="bar"><button class="primary" id="m_save">Save</button><button id="m_test" ${m.configured ? "" : "disabled"}>Test it</button>
+      ${m.configured ? `<button class="quiet" id="m_forget">Remove</button>` : ""}<span class="note" id="m_note"></span></div>`;
+  $("#m_save").onclick = async () => {
+    try { await api("/api/mail", { email: $("#m_email").value, app_password: $("#m_pw").value, enabled: true }); toast("Saved."); mailCard(); }
+    catch (e) { toast(e.message, true); }
+  };
+  if ($("#m_test")) $("#m_test").onclick = async () => {
+    $("#m_note").textContent = "Connecting…";
+    try { const r = await api("/api/mail/test", {}); $("#m_note").textContent = r.message; $("#m_note").className = "note " + (r.ok ? "" : "warn"); }
+    catch (e) { $("#m_note").textContent = e.message; }
+  };
+  if ($("#m_forget")) $("#m_forget").onclick = async () => { await api("/api/mail/forget", {}); toast("Removed."); mailCard(); };
+}
+
+async function runDoctor() {
+  const box = $("#doctor");
+  box.innerHTML = `<p class="note">Checking (starting a browser takes a few seconds)…</p>`;
+  let d;
+  try { d = await api("/api/doctor?online=1"); } catch (e) { box.textContent = e.message; return; }
+  const icon = { ok: "✓", warn: "!", fail: "✗" };
+  box.innerHTML = `<div class="checks">${d.checks.map(c => `<div class="check-row ${c.level}">
+      <span class="ic" aria-label="${c.level}">${icon[c.level]}</span><b>${esc(c.name)}</b><span>${esc(c.message)}</span></div>`).join("")}</div>
+    <div class="bar"><button id="runDoctor">Check again</button></div>`;
+  $("#runDoctor").onclick = runDoctor;
+}
+
+/* ── Every answer on one application ─────────────────────── */
+
+async function showSent(jobId, finishing) {
+  const dlg = $("#modal"), body = $("#modal-body");
+  body.innerHTML = `<p>Loading…</p>`;
+  dlg.showModal();
+  let d;
+  try { d = await api(`/api/sent/${encodeURIComponent(jobId)}`); } catch (e) { body.innerHTML = `<p>${esc(e.message)}</p>`; return; }
+  const rows = d.answers.map(a => `<div class="sent-row"><div class="lbl">${esc(a.label)}${a.ai ? ` <span class="tag caution">Claude wrote this</span>` : ""}</div>
+      <div class="val">${a.kind === "file" ? esc(a.value.split("/").pop()) : esc(a.value)}</div>
+      ${a.kind === "file" ? "" : `<button class="quiet" data-copy="${esc(a.value)}">Copy</button>`}</div>`).join("");
+  body.innerHTML = `<div class="modal-head"><h2>${esc(d.job.company)}: ${esc(d.job.title)}</h2>
+      <button class="quiet" id="mClose" aria-label="Close">Close</button></div>
+    <p class="note">${finishing ? "Open the application, then paste each answer. Press I submitted it when the site confirms."
+      : d.submitted ? `Sent. ${esc(d.submit_note)}` : "Prepared, not sent yet."}</p>
+    <div class="bar">${d.application_url ? `<a class="btn primary" href="${esc(d.application_url)}" target="_blank" rel="noopener">Open the application</a>` : ""}
+      ${d.resume_file ? `<a class="btn" href="${esc(d.resume_file)}" target="_blank">Resume PDF</a>` : ""}
+      ${d.screenshot ? `<a class="btn quiet" href="${esc(d.screenshot)}" target="_blank">Screenshot</a>` : ""}
+      ${finishing ? `<button id="mDone">I submitted it</button>` : ""}</div>
+    ${d.needs.length ? `<p class="note warn">Still needs you: ${d.needs.map(n => esc(n.label)).join("; ")}</p>` : ""}
+    <div class="sent">${rows || `<p class="note">No answers recorded.</p>`}</div>`;
+  $("#mClose").onclick = () => dlg.close();
+  $$("[data-copy]", dlg).forEach(b => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch { toast("Couldn't copy; select the text.", true); }
+  });
+  if ($("#mDone")) $("#mDone").onclick = async () => { if (await setStatus(jobId, "applied")) { dlg.close(); toast("Marked applied."); route(); } };
 }
 
 const routes = { jobs: pageJobs, attention: pageAttention, applied: pageApplied, search: pageSearch, auto: pageAuto,

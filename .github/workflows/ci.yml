@@ -1,0 +1,98 @@
+# Tests, the cloud image, and a live end-to-end check on every push.
+#
+#   test   the unit tests (with Chromium and LaTeX, so nothing is skipped)
+#   image  builds the Docker image Fly.io runs, starts it, checks /healthz,
+#          then runs `jobpipe selftest --fake` INSIDE it: a real Greenhouse
+#          posting is fetched and its real form filled by a made-up applicant.
+#          Nothing is submitted. Pushes to main publish the image to
+#          ghcr.io/<owner>/job-pipeline.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: LaTeX for resumes
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends texlive-latex-base texlive-latex-extra texlive-fonts-recommended
+      - name: Install
+        run: |
+          pip install -e '.[dev,apply,ai]'
+          playwright install --with-deps chromium
+      - name: Tests
+        run: pytest -q
+
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: jobpipe:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Start it like Fly does
+        run: |
+          mkdir -p data && sudo chown 10001 data
+          docker run -d --name jp -p 8050:8050 -v "$PWD/data:/app/data" \
+            -e JOBPIPE_DASHBOARD_TOKEN=ci-token-0123456789abcdef0123456789 jobpipe:ci
+          for i in $(seq 1 40); do
+            if curl -sf http://127.0.0.1:8050/healthz; then echo; echo "healthy"; exit 0; fi
+            sleep 3
+          done
+          docker logs jp; exit 1
+      - name: Dashboard needs the password
+        run: |
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8050/api/summary)" = "401"
+          curl -sf -H "Authorization: Bearer ci-token-0123456789abcdef0123456789" http://127.0.0.1:8050/api/summary
+      - name: Setup check inside the image
+        run: docker exec jp jobpipe doctor --online || true      # fails on purpose: no details in CI
+      - name: Live self-test inside the image (fills a real form, sends nothing)
+        run: docker exec jp jobpipe selftest --fake --out /app/data/selftest
+      - name: Crawler is running
+        run: |
+          sleep 20
+          docker exec jp python -c "from pipeline.crawler.worker import read_status as r; s=r(); print(s.get('frontier'), s.get('last_hour')); assert s.get('updated_at')"
+      - name: Logs
+        if: always()
+        run: docker logs jp 2>&1 | tail -80
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selftest
+          path: data/selftest
+          if-no-files-found: ignore
+      - name: Publish to GitHub Container Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          IMG="ghcr.io/$(echo '${{ github.repository_owner }}' | tr 'A-Z' 'a-z')/job-pipeline"
+          docker tag jobpipe:ci "$IMG:latest" && docker tag jobpipe:ci "$IMG:${GITHUB_SHA::7}"
+          docker push "$IMG:latest" && docker push "$IMG:${GITHUB_SHA::7}"

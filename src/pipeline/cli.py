@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import tempfile
 import logging
 from pathlib import Path
 
@@ -229,7 +230,9 @@ def _make_crawler(config: dict, auto: bool = True):
                 ensure_checked(job, tracker, details, resume_text)
 
     from pipeline.notify.telegram import Telegram
+    import time
     tg = Telegram()
+    last_health = [0.0]
 
     def on_phone(job_id: str, action: str) -> str:
         """A button tapped in Telegram."""
@@ -243,6 +246,15 @@ def _make_crawler(config: dict, auto: bool = True):
             return f"Skipped {job['company']}."
         if job["status"] == "applied":
             return f"Already applied to {job['company']}."
+        if action == "approve":
+            n = autoapply.approve(job)
+            s_ = autoapply.load_settings()
+            if int(s_.get("review_first", 0)) >= 1000:          # "always ask me"
+                return f"Submitting {job['company']} with exactly those answers."
+            left = max(0, int(s_.get("review_first", 0)) - n)
+            return (f"Submitting {job['company']} with exactly those answers. "
+                    + (f"{left} more approval{'s' if left != 1 else ''} before it runs on its own."
+                       if left else "That was the last one: from now on it submits on its own."))
         autoapply.enqueue(job_id, "submit" if action == "submit" else "practice")
         return (f"Submitting {job['company']} next — you'll get a message when it's done."
                 if action == "submit" else f"Preparing {job['company']}; it'll wait under Needs you.")
@@ -265,6 +277,16 @@ def _make_crawler(config: dict, auto: bool = True):
         meta = autoapply.maybe_autoapply(tracker, allow_auto=auto)
         if meta:
             console.print(f"[cyan]Auto-apply started:[/cyan] {meta['label']}")
+        if time.monotonic() - last_health[0] > 600:           # every 10 minutes
+            last_health[0] = time.monotonic()
+            try:
+                from pipeline import health
+                found = health.problems()
+                for f in found:
+                    console.print(f"[yellow]⚠ {f['what']}[/yellow]")
+                health.alert(found, tg)
+            except Exception as e:
+                console.print(f"[yellow]health check: {e}[/yellow]")
 
     return Crawler(config, after_tick=after_tick)
 
@@ -322,6 +344,30 @@ def serve(ctx: click.Context, port: int, host: str, no_auto: bool) -> None:
 
     t = threading.Thread(target=crawl, name="crawler", daemon=True)
     t.start()
+
+    def watchdog() -> None:
+        """If the crawler dies or stops writing its status, exit so the
+        container restarts (Fly/Docker restart policy) instead of sitting idle."""
+        import os
+        import time
+        from pipeline.crawler.worker import parse_iso, read_status, utcnow
+        time.sleep(300)
+        while True:
+            time.sleep(60)
+            st = read_status()
+            upd = parse_iso(st.get("updated_at")) if st.get("updated_at") else None
+            stale = upd is None or (utcnow() - upd).total_seconds() > 30 * 60
+            if not t.is_alive() or stale:
+                why = "the crawler thread stopped" if not t.is_alive() else "no crawler pass in 30 minutes"
+                console.print(f"[red]Restarting: {why}.[/red]")
+                try:
+                    from pipeline.notify.telegram import Telegram
+                    Telegram().send(f"🔄 jobpipe is restarting itself: {why}.")
+                except Exception:
+                    pass
+                os._exit(3)
+
+    threading.Thread(target=watchdog, name="watchdog", daemon=True).start()
     try:
         run_dashboard(host=host, port=port)
     finally:
@@ -521,9 +567,12 @@ def _one_per_application(jobs: list[dict]) -> list[dict]:
               help="Fill what it can, then you finish in the browser and press Submit yourself; "
                    "it saves your new answers and marks the job applied when the site confirms")
 @click.option("--handoff-minutes", default=30, help="How long --handoff waits for you")
+@click.option("--notify-ready", is_flag=True,
+              help="Practice mode: send each complete application to Telegram with every answer, "
+                   "for a Submit/Skip tap")
 def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, submit: bool,
           yes: bool, use_ai: bool, trust_ai: bool, use_fit: bool, use_tailor: bool,
-          handoff: bool, handoff_minutes: int) -> None:
+          handoff: bool, handoff_minutes: int, notify_ready: bool) -> None:
     """Fill job applications from your saved details.
 
     Without --submit (practice): fills every question it can, attaches your
@@ -730,8 +779,22 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
             from pipeline.ai.writer import make_writer
             writer = make_writer(job, details)
         get_code = None
-        if not headed and tg.configured():
-            get_code = lambda msg: tg.ask(f"🔐 {msg}\nReply with the code within 10 minutes.", 600)  # noqa: E731
+        from pipeline.notify import mailcodes as _mc
+        if not headed and (_mc.configured() or tg.configured()):
+            def get_code(msg: str, job=job) -> str | None:
+                """Gmail first (if you saved an app password), then Telegram."""
+                from datetime import timedelta, timezone
+                from pipeline.notify import mailcodes
+                if mailcodes.configured():
+                    console.print("  [dim]waiting for the security-code email…[/dim]")
+                    code = mailcodes.find_code(job["company"],
+                                               since=_dt.now(timezone.utc) - timedelta(minutes=3))
+                    if code:
+                        console.print("  [green]✓ read the security code from your email[/green]")
+                        return code
+                if tg.configured():
+                    return tg.ask(f"🔐 {msg}\nReply with the code within 10 minutes.", 600)
+                return None
         report = practice_apply(job, details, upload, folder, headless=not headed, saved=saved,
                                 on_filled=on_filled, ask_human=ask_human, writer=writer,
                                 handoff_s=handoff_minutes * 60 if handoff else None, get_code=get_code)
@@ -778,6 +841,15 @@ def apply(job_id: tuple[str, ...], top: int, min_score: float, headed: bool, sub
             verdict = "[green]ready to submit[/green]" if report.ready_to_submit \
                 else "[yellow]not ready — see above[/yellow]"
             console.print(f"  {verdict} · screenshot: {report.screenshot}\n")
+            if notify_ready and report.ready_to_submit and tg.configured():
+                try:
+                    from pipeline import autoapply as _aa
+                    s_ = _aa.load_settings()
+                    tg.notify_ready(job, report, resume=upload,
+                                    progress=(_aa.approvals(), int(s_.get("review_first", 0))))
+                    console.print("  [cyan]sent to Telegram for your OK[/cyan]")
+                except Exception as e:
+                    console.print(f"  [yellow]Telegram: {e}[/yellow]")
     if totals["submitted"]:
         console.print(f"[bold green]Submitted {totals['submitted']} application(s).[/bold green] "
                       "They're marked applied on the dashboard; watch your email for confirmations.")
@@ -1044,49 +1116,221 @@ def profile_check(resume_json: str) -> None:
     console.print("[green]Every line is supported.[/green]" if not dropped else f"{len(dropped)} line(s) would be dropped.")
 
 
-@main.command("cloud-push")
-@click.argument("url")
-@click.option("--with-ai-key", is_flag=True, help="Also send your Anthropic API key")
-def cloud_push(url: str, with_ai_key: bool) -> None:
-    """Copy your details, resume, saved answers and auto-apply settings from
-    this computer to your jobpipe in the cloud (its dashboard URL)."""
+@main.command()
+@click.option("--online", is_flag=True, help="Also contact the AI, Telegram, Gmail and the job sites")
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable output")
+def doctor(online: bool, as_json: bool) -> None:
+    """Check every part of the setup and say what to fix."""
+    from pipeline import doctor as doc
+    found = doc.checks(online=online)
+    if as_json:
+        click.echo(json.dumps(found, indent=1))
+    else:
+        style = {"ok": "[green]✓[/green]", "warn": "[yellow]![/yellow]", "fail": "[red]✗[/red]"}
+        for c in found:
+            console.print(f" {style[c['level']]} [bold]{c['name']}[/bold]: {c['message']}")
+        fails = sum(c["level"] == "fail" for c in found)
+        console.print(f"\n{'[red]' + str(fails) + ' problem(s) to fix.[/red]' if fails else '[green]Ready.[/green]'}")
+    if any(c["level"] == "fail" for c in found):
+        raise SystemExit(1)
+
+
+@main.command()
+@click.option("--fake", is_flag=True, help="Use a made-up applicant and a blank resume (no private data needed)")
+@click.option("--board", default=None, help="Greenhouse board to test against (default: a few well-known ones)")
+@click.option("--out", "out_dir", default=None, help="Where to keep the screenshot and report")
+def selftest(fake: bool, board: str | None, out_dir: str | None) -> None:
+    """Fill a real, live job application end to end without sending it.
+    Proves the browser, the form filler and your details work together."""
+    from pipeline import doctor as doc
+    folder = Path(out_dir) if out_dir else Path(tempfile.mkdtemp(prefix="jobpipe-selftest-"))
+    console.print(f"[bold]Self-test[/bold] ({'made-up applicant' if fake else 'your details'}). Nothing is submitted.\n")
+    result = doc.selftest(folder, fake=fake, board=board, say=lambda m: console.print("  " + m))
+    (folder / "selftest.json").write_text(json.dumps(result, indent=1))
+    if result.get("screenshot"):
+        console.print(f"\n  screenshot: {result['screenshot']}")
+    console.print(f"\n{'[green]Passed.[/green]' if result['ok'] else '[red]Failed.[/red]'} Report: {folder / 'selftest.json'}")
+    if not result["ok"]:
+        raise SystemExit(1)
+
+
+@main.group()
+def mail() -> None:
+    """Read job sites' security-code emails from Gmail (for unattended submits)."""
+
+
+@mail.command("setup")
+def mail_setup() -> None:
+    """Save your Gmail address and an app password, then test it."""
+    from pipeline.notify import mailcodes
+    console.print("Gmail needs 2-step verification on. Then make an app password at "
+                  "[bold]https://myaccount.google.com/apppasswords[/bold] (name it jobpipe).\n"
+                  "jobpipe opens your inbox read-only, looks only at recent mail from job sites, "
+                  "marks nothing read and keeps nothing.")
+    addr = click.prompt("Gmail address")
+    pw = click.prompt("App password (input hidden)", hide_input=True)
+    try:
+        mailcodes.save({"email": addr, "app_password": pw, "enabled": True})
+    except ValueError as e:
+        raise click.ClickException(str(e))
+    ok, msg = mailcodes.test_login()
+    console.print(("[green]" if ok else "[red]") + msg + ("[/green]" if ok else "[/red]"))
+
+
+@mail.command("test")
+def mail_test() -> None:
+    """Log in and count recent Greenhouse emails."""
+    from pipeline.notify import mailcodes
+    ok, msg = mailcodes.test_login()
+    console.print(("[green]" if ok else "[red]") + msg + ("[/green]" if ok else "[/red]"))
+    if not ok:
+        raise SystemExit(1)
+
+
+@mail.command("forget")
+def mail_forget() -> None:
+    """Delete the saved Gmail app password."""
+    from pipeline.notify import mailcodes
+    mailcodes.forget()
+    console.print("Removed. Security codes will be asked for on Telegram.")
+
+
+# ── Cloud ──────────────────────────────────────────────────────────────
+
+CLOUD_FILE = Path.home() / ".config" / "jobpipe" / "cloud.json"
+
+
+def _cloud_saved() -> dict:
+    try:
+        return json.loads(CLOUD_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _cloud_save(data: dict) -> None:
+    import os
+    CLOUD_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CLOUD_FILE.write_text(json.dumps(data, indent=1))
+    os.chmod(CLOUD_FILE, 0o600)
+
+
+def _push(url: str, token: str, with_secrets: bool = True) -> list[str]:
     import httpx
-    from pipeline import applicant, autoapply
-    from pipeline.ai import client as ai_client
-    url = url.rstrip("/")
+    from pipeline import sync
+    bundle, names = sync.build(with_secrets=with_secrets)
+    r = httpx.post(url.rstrip("/") + "/api/sync", content=bundle, timeout=120,
+                   headers={"Authorization": f"Bearer {token}", "Content-Type": "application/zip"})
+    if r.status_code == 401:
+        raise click.ClickException("The cloud dashboard rejected the token.")
+    if r.status_code >= 400:
+        raise click.ClickException(f"Upload failed: {r.status_code} {r.text[:200]}")
+    added = r.json().get("boards_added", 0)
+    return names + ([f"{added} new boards registered"] if added else [])
+
+
+@main.group()
+def cloud() -> None:
+    """Run jobpipe on Fly.io around the clock."""
+
+
+@cloud.command("deploy")
+@click.option("--app", "app_name", default=None, help="Fly app name (becomes <name>.fly.dev)")
+@click.option("--region", default="ewr", help="Fly region (ewr = Newark, near New York)")
+@click.option("--no-push", is_flag=True, help="Don't copy your details and settings up afterwards")
+def cloud_deploy(app_name: str | None, region: str, no_push: bool) -> None:
+    """Create (or update) your jobpipe on Fly.io and copy your setup to it.
+
+    Needs flyctl and a Fly account with a card on file (about $14/month for
+    1 shared CPU, 2 GB memory and a 3 GB disk). Safe to run again: it
+    updates the same app."""
+    import secrets
+    import shutil
+    import subprocess
+    import time as _time
+    import httpx
+    repo = Path(__file__).resolve().parents[2]
+    if not (repo / "Dockerfile").exists() or not (repo / "fly.toml").exists():
+        raise click.ClickException("Run this from a checkout of the jobpipe repository (Dockerfile not found).")
+    fly = shutil.which("fly") or shutil.which("flyctl")
+    if not fly:
+        import platform
+        how = ('pwsh -Command "iwr https://fly.io/install.ps1 -useb | iex"' if platform.system() == "Windows"
+               else "curl -L https://fly.io/install.sh | sh")
+        raise click.ClickException(f"Install flyctl first:\n  {how}\nthen run this again.")
+
+    def run(*args: str, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess:
+        return subprocess.run([fly, *args], cwd=repo, check=check, text=True,
+                              capture_output=capture)
+
+    if run("auth", "whoami", check=False, capture=True).returncode != 0:
+        console.print("Opening the Fly login in your browser…")
+        run("auth", "login")
+    saved = _cloud_saved()
+    app_name = app_name or saved.get("app") or f"jobpipe-{secrets.token_hex(3)}"
+    if not re.fullmatch(r"[a-z0-9-]{3,40}", app_name):
+        raise click.ClickException("App names are 3-40 lowercase letters, digits and dashes.")
+    exists = run("status", "-a", app_name, check=False, capture=True).returncode == 0
+    if not exists:
+        console.print(f"Creating the app [bold]{app_name}[/bold]…")
+        run("apps", "create", app_name)
+    vols = run("volumes", "list", "-a", app_name, "--json", check=False, capture=True)
+    if vols.returncode != 0 or '"jobpipe_data"' not in (vols.stdout or ""):
+        console.print("Creating a 3 GB disk for your data…")
+        run("volumes", "create", "jobpipe_data", "--size", "3", "--region", region, "-a", app_name, "--yes")
+    token = saved.get("token") if saved.get("app") == app_name else None
+    if not token:
+        token = secrets.token_urlsafe(32)
+        run("secrets", "set", f"JOBPIPE_DASHBOARD_TOKEN={token}", "-a", app_name, "--stage")
+    url = f"https://{app_name}.fly.dev"
+    _cloud_save({"app": app_name, "url": url, "token": token, "region": region})
+    console.print("Building and deploying (the first build takes a few minutes)…")
+    run("deploy", "-a", app_name, "--primary-region", region, "--ha=false", "--remote-only")
+    console.print("Waiting for it to come up…")
+    for _ in range(60):
+        try:
+            if httpx.get(url + "/healthz", timeout=10).status_code == 200:
+                break
+        except httpx.HTTPError:
+            pass
+        _time.sleep(5)
+    else:
+        raise click.ClickException(f"It didn't answer at {url}/healthz. See `fly logs -a {app_name}`.")
+    if not no_push:
+        console.print("Copying your details, resume, profile, answers and settings…")
+        sent = _push(url, token)
+        console.print(f"[green]Sent:[/green] {', '.join(sent)}")
+    console.print(f"\n[bold green]Running at {url}[/bold green]\nDashboard password: [bold]{token}[/bold] "
+                  f"(also saved in {CLOUD_FILE})\n"
+                  "[yellow]Stop `jobpipe watch`/`serve` on this computer now:[/yellow] two copies would both "
+                  "answer Telegram and both apply.\nLogs: [bold]fly logs -a " + app_name + "[/bold]   "
+                  "Check it: open the dashboard → Auto-apply → Check everything.")
+
+
+@cloud.command("push")
+@click.argument("url", required=False)
+@click.option("--no-secrets", is_flag=True, help="Don't send the Anthropic and Hunter keys")
+def cloud_push_cmd(url: str | None, no_secrets: bool) -> None:
+    """Copy your details, resume, career profile, answers, settings, keys
+    and watched boards from this computer to your cloud jobpipe."""
+    saved = _cloud_saved()
+    url = (url or saved.get("url") or "").rstrip("/")
+    if not url:
+        raise click.ClickException("Give the cloud dashboard's https:// address (or run `jobpipe cloud deploy`).")
     if not url.startswith("https://") and not url.startswith("http://localhost"):
         raise click.ClickException("Use the https:// address of your cloud dashboard.")
-    token = click.prompt("Dashboard access token (JOBPIPE_DASHBOARD_TOKEN, input hidden)", hide_input=True)
-    headers = {"Authorization": f"Bearer {token}"}
-    sent = []
-    with httpx.Client(timeout=60, headers=headers) as c:
-        def post(path: str, **kw) -> None:
-            r = c.post(url + path, **kw)
-            if r.status_code == 401:
-                raise click.ClickException("The cloud dashboard rejected that token.")
-            if r.status_code >= 400:
-                raise click.ClickException(f"{path}: {r.status_code} {r.text[:200]}")
-        post("/api/profile", json=applicant.load())
-        sent.append("details")
-        resume = applicant.PRIVATE_DIR / applicant.RESUME_FILE
-        if resume.exists():
-            post("/api/resume", content=resume.read_bytes(), headers={"Content-Type": "application/pdf"})
-            sent.append("resume")
-        saved = applicant.load_answers()
-        items = [{"question": q, "answer": a, "company": "", "everywhere": True} for q, a in saved["all"].items()]
-        for company_key, qs in saved["companies"].items():
-            items += [{"question": q, "answer": a, "company": company_key, "everywhere": False} for q, a in qs.items()]
-        if items:
-            post("/api/answers", json={"answers": items})
-            sent.append(f"{len(items)} answers")
-        ai = {k: v for k, v in ai_client.load_settings().items() if k in ("model", "monthly_budget", "enabled")}
-        if with_ai_key and ai_client.get_key():
-            ai["key"] = ai_client.get_key()
-            sent.append("AI key")
-        post("/api/ai", json=ai)
-        post("/api/autoapply", json=autoapply.load_settings())
-        sent.append("AI and auto-apply settings")
+    token = saved.get("token") if saved.get("url") == url else None
+    token = token or click.prompt("Dashboard password (JOBPIPE_DASHBOARD_TOKEN, input hidden)", hide_input=True)
+    sent = _push(url, token, with_secrets=not no_secrets)
     console.print(f"[green]Sent to {url}:[/green] {', '.join(sent)}.")
+
+
+@main.command("cloud-push", hidden=True)
+@click.argument("url", required=False)
+@click.option("--with-ai-key", is_flag=True, hidden=True)
+@click.pass_context
+def cloud_push(ctx: click.Context, url: str | None, with_ai_key: bool) -> None:
+    """Old name for `jobpipe cloud push`."""
+    ctx.invoke(cloud_push_cmd, url=url, no_secrets=False)
 
 
 @main.command("state-key")

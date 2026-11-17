@@ -1,8 +1,10 @@
-# Fly.io: one always-on machine with a volume for the databases and your details.
-#   fly launch --no-deploy --copy-config        (pick a unique app name)
-#   fly volumes create jobpipe_data --size 1 --region ewr
-#   fly secrets set JOBPIPE_DASHBOARD_TOKEN=$(openssl rand -hex 24)
-#   fly deploy
+# Fly.io: one always-on machine with a disk for the databases and your details.
+# Easiest: `jobpipe cloud deploy` (creates the app, disk and password, deploys,
+# then copies your setup up). By hand:
+#   fly apps create <name>
+#   fly volumes create jobpipe_data --size 3 --region ewr -a <name>
+#   fly secrets set JOBPIPE_DASHBOARD_TOKEN=$(openssl rand -hex 24) -a <name>
+#   fly deploy -a <name>
 app = "jobpipe-change-me"
 primary_region = "ewr"            # Newark, close to New York
 
@@ -11,6 +13,7 @@ primary_region = "ewr"            # Newark, close to New York
 [env]
   PORT = "8050"
   JOBPIPE_HEADLESS_ONLY = "1"
+  TZ = "America/New_York"
 
 [http_service]
   internal_port = 8050
@@ -19,10 +22,21 @@ primary_region = "ewr"            # Newark, close to New York
   auto_start_machines = true
   min_machines_running = 1
 
+  [[http_service.checks]]
+    grace_period = "120s"         # Chromium and the first crawl take a moment
+    interval = "60s"
+    timeout = "10s"
+    method = "GET"
+    path = "/healthz"
+
+[[restart]]
+  policy = "always"               # the watchdog exits when the crawler stalls; this brings it back
+  retries = 20
+
 [[mounts]]
   source = "jobpipe_data"
   destination = "/app/data"
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "1gb"                  # headless Chromium for auto-apply needs the room
+  memory = "2gb"                  # headless Chromium + LaTeX + the crawler

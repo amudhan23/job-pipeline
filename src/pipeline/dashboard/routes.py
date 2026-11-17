@@ -166,6 +166,15 @@ class ApiMixin:
             from pipeline import outreach
             return {"records": outreach.overview(self._pdir()), "hunter": bool(outreach.hunter_key(self._pdir())),
                     "ai": __import__("pipeline.ai.client", fromlist=["status"]).status(self._pdir())[0]}, 200
+        if path == "/api/doctor":
+            from pipeline import doctor
+            return {"checks": doctor.checks(online=q.get("online") == "1", private_dir=self._pdir())}, 200
+        if path == "/api/mail":
+            from pipeline.notify import mailcodes
+            return mailcodes.public(self._pdir()), 200
+        m = re.fullmatch(r"/api/sent/([A-Za-z0-9_.:-]+)", path)
+        if m:
+            return self._sent(m.group(1))
         m = re.fullmatch(r"/api/resume/([A-Za-z0-9_.:-]+)", path)
         if m:
             return self._resume_info(m.group(1)), 200
@@ -176,6 +185,26 @@ class ApiMixin:
             meta = Runner(self._pdir()).get(m.group(1)) or {}
             return {"text": text, "offset": offset, "status": meta.get("status")}, 200
         return None
+
+    def _sent(self, job_id: str):
+        """Every answer on one application: what was sent, or what to paste
+        if you finish it yourself (from a phone, when the dashboard runs in the cloud)."""
+        from pipeline.apply.filler import application_url
+        pdir = self._pdir()
+        job = self._tracker().get_job(job_id)
+        if not job:
+            return {"error": "no such job"}, 404
+        rep = _report(pdir, job_id) or {}
+        ai = set(rep.get("ai_written") or [])
+        resume = _resume_pdf(_folder(pdir, job_id))
+        return {"job": job_card(job, pdir), "application_url": application_url(job) or job.get("url"),
+                "submitted": bool(rep.get("submitted")), "submit_note": rep.get("submit_note", ""),
+                "prepared_at": rep.get("updated_at"),
+                "answers": [{"label": f["label"], "value": f.get("value", ""), "kind": f.get("kind", ""),
+                             "ai": f["label"] in ai} for f in rep.get("filled") or [] if f.get("value")],
+                "needs": [{"label": f["label"], "kind": f.get("kind", "")} for f in rep.get("needs_attention") or []],
+                "screenshot": _file_url(job_id, rep.get("screenshot")),
+                "resume_file": _file_url(job_id, str(resume)) if resume else None}, 200
 
     def _summary(self) -> dict:
         t = self._tracker()
@@ -269,6 +298,7 @@ class ApiMixin:
         settings = autoapply.load_settings(pdir)
         picks = autoapply.candidates(self._tracker(), settings, pdir)[:12]
         return {"settings": settings, "today": autoapply.today_attempts(pdir),
+                "approvals": autoapply.approvals(pdir), "needs_review": autoapply.needs_review(settings, pdir),
                 "candidates": [job_card(j, pdir) for j in picks],
                 "runs": autoapply.Runner(pdir).list(limit=15),
                 "can_open_browser": can_open_browser(),
@@ -301,6 +331,19 @@ class ApiMixin:
     def api_post(self, path: str, data: dict):
         from pipeline import autoapply
         pdir = self._pdir()
+        if path.startswith("/api/mail"):
+            from pipeline.notify import mailcodes
+            if path == "/api/mail":
+                try:
+                    return mailcodes.save(data, pdir), 200
+                except ValueError as e:
+                    return {"error": str(e)}, 400
+            if path == "/api/mail/test":
+                ok, msg = mailcodes.test_login(pdir)
+                return {"ok": ok, "message": msg}, 200
+            if path == "/api/mail/forget":
+                mailcodes.forget(pdir)
+                return mailcodes.public(pdir), 200
         m = re.fullmatch(r"/api/jobs/([A-Za-z0-9_.:-]+)/status", path)
         if m:
             status = data.get("status")

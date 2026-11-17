@@ -320,7 +320,15 @@ class Crawler:
         ticks = 0
         logger.info("Crawler started")
         while not stop.is_set():
-            await self.tick()
+            try:
+                await self.tick()
+            except Exception as e:                 # one bad pass must not stop the crawler
+                logger.exception("crawler pass failed")
+                self.errors.append({"at": iso(utcnow()), "board": "(whole pass)", "error": str(e)[:200]})
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=30)
+                except asyncio.TimeoutError:
+                    pass
             ticks += 1
             if max_ticks and ticks >= max_ticks:
                 break

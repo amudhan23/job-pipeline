@@ -10,10 +10,13 @@
 
 name: job-pipeline
 
+# The always-on Fly.io deployment (`jobpipe cloud deploy`) replaces these
+# scheduled runs, so they're manual now. To bring the schedule back, add the
+# JOBPIPE_STATE_KEY secret and uncomment it.
 on:
-  schedule:
-    - cron: "23 */3 * * *"     # re-check known boards
-    - cron: "41 11,23 * * *"   # full discovery (11:41 & 23:41 UTC)
+  # schedule:
+  #   - cron: "23 */3 * * *"     # re-check known boards
+  #   - cron: "41 11,23 * * *"   # full discovery (11:41 & 23:41 UTC)
   workflow_dispatch:
     inputs:
       discover:

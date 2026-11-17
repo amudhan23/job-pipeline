@@ -195,10 +195,14 @@ def test_maybe_autoapply_respects_switch_score_caps(tmp_path, monkeypatch):
     assert sorted(companies) == ["Acme", "Beta"]                           # one per company, low score left out
     assert "--submit" not in args                                          # prepare mode by default
     assert args.count("-j") == 2
-    autoapply.save_settings({"mode": "submit", "trust_ai": False})
+    autoapply.save_settings({"mode": "submit", "trust_ai": False})      # first 15 wait for your OK
     runner2 = FakeRunner()
     autoapply.maybe_autoapply(t, runner=runner2)
-    assert "--submit" in runner2.started[0][0] and "--trust-ai" not in runner2.started[0][0]
+    assert "--submit" not in runner2.started[0][0] and "--notify-ready" in runner2.started[0][0]
+    autoapply.save_settings({"review_first": 0})                          # fully automatic
+    runner3 = FakeRunner()
+    autoapply.maybe_autoapply(t, runner=runner3)
+    assert "--submit" in runner3.started[0][0] and "--trust-ai" not in runner3.started[0][0]
 
 
 def test_runner_runs_and_logs(tmp_path):

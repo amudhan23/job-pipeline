@@ -19,7 +19,10 @@ data/private/ (telegram.json, telegram_state.json).
 
 from __future__ import annotations
 
-import fcntl
+try:
+    import fcntl                     # not on Windows: there one process at a time is assumed
+except ImportError:
+    fcntl = None  # type: ignore[assignment]
 import html
 import json
 import os
@@ -90,7 +93,8 @@ class Telegram:
         self.dir.mkdir(parents=True, exist_ok=True)
         path = self.dir / "telegram_state.json"
         with open(self.dir / ".telegram.lock", "w") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+            if fcntl:
+                fcntl.flock(lock, fcntl.LOCK_EX)
             data = dict(STATE_DEFAULTS)
             try:
                 data.update(json.loads(path.read_text()))
@@ -127,6 +131,26 @@ class Telegram:
             return self.api("sendMessage", **params)["message_id"]
         except Exception:
             return None
+
+    def send_file(self, path: Path | str, caption: str = "", photo: bool = False) -> bool:
+        """Attach a file (resume, screenshot). Photos that Telegram refuses
+        (very tall screenshots) go as documents."""
+        s = self.settings()
+        p = Path(path)
+        if not (s["token"] and s["chat_id"]) or not p.is_file() or p.stat().st_size > 45_000_000:
+            return False
+        for method, field in ((("sendPhoto", "photo"),) if photo else ()) + (("sendDocument", "document"),):
+            try:
+                with p.open("rb") as f:
+                    r = self.client.post(f"{API}/bot{s['token']}/{method}",
+                                         data={"chat_id": str(s["chat_id"]), "caption": caption[:1000],
+                                               "parse_mode": "HTML"},
+                                         files={field: (p.name, f)})
+                if r.content and r.json().get("ok"):
+                    return True
+            except Exception:
+                continue
+        return False
 
     # ── Setup ──────────────────────────────────────────────────────────
 
@@ -211,6 +235,41 @@ class Telegram:
         for f in ai[:3]:
             text += f"\n\n<i>{html.escape(f.label[:80])}</i>\n{html.escape(f.value[:500])}"
         self.send(text)
+
+    def notify_ready(self, job: dict, report, resume: Path | str | None = None,
+                     progress: tuple[int, int] = (0, 0)) -> int | None:
+        """A complete application, every answer listed, waiting for your Submit/Skip."""
+        if not self.configured():
+            return None
+        ai = set(report.ai_written or [])
+        lines = []
+        for f in report.filled:
+            label, value = html.escape(f.label[:70]), (f.value or "").strip()
+            if not value:
+                continue
+            if f.label in ai:
+                lines.append(f"✍️ <b>{label}</b> (Claude wrote this)\n{html.escape(value[:700])}")
+            else:
+                lines.append(f"• {label}: {html.escape(value[:120])}")
+        done, total = progress
+        head = (f"📝 <b>Ready to send: {html.escape(job['company'])}</b>\n{html.escape(job['title'])}\n"
+                f"Score {job.get('fit_score', 0):.0f}"
+                + (f" · resume: {html.escape(Path(resume).name)}" if resume else "") + "\n")
+        foot = (f"\n\nApproval {done + 1} of {total}; after {total} it submits on its own."
+                if total and done < total else "")
+        body = "\n".join(lines)
+        if len(head) + len(body) + len(foot) > 3900:          # Telegram's limit: trim the plain fields
+            body = body[: 3900 - len(head) - len(foot) - 40].rsplit("\n", 1)[0] + "\n…(more on the dashboard)"
+        tok = self._token_for(job["id"])
+        buttons = [[{"text": "✅ Submit it", "callback_data": f"r:{tok}:s"},
+                    {"text": "Skip", "callback_data": f"r:{tok}:k"}]]
+        if job.get("url"):
+            buttons.append([{"text": "Open posting", "url": job["url"]}])
+        if report.screenshot:
+            self.send_file(report.screenshot, f"{html.escape(job['company'])}: the filled form", photo=True)
+        if resume and Path(resume).suffix.lower() == ".pdf":
+            self.send_file(resume, "The resume that would be attached")
+        return self.send(head + "\n" + body + foot, buttons)
 
     def notify_stopped(self, job: dict, why: str) -> None:
         if self.configured() and self.settings()["needs"]:
@@ -343,6 +402,11 @@ class Telegram:
                     job_id = st["tokens"].get(tok)
                 if job_id:
                     note = on_action(job_id, {"s": "submit", "p": "prepare", "k": "skip"}.get(arg, ""))
+            elif kind == "r":                      # a prepared application you reviewed
+                with self.state() as st:
+                    job_id = st["tokens"].get(tok)
+                if job_id:
+                    note = on_action(job_id, {"s": "approve", "k": "skip"}.get(arg, ""))
             elif kind == "q":
                 with self.state() as st:
                     ref = st["replies"].get(f"q{tok}")
@@ -388,5 +452,9 @@ class Telegram:
         elif cmd in ("/status", "/start"):
             s = autoapply.load_settings(self.dir)
             today = autoapply.today_attempts(self.dir)
+            review = ""
+            if autoapply.needs_review(s, self.dir):
+                review = (f"\nApproved {autoapply.approvals(self.dir)} of {s['review_first']} on your phone; "
+                          "after that it submits on its own.")
             self.send(f"Auto-apply is <b>{'on' if s['enabled'] else 'off'}</b> ({s['mode']} mode, score ≥ {s['min_score']}).\n"
-                      f"{sum(today.values())} of {s['max_per_day']} tries used today.")
+                      f"{sum(today.values())} of {s['max_per_day']} tries used today." + review)

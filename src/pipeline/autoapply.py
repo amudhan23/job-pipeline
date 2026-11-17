@@ -15,6 +15,11 @@ Settings (data/private/autoapply.json):
   trust_ai          submit forms containing AI-written answers
   fit_check/tailor  AI fit check first / tailored resume per job
   craft             also reword resume bullets toward each job (fact-guarded)
+  review_first      in submit mode, the first N complete applications come to
+                    Telegram with every answer for a Submit/Skip tap; after N
+                    approvals it submits on its own (0 = never ask, 1000 = always)
+  never_companies   companies auto-apply must never touch
+  repost_days       don't re-apply to the same company + role within this many days
 
 Runs are subprocesses (`python -m pipeline.cli apply …`), one at a time,
 logged to data/private/runs/<id>.log.
@@ -37,6 +42,7 @@ DEFAULTS: dict[str, Any] = {
     "enabled": False, "mode": "prepare", "min_score": 65, "fresh_hours": 24,
     "max_per_day": 15, "max_per_company": 2, "trust_ai": False,
     "fit_check": True, "tailor": True, "craft": True, "batch": 3,
+    "review_first": 15, "never_companies": [], "repost_days": 45,
 }
 JOB_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,200}$")
 TERMINAL = ("applied", "interview", "offer", "rejected", "skipped")
@@ -72,6 +78,9 @@ def save_settings(values: dict[str, Any], private_dir: Path | None = None) -> di
             if v not in ("prepare", "submit"):
                 raise ValueError("mode must be prepare or submit")
             data[key] = v
+        elif isinstance(default, list):
+            items = v if isinstance(v, list) else re.split(r"[\n,]", str(v))
+            data[key] = sorted({" ".join(str(i).split())[:80] for i in items if str(i).strip()})[:300]
     path = _pdir(private_dir) / "autoapply.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2))
@@ -85,6 +94,71 @@ def attempted(job_id: str, private_dir: Path | None = None) -> bool:
 
 
 MAX_ATTEMPTS = 3
+
+
+# ── Phone approvals before it runs on its own ──────────────────────────
+
+def approvals(private_dir: Path | None = None) -> int:
+    try:
+        return int(json.loads((_pdir(private_dir) / "approvals.json").read_text()).get("count", 0))
+    except (OSError, ValueError, AttributeError):
+        return 0
+
+
+def needs_review(settings: dict[str, Any], private_dir: Path | None = None) -> bool:
+    """Submit mode, but still in the first N that you approve on your phone."""
+    return settings.get("mode") == "submit" and approvals(private_dir) < int(settings.get("review_first", 0))
+
+
+def approve(job: dict, private_dir: Path | None = None) -> int:
+    """You tapped Submit on a prepared application: keep the exact answers you
+    saw (Claude's included) for this company, queue the submit, count it."""
+    from pipeline import applicant
+    try:
+        rep = json.loads((_folder(job["id"], private_dir) / "report.json").read_text())
+    except (OSError, ValueError):
+        rep = {}
+    ai = set(rep.get("ai_written") or [])
+    keep = [{"question": applicant.normalize_question(f["label"], job["company"]), "answer": f["value"],
+             "company": job["company"], "everywhere": False}
+            for f in rep.get("filled") or [] if f.get("label") in ai and f.get("value")]
+    if keep:
+        applicant.save_answers(keep, private_dir)
+    p = _pdir(private_dir) / "approvals.json"
+    try:
+        data = json.loads(p.read_text())
+    except (OSError, ValueError):
+        data = {"count": 0, "jobs": []}
+    if job["id"] not in data.get("jobs", []):
+        data["count"] = int(data.get("count", 0)) + 1
+        data["jobs"] = (data.get("jobs", []) + [job["id"]])[-500:]
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data))
+    enqueue(job["id"], "submit", private_dir)
+    return data["count"]
+
+
+def _norm_company(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", re.sub(r"\b(inc|llc|ltd|corp|co|technologies|labs)\b\.?", "",
+                                             (name or "").lower()))
+
+
+def excluded(job: dict, settings: dict[str, Any]) -> bool:
+    c = _norm_company(job.get("company", ""))
+    return any(n and (n == c or (len(n) >= 4 and n in c)) for n in map(_norm_company, settings.get("never_companies") or []))
+
+
+def recently_applied(tracker, days: int) -> set[tuple[str, str]]:
+    """(company, role) pairs you applied to in the last `days` days, so a
+    reposted or duplicated opening isn't sent twice."""
+    from pipeline.orchestrator import _title_key
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    out = set()
+    for j in tracker.by_status(("applied", "interview", "offer", "rejected")):
+        when = j.get("applied_at") or j.get("last_seen") or ""
+        if not when or when >= cutoff:
+            out.add((_norm_company(j["company"]), _title_key(j["title"])))
+    return out
 
 
 def _folder(job_id: str, private_dir: Path | None) -> Path:
@@ -118,7 +192,8 @@ def worth_retrying(job: dict, settings: dict[str, Any], private_dir: Path | None
     if rep.get("submitted") or rep.get("closed") or rep.get("error"):
         return False
     if rep.get("mode") == "practice" and rep.get("ready_to_submit"):
-        return settings["mode"] == "submit"
+        # During the approval period it waits for your tap instead of being redone
+        return settings["mode"] == "submit" and not needs_review(settings, private_dir)
     needs = rep.get("needs_attention") or []
     if not needs:
         return False
@@ -138,10 +213,14 @@ def candidates(tracker, settings: dict[str, Any], private_dir: Path | None = Non
     now succeed — best first, one per application."""
     from pipeline.ai.fitcheck import stored
     from pipeline.apply.filler import application_url
+    from pipeline.orchestrator import _title_key
     jobs = tracker.open_jobs(max_age_hours=settings["fresh_hours"])
+    done = recently_applied(tracker, int(settings.get("repost_days", 45)))
     out = []
     for j in jobs:
         if j["status"] in TERMINAL or j["fit_score"] < settings["min_score"]:
+            continue
+        if excluded(j, settings) or (_norm_company(j["company"]), _title_key(j["title"])) in done:
             continue
         if not application_url(j):
             continue
@@ -356,11 +435,14 @@ def maybe_autoapply(tracker, private_dir: Path | None = None, runner: Runner | N
             break
     if not picked:
         return None
-    mode = "submit" if settings["mode"] == "submit" else "practice"
+    review = needs_review(settings, private_dir)
+    mode = "submit" if settings["mode"] == "submit" and not review else "practice"
     for j in picked:
         count_attempt(j["id"], private_dir)
     args = apply_args([j["id"] for j in picked], mode=mode, trust_ai=settings["trust_ai"],
                       fit=settings["fit_check"], tailor=settings["tailor"])
-    label = ("Auto-submit: " if mode == "submit" else "Auto-prepare: ") + \
-        ", ".join(j["company"] for j in picked)
+    if review:
+        args.append("--notify-ready")
+    label = ("Auto-submit: " if mode == "submit" else
+             "Prepared for your OK: " if review else "Auto-prepare: ") + ", ".join(j["company"] for j in picked)
     return runner.start(args, label, auto=True, companies=[j["company"] for j in picked])

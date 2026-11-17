@@ -264,3 +264,23 @@ dialog::backdrop { background: rgba(23, 32, 46, .35); }
 .draft-head b { margin-right: auto; }
 .draft .subj { font-weight: 700; margin-bottom: 4px; }
 .draft .body { white-space: pre-wrap; max-width: 72ch; line-height: 1.55; }
+
+/* Setup check */
+.checks { display: grid; gap: 6px; }
+.check-row { display: grid; grid-template-columns: 22px minmax(150px, 220px) 1fr; gap: 10px; align-items: baseline; font-size: 14px; }
+.check-row .ic { font-weight: 700; text-align: center; }
+.check-row.ok .ic { color: #1f7a4d; }
+.check-row.warn .ic { color: #a35f00; }
+.check-row.fail .ic { color: var(--heat); }
+.check-row span:last-child { color: var(--muted); }
+@media (max-width: 640px) { .check-row { grid-template-columns: 22px 1fr; } .check-row span:last-child { grid-column: 2; } }
+
+/* Every answer on an application */
+.sent { margin-top: 12px; border-top: 1px solid var(--line); }
+.sent-row { display: grid; grid-template-columns: minmax(140px, 34%) 1fr auto; gap: 12px; padding: 9px 0;
+  border-bottom: 1px solid var(--line-soft, var(--line)); align-items: start; }
+.sent-row .lbl { font-weight: 600; font-size: 13.5px; }
+.sent-row .val { white-space: pre-wrap; word-break: break-word; font-size: 14px; }
+@media (max-width: 640px) { .sent-row { grid-template-columns: 1fr auto; } .sent-row .val { grid-column: 1; } }
+.modal-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+textarea { width: 100%; font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); }

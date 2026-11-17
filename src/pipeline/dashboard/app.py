@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import time
 import os
 import sqlite3
 from http.cookies import SimpleCookie
@@ -338,6 +339,9 @@ load();
 </html>"""
 
 
+_STARTED = time.time()
+
+
 class DashboardHandler(ApiMixin, SimpleHTTPRequestHandler):
     """HTTP handler serving the dashboard and API."""
 
@@ -430,8 +434,21 @@ class DashboardHandler(ApiMixin, SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _healthz(self) -> None:
+        """For the cloud's health check: no login needed, nothing private."""
+        from pipeline.crawler.worker import parse_iso, read_status, utcnow
+        st = read_status()
+        upd = parse_iso(st.get("updated_at")) if st.get("updated_at") else None
+        age = int((utcnow() - upd).total_seconds()) if upd else None
+        booting = (time.time() - _STARTED) < 900
+        ok = booting or (age is not None and age < 1800)
+        body = json.dumps({"ok": ok, "crawler_age_s": age, "booting": booting}).encode()
+        self._send_bytes(body, "application/json", 200 if ok else 503)
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/healthz":
+            return self._healthz()
         if parsed.path == "/login":
             if not self._token():
                 return self.send_error(404)
@@ -479,6 +496,16 @@ class DashboardHandler(ApiMixin, SimpleHTTPRequestHandler):
             return self._deny(True)
         ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
         length = int(self.headers.get("Content-Length") or 0)
+        if path == "/api/sync":
+            from pipeline import sync
+            if ctype != "application/zip":
+                return self._send_json({"error": "Expected application/zip"}, 415)
+            if length > sync.MAX_BYTES:
+                return self._send_json({"error": "Bundle too large"}, 413)
+            try:
+                return self._send_json(sync.apply(self.rfile.read(length), self._pdir()))
+            except ValueError as e:
+                return self._send_json({"error": str(e)}, 400)
         if length > applicant.MAX_RESUME_BYTES + 1024:
             return self._send_json({"error": "Upload too large (max 10 MB)"}, 413)
         body = self.rfile.read(length)

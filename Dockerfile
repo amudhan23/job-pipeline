@@ -31,6 +31,8 @@ RUN useradd --create-home --uid 10001 jobpipe && mkdir -p /app/data && chown -R 
 USER jobpipe
 VOLUME /app/data
 EXPOSE 8050
+HEALTHCHECK --interval=60s --timeout=10s --start-period=180s --retries=3 \
+  CMD python -c "import urllib.request,os,sys; urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\",\"8050\")}/healthz', timeout=8)" || exit 1
 
 # Refuses to start without JOBPIPE_DASHBOARD_TOKEN: the dashboard holds your private details.
 CMD ["sh", "-c", "jobpipe seed-h1b -f /app/seed/h1b_seed.json >/dev/null 2>&1; exec jobpipe serve --host 0.0.0.0 --port ${PORT}"]
