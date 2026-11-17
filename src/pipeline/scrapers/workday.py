@@ -143,6 +143,7 @@ class WorkdayScraper(BaseScraper):
     async def _post(self, client: httpx.AsyncClient, url: str, body: dict) -> dict:
         """POST with a small retry for Workday's occasional 429/503."""
         for attempt in range(3):
+            await asyncio.sleep(0.4)            # Workday limits callers across all tenants
             resp = await client.post(url, json=body)
             if resp.status_code in (429, 503) and attempt < 2:
                 await asyncio.sleep(2 * (attempt + 1))

@@ -130,20 +130,44 @@ class AshbySource(ListingSource):
 
 
 class ScraperSource:
-    """Fallback: the platform's own scraper (one request per job)."""
+    """Fallback: the platform's own scraper (several requests per company,
+    on its own connections). These platforms (Workday above all) limit
+    callers across all their customers, so one company at a time, a gap
+    between companies, and a growing pause for the whole platform after a 429."""
+
+    GAP_S = 2.0
 
     def __init__(self, scraper, timeout: float = 180.0) -> None:
         self.scraper, self.timeout = scraper, timeout
+        self._lock: asyncio.Lock | None = None
+        self.next_start = 0.0
+        self.paused_until = 0.0
+        self.backoff = 60.0
 
     async def read(self, fetcher: Fetcher, slug: str, board: dict,
                    known: dict[str, str | None]) -> Listing:
-        try:
-            jobs = await asyncio.wait_for(self.scraper.scrape_company(slug), self.timeout)
-        except asyncio.TimeoutError:
-            return Listing(0, error="timed out")
-        except Exception as e:
-            status = getattr(getattr(e, "response", None), "status_code", 0) or 0
-            return Listing(status, error=f"{type(e).__name__}: {e}"[:200])
+        import time
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        async with self._lock:
+            now = time.monotonic()
+            if now < self.paused_until:
+                return Listing(429, error=f"platform rate-limited us; resuming in {int(self.paused_until - now)} s")
+            if self.next_start > now:
+                await asyncio.sleep(self.next_start - now)
+            try:
+                jobs = await asyncio.wait_for(self.scraper.scrape_company(slug), self.timeout)
+            except asyncio.TimeoutError:
+                return Listing(0, error="timed out")
+            except Exception as e:
+                status = getattr(getattr(e, "response", None), "status_code", 0) or 0
+                if status == 429:
+                    self.paused_until = time.monotonic() + self.backoff
+                    self.backoff = min(self.backoff * 2, 1800.0)
+                return Listing(status, error=f"{type(e).__name__}: {e}"[:200])
+            finally:
+                self.next_start = time.monotonic() + self.GAP_S
+            self.backoff = 60.0
         # Workday is searched with page limits, so a missing job isn't proof it closed
         return Listing(200, jobs=jobs, complete=getattr(self.scraper, "complete_listing", True))
 

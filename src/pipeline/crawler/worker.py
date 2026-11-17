@@ -273,6 +273,18 @@ class Crawler:
         if utcnow() >= self.next_feed:
             new_ids += await self._safe(self.poll_feeds(), {"platform": "feed", "slug": "simplify"})
         due = self.registry.due(iso(now), limit=self.batch)
+        # Slow platforms (Workday & co.) go one company at a time; take a few per
+        # pass so they never hold up the fast Greenhouse/Lever/Ashby checks.
+        fast = ("greenhouse", "lever", "ashby")
+        slow_cap = int((self.config.get("crawler") or {}).get("slow_per_tick", 4))
+        picked, slow = [], 0
+        for b in due:
+            if b.get("platform") in fast:
+                picked.append(b)
+            elif slow < slow_cap:
+                picked.append(b)
+                slow += 1
+        due = picked
         results = await asyncio.gather(*(self._safe(self.crawl_board(b), b) for b in due))
         new_ids += [i for r in results for i in r]
         if self.discover_every and utcnow() >= self.next_discovery and \

@@ -244,3 +244,26 @@ def test_workday_tenants_share_one_slow_lane():
     b = f._host("https://globex.wd1.myworkdayjobs.com/wday/cxs/globex/y/jobs")
     gh = f._host("https://boards-api.greenhouse.io/v1/boards/acme/jobs")
     assert a is b and a.gap >= 1.5 and a is not gh and gh.gap == 0.25
+
+
+def test_slow_platform_pauses_after_429():
+    import asyncio
+
+    import httpx
+
+    from pipeline.crawler.sources import ScraperSource
+
+    class Limited:
+        complete_listing = False
+        calls = 0
+
+        async def scrape_company(self, slug):
+            Limited.calls += 1
+            req = httpx.Request("POST", "https://acme.wd5.myworkdayjobs.com/x")
+            raise httpx.HTTPStatusError("429", request=req, response=httpx.Response(429, request=req))
+
+    src = ScraperSource(Limited())
+    src.GAP_S = 0
+    first = asyncio.run(src.read(None, "a", {}, {}))
+    second = asyncio.run(src.read(None, "b", {}, {}))
+    assert first.status == 429 and "resuming" in second.error and Limited.calls == 1
