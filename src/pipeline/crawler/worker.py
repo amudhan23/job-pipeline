@@ -128,6 +128,11 @@ class Crawler:
                                    next_due_at=iso(now + timedelta(hours=6)))
             self.reads.append((time.time(), platform, slug, "gone", 0))
             return []
+        # Skipped on purpose while the platform cools down: not this board's fault
+        if listing.defer_s:
+            self.registry.schedule(platform, slug, next_due_at=iso(now + timedelta(seconds=listing.defer_s)))
+            self.reads.append((time.time(), platform, slug, "deferred", 0))
+            return []
         # Couldn't read it: back off without retiring it
         if listing.error and not listing.unchanged:
             streak = (board.get("error_streak") or 0) + 1

@@ -266,4 +266,5 @@ def test_slow_platform_pauses_after_429():
     src.GAP_S = 0
     first = asyncio.run(src.read(None, "a", {}, {}))
     second = asyncio.run(src.read(None, "b", {}, {}))
-    assert first.status == 429 and "resuming" in second.error and Limited.calls == 1
+    assert first.status == 429 and not first.defer_s                 # the real 429: an error
+    assert second.defer_s > 0 and "resuming" in second.error and Limited.calls == 1   # then deferred, not counted

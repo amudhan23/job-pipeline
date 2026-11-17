@@ -33,6 +33,7 @@ class Listing:
     content_hash: str | None = None
     error: str = ""
     complete: bool = True            # False: absence from `jobs` isn't proof a job closed
+    defer_s: float = 0               # not read on purpose (platform cooling down): try again in this many seconds
 
 
 def _validators(r: FetchResult) -> tuple[str | None, str | None]:
@@ -152,7 +153,8 @@ class ScraperSource:
         async with self._lock:
             now = time.monotonic()
             if now < self.paused_until:
-                return Listing(429, error=f"platform rate-limited us; resuming in {int(self.paused_until - now)} s")
+                wait = self.paused_until - now
+                return Listing(429, error=f"platform cooling down; resuming in {int(wait)} s", defer_s=wait + 5)
             if self.next_start > now:
                 await asyncio.sleep(self.next_start - now)
             try:
