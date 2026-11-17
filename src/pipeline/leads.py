@@ -208,8 +208,8 @@ class LeadStore:
     def counts(self) -> dict[str, Any]:
         with self._conn() as c:
             by = {r[0]: r[1] for r in c.execute("SELECT source, COUNT(*) FROM leads GROUP BY source")}
-            posts = c.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
-        return {"by_source": by, "posts_read": posts}
+            read = {r[0]: r[1] for r in c.execute("SELECT source, COUNT(*) FROM posts GROUP BY source")}
+        return {"by_source": by, "posts_read": sum(read.values()), "read_by_source": read}
 
     def x_reads_today(self) -> int:
         day = utcnow().strftime("%Y-%m-%d")
