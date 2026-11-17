@@ -13,7 +13,7 @@ ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 \
     PORT=8050
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends tzdata ca-certificates \
+ && apt-get install -y --no-install-recommends tzdata ca-certificates poppler-utils \
  && if [ "$WITH_LATEX" = "1" ]; then \
       apt-get install -y --no-install-recommends texlive-latex-base texlive-latex-extra texlive-fonts-recommended; \
     fi \

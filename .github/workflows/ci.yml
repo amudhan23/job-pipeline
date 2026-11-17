@@ -36,7 +36,7 @@ jobs:
       - name: LaTeX for resumes
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends texlive-latex-base texlive-latex-extra texlive-fonts-recommended
+          sudo apt-get install -y -qq --no-install-recommends texlive-latex-base texlive-latex-extra texlive-fonts-recommended poppler-utils
       - name: Install
         run: |
           pip install -e '.[dev,apply,ai]'
