@@ -237,7 +237,7 @@ class Telegram:
         self.send(text)
 
     def notify_ready(self, job: dict, report, resume: Path | str | None = None,
-                     progress: tuple[int, int] = (0, 0)) -> int | None:
+                     progress: tuple[int, int] = (0, 0), rehearsal: bool = False) -> int | None:
         """A complete application, every answer listed, waiting for your Submit/Skip."""
         if not self.configured():
             return None
@@ -252,11 +252,13 @@ class Telegram:
             else:
                 lines.append(f"• {label}: {html.escape(value[:120])}")
         done, total = progress
-        head = (f"📝 <b>Ready to send: {html.escape(job['company'])}</b>\n{html.escape(job['title'])}\n"
+        head = (("🧪 <b>Rehearsal, nothing will be sent</b>\n" if rehearsal else "") +
+                f"📝 <b>Ready to send: {html.escape(job['company'])}</b>\n{html.escape(job['title'])}\n"
                 f"Score {job.get('fit_score', 0):.0f}"
                 + (f" · resume: {html.escape(Path(resume).name)}" if resume else "") + "\n")
         foot = (f"\n\nApproval {done + 1} of {total}; after {total} it submits on its own."
-                if total and done < total else "")
+                if total and done < total and not rehearsal else
+                "\n\nTap a button to test the round trip." if rehearsal else "")
         body = "\n".join(lines)
         if len(head) + len(body) + len(foot) > 3900:          # Telegram's limit: trim the plain fields
             body = body[: 3900 - len(head) - len(foot) - 40].rsplit("\n", 1)[0] + "\n…(more on the dashboard)"
@@ -367,9 +369,12 @@ class Telegram:
 
     # ── Reading your taps and replies ──────────────────────────────────
 
-    def poll_once(self, on_action: Callable[[str, str], str], wait: int = 0) -> int:
+    def poll_once(self, on_action: Callable[[str, str], str], wait: int = 0,
+                  on_share: Callable[[str, bytes | None], str] | None = None) -> int:
         """Handle new updates. on_action(job_id, action) runs Submit/Prepare/Skip
-        and returns a short status line. Returns how many updates were handled."""
+        and returns a short status line. on_share(text, image) takes a post you
+        forwarded (text, link or screenshot). Returns how many updates were handled."""
+        self._on_share = on_share
         s = self.settings()
         if not (s["token"] and s["chat_id"]):
             return 0
@@ -407,6 +412,11 @@ class Telegram:
                     job_id = st["tokens"].get(tok)
                 if job_id:
                     note = on_action(job_id, {"s": "approve", "k": "skip"}.get(arg, ""))
+            elif kind == "l":                      # a hiring post: watch the company / dismiss
+                with self.state() as st:
+                    lead_id = st["tokens"].get(tok)
+                if lead_id:
+                    note = on_action(lead_id, {"w": "lead_watch", "d": "lead_dismiss"}.get(arg, ""))
             elif kind == "q":
                 with self.state() as st:
                     ref = st["replies"].get(f"q{tok}")
@@ -440,6 +450,53 @@ class Telegram:
             return
         if text.startswith("/"):
             self._command(text.split()[0].lower())
+            return
+        share = getattr(self, "_on_share", None)
+        photos = msg.get("photo") or []
+        caption = (msg.get("caption") or "").strip()
+        if share and (photos or text):
+            image = self.download(photos[-1]["file_id"]) if photos else None
+            self.send("Reading it…")
+            self.send(share(text or caption, image))
+
+    def download(self, file_id: str) -> bytes | None:
+        """A file you sent the bot (a screenshot), at most 10 MB."""
+        s = self.settings()
+        try:
+            info = self.api("getFile", file_id=file_id)
+            if int(info.get("file_size") or 0) > 10_000_000:
+                return None
+            r = self.client.get(f"{API}/file/bot{s['token']}/{info['file_path']}")
+            return r.content if r.status_code == 200 else None
+        except Exception:
+            return None
+
+    def notify_lead(self, lead: dict) -> int | None:
+        """A hiring post worth a look."""
+        if not self.configured():
+            return None
+        src = {"hn": "Hacker News", "bluesky": "Bluesky", "x": "X", "manual": "a post you sent",
+               "linkedin_email": "LinkedIn alert"}.get(lead.get("source", ""), lead.get("source", ""))
+        what = " · ".join(x for x in [lead.get("company"), lead.get("role")] if x) or "Hiring post"
+        tags = []
+        if lead.get("visa") == "yes":
+            tags.append("mentions visa sponsorship")
+        if lead.get("remote"):
+            tags.append("remote")
+        if lead.get("location"):
+            tags.append(lead["location"])
+        snippet = html.escape((lead.get("snippet") or "")[:400])
+        tok = self._token_for(lead["id"])
+        buttons = [[{"text": "Watch company", "callback_data": f"l:{tok}:w"},
+                    {"text": "Dismiss", "callback_data": f"l:{tok}:d"}]]
+        if lead.get("url"):
+            buttons.append([{"text": "Open the post", "url": lead["url"]}])
+        if lead.get("author_url"):
+            buttons[-1 if lead.get("url") else 0].append({"text": "Poster's profile", "url": lead["author_url"]})
+        board = f"\nNow watching its job board ({html.escape(lead['board'])})." if lead.get("board") else ""
+        return self.send(f"🧲 <b>{html.escape(what)}</b>\nvia {src} · score {lead.get('score', 0):.0f}"
+                         + (f" · {html.escape(', '.join(tags))}" if tags else "")
+                         + f"\n\n{snippet}{board}", buttons)
 
     def _command(self, cmd: str) -> None:
         from pipeline import autoapply

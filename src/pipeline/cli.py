@@ -234,9 +234,49 @@ def _make_crawler(config: dict, auto: bool = True):
     tg = Telegram()
     last_health = [0.0]
 
+    def on_share(text: str, image: bytes | None) -> str:
+        """A post you forwarded to the bot (text, link or screenshot)."""
+        from pipeline import leads
+        try:
+            found = leads.add_shared(text, image=image)
+        except ValueError as e:
+            return str(e)
+        except Exception as e:
+            return f"Couldn't read it: {str(e)[:150]}"
+        if not found:
+            return "Read it, but it doesn't look like someone hiring. Saved anyway under Leads."
+        msgs = []
+        for lead in found:
+            board = ""
+            try:
+                board = leads.watch(lead, resolve=leads._resolver())
+                if board:
+                    leads.LeadStore().update(lead["id"], board=board)
+            except Exception:
+                pass
+            what = " · ".join(x for x in [lead["company"], lead["role"]] if x) or "a role"
+            msgs.append(f"{what} (score {lead['score']:.0f}"
+                        + (", mentions visa sponsorship" if lead["visa"] == "yes" else
+                           ", says no sponsorship" if lead["visa"] == "no" else "") + ")"
+                        + (f": now watching {board}" if board else ": couldn't find its job board; it's under Leads"))
+        return "Got it: " + "; ".join(msgs)
+
     def on_phone(job_id: str, action: str) -> str:
         """A button tapped in Telegram."""
         from pipeline.models import ApplicationStatus
+        if action in ("lead_watch", "lead_dismiss"):
+            from pipeline import leads
+            store = leads.LeadStore()
+            lead = store.lead(job_id)
+            if not lead:
+                return "That post is gone."
+            if action == "lead_dismiss":
+                store.update(job_id, status="dismissed")
+                return "Dismissed."
+            board = leads.watch(lead, resolve=leads._resolver())
+            store.update(job_id, status="watching", board=board or None)
+            return (f"Watching {board}: its openings will come through like any other job."
+                    if board else "Couldn't find that company's job board. Try Search companies on the dashboard.")
         tracker = Tracker()
         job = tracker.get_job(job_id)
         if not job:
@@ -272,11 +312,16 @@ def _make_crawler(config: dict, auto: bool = True):
             except Exception as e:
                 console.print(f"[yellow]Telegram: {e}[/yellow]")
         if tg.configured():
-            tg.poll_once(on_phone)
+            tg.poll_once(on_phone, on_share=on_share)
             tg.maybe_summary(tracker)
         meta = autoapply.maybe_autoapply(tracker, allow_auto=auto)
         if meta:
             console.print(f"[cyan]Auto-apply started:[/cyan] {meta['label']}")
+        try:
+            from pipeline import leads
+            leads.maybe_run(tg)                                  # hiring posts, in the background
+        except Exception as e:
+            console.print(f"[yellow]leads: {e}[/yellow]")
         if time.monotonic() - last_health[0] > 600:           # every 10 minutes
             last_health[0] = time.monotonic()
             try:
@@ -1193,6 +1238,185 @@ def mail_forget() -> None:
     from pipeline.notify import mailcodes
     mailcodes.forget()
     console.print("Removed. Security codes will be asked for on Telegram.")
+
+
+@main.command()
+@click.option("--job", "job_id", default=None, help="Rehearse on this job (default: your best open match)")
+@click.option("--headless", is_flag=True, help="Don't show the browser while it fills the form")
+@click.option("--wait-minutes", default=10, help="How long to wait for your tap on Telegram")
+@click.option("--skip", "skip_steps", default="", help="Comma list of steps to skip: apply,telegram,mail,leads")
+@click.pass_context
+def rehearse(ctx: click.Context, job_id: str | None, headless: bool, wait_minutes: int, skip_steps: str) -> None:
+    """Dress rehearsal on this computer before going to the cloud: every step
+    of an unattended application on a real job, without sending anything.
+
+    1. setup check   2. fill a real form for your best match (you watch)
+    3. the Telegram approval round trip   4. read a security code from Gmail
+    5. collect hiring posts. Stop `jobpipe watch` first (it would take the taps)."""
+    import time as _time
+    from types import SimpleNamespace
+    from pipeline import applicant, autoapply, doctor as doc
+    from pipeline.notify import mailcodes
+    from pipeline.notify.telegram import Telegram
+    skip = {x.strip() for x in skip_steps.split(",") if x.strip()}
+    results: list[tuple[str, str, str]] = []
+
+    def done(step: str, level: str, msg: str) -> None:
+        results.append((step, level, msg))
+        mark = {"ok": "[green]✓[/green]", "warn": "[yellow]![/yellow]", "fail": "[red]✗[/red]"}[level]
+        console.print(f"{mark} [bold]{step}[/bold]: {msg}\n")
+
+    console.rule("1. Setup check")
+    checks = doc.checks(online=True)
+    for c in checks:
+        console.print(f"   {'✓' if c['level'] == 'ok' else '!' if c['level'] == 'warn' else '✗'} {c['name']}: {c['message']}")
+    fails = [c["name"] for c in checks if c["level"] == "fail"]
+    done("Setup", "fail" if fails else "ok", f"fix: {', '.join(fails)}" if fails else "everything in place")
+    blocking = {"Your details", "Resume PDF", "Browser for applying"} & set(fails)
+
+    tracker = Tracker()
+    job = None
+    if "apply" not in skip and not blocking:
+        console.rule("2. Fill a real application (nothing is submitted)")
+        if job_id:
+            job = tracker.get_job(job_id)
+        else:
+            s_ = autoapply.load_settings()
+            picks = autoapply.candidates(tracker, {**s_, "fit_check": False, "fresh_hours": 24 * 14})
+            job = picks[0] if picks else None
+        if not job:
+            done("Fill a form", "warn", "no open job matches yet: run `jobpipe watch` for a while, or pass --job")
+        else:
+            console.print(f"   {job['company']}: {job['title']} (score {job['fit_score']:.0f})\n")
+            try:
+                ctx.invoke(apply, job_id=(job["id"],), headed=not headless, submit=False)
+                from pipeline.dashboard.routes import _report
+                rep = _report(applicant.PRIVATE_DIR, job["id"]) or {}
+                n = len([f for f in rep.get("filled") or [] if f.get("value")])
+                need = rep.get("needs_attention") or []
+                done("Fill a form", "ok" if rep.get("ready_to_submit") else "warn",
+                     f"{n} fields filled" + (f"; still needs you: {', '.join(f['label'] for f in need[:4])}" if need
+                                            else "; it would have been ready to submit"))
+            except SystemExit:
+                done("Fill a form", "fail", "the apply run stopped; see the output above")
+            except Exception as e:
+                done("Fill a form", "fail", str(e)[:200])
+
+    tg = Telegram()
+    if "telegram" not in skip:
+        console.rule("3. Approval on your phone")
+        if not tg.configured():
+            done("Telegram", "warn", "not connected: `jobpipe telegram setup`")
+        else:
+            from pipeline.dashboard.routes import _report
+            rep = (_report(applicant.PRIVATE_DIR, job["id"]) if job else None) or {}
+            fake = SimpleNamespace(
+                filled=[SimpleNamespace(label=f["label"], value=f.get("value", "")) for f in rep.get("filled") or []]
+                or [SimpleNamespace(label="First name", value=applicant.load().get("first_name", "You"))],
+                ai_written=rep.get("ai_written") or [], screenshot=rep.get("screenshot"))
+            j = job or {"id": "rehearsal", "company": "Rehearsal Inc.", "title": "Software Engineer", "fit_score": 0}
+            tg.notify_ready(j, fake, rehearsal=True)
+            console.print(f"   Sent to Telegram. Tap [bold]Submit it[/bold] or [bold]Skip[/bold] "
+                          f"(waiting up to {wait_minutes} min)…")
+            tapped: list[str] = []
+            deadline = _time.monotonic() + wait_minutes * 60
+            while not tapped and _time.monotonic() < deadline:
+                tg.poll_once(lambda jid, action: tapped.append(action) or
+                             ("Rehearsal: this is where it would submit. Nothing was sent." if action == "approve"
+                              else "Rehearsal: skipped."), wait=20)
+            if tapped:
+                done("Telegram", "ok", f"your tap arrived ({'Submit' if tapped[0] == 'approve' else 'Skip'}); "
+                     "in a real run that sends the application")
+            else:
+                done("Telegram", "fail", "no tap arrived. Is `jobpipe watch` running somewhere? It takes the taps.")
+
+    if "mail" not in skip:
+        console.rule("4. Security codes from Gmail")
+        if not mailcodes.configured():
+            done("Gmail codes", "warn", "not set (`jobpipe mail setup`); codes will be asked for on Telegram")
+        else:
+            ok, msg = mailcodes.test_login()
+            if not ok:
+                done("Gmail codes", "fail", msg)
+            else:
+                got = mailcodes.latest_code()
+                done("Gmail codes", "ok", f"{msg} Latest code email: {got['subject']} ({got['date'][:16]}), "
+                     f"read the code {got['code']}" if got else
+                     f"{msg} No code emails in 60 days to test on; the first real one will be read live")
+
+    if "leads" not in skip:
+        console.rule("5. Hiring posts")
+        from pipeline import leads as _leads
+        rep = _leads.fetch(sources=["hn", "bluesky"])
+        top = sorted(rep["new"], key=lambda x: -x["score"])[:3]
+        msg = ", ".join(f"{k}: {v} posts" for k, v in rep["posts"].items()) or "no posts"
+        if rep["errors"]:
+            msg += "; errors: " + "; ".join(f"{k}: {v}" for k, v in rep["errors"].items())
+        for t in top:
+            console.print(f"   {t['score']:.0f}  {t['company'] or '?'}: {t['role'] or '?'}  {t['url']}")
+        done("Hiring posts", "fail" if rep["errors"] and not rep["posts"] else "ok",
+             f"{msg}; {len(rep['new'])} new leads")
+
+    console.rule("Result")
+    bad = [r for r in results if r[1] == "fail"]
+    if bad:
+        console.print(f"[red]{len(bad)} step(s) to fix before the cloud:[/red] " + ", ".join(r[0] for r in bad))
+        raise SystemExit(1)
+    console.print("[green]Rehearsal passed.[/green] Next: [bold]jobpipe cloud deploy[/bold]")
+
+
+@main.group()
+def leads() -> None:
+    """Hiring posts from Hacker News, Bluesky, X, and posts you send in."""
+
+
+@leads.command("fetch")
+@click.option("--source", "sources", default="", help="Comma list: hn,bluesky,x (default: the enabled ones)")
+def leads_fetch(sources: str) -> None:
+    """Collect new hiring posts now and show the best."""
+    from pipeline import leads as _leads
+    rep = _leads.fetch(sources=[x.strip() for x in sources.split(",") if x.strip()] or None)
+    for k, v in rep["posts"].items():
+        console.print(f"{k}: {v} posts read")
+    for k, v in rep["errors"].items():
+        console.print(f"[red]{k}: {v}[/red]")
+    for lead in sorted(rep["new"], key=lambda x: -x["score"])[:15]:
+        visa = {"yes": " [green]visa ✓[/green]", "no": " [red]no visa[/red]"}.get(lead["visa"], "")
+        console.print(f"{lead['score']:>4.0f}  {lead['company'] or '?'}: {lead['role'] or '?'}{visa}  [dim]{lead['url']}[/dim]")
+    console.print(f"{len(rep['new'])} new leads.")
+
+
+@leads.command("add")
+@click.argument("text", required=False)
+@click.option("--image", type=click.Path(exists=True, dir_okay=False), help="A screenshot of the post")
+def leads_add(text: str | None, image: str | None) -> None:
+    """Add a post you saw (paste its text, or give a screenshot)."""
+    from pipeline import leads as _leads
+    if not text and not image:
+        text = click.edit("# Paste the post below, save and close\n") or ""
+        text = "\n".join(l for l in text.splitlines() if not l.startswith("#"))
+    found = _leads.add_shared(text or "", image=Path(image).read_bytes() if image else None)
+    for lead in found:
+        board = _leads.watch(lead, resolve=_leads._resolver())
+        console.print(f"{lead['company'] or '?'}: {lead['role'] or '?'} (score {lead['score']:.0f})"
+                      + (f", watching {board}" if board else ""))
+    if not found:
+        console.print("That doesn't read as a hiring post.")
+
+
+@leads.command("x-token")
+def leads_x_token() -> None:
+    """Save an X API bearer token (pay-per-use; about $0.005 per post read)."""
+    from pipeline import leads as _leads
+    console.print("Create an app at console.x.com, buy a few dollars of credits, copy the app's Bearer Token.\n"
+                  "jobpipe reads at most the daily cap you set (default 100 posts, about $0.50 a day).")
+    tok = click.prompt("Bearer token (input hidden)", hide_input=True)
+    cap = click.prompt("Posts per day at most", default=100, type=int)
+    try:
+        _leads.save_settings({"x_token": tok, "x": True, "x_daily_posts": cap})
+    except ValueError as e:
+        raise click.ClickException(str(e))
+    console.print("Saved. X is on.")
 
 
 # ── Cloud ──────────────────────────────────────────────────────────────

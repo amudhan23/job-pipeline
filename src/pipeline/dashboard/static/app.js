@@ -1068,8 +1068,105 @@ async function showSent(jobId, finishing) {
   if ($("#mDone")) $("#mDone").onclick = async () => { if (await setStatus(jobId, "applied")) { dlg.close(); toast("Marked applied."); route(); } };
 }
 
+/* ── Leads: hiring posts from people ─────────────────────── */
+
+const SRC = { hn: "Hacker News", bluesky: "Bluesky", x: "X", manual: "You sent it", linkedin_email: "LinkedIn alert" };
+
+async function pageLeads() {
+  page.innerHTML = `<div class="head"><div><h1>Leads</h1>
+    <p class="lede">People posting that they're hiring, often before a job board does: the monthly Hacker News
+    "Who is hiring?" thread, YC job posts, Bluesky, and X if you add a key. Claude reads each post; good ones get
+    their company's job board added to the crawler, so the real opening is caught and applied to like any other.
+    LinkedIn isn't scraped (it bans accounts for that): forward posts you see to your Telegram bot, as text,
+    a link or a screenshot, or paste them below.</p></div>
+    <div class="bar"><button class="primary" id="ld-fetch">Collect now</button></div></div>
+    <div class="panel"><div class="field"><label for="ld-text">Add a post you saw</label>
+      <textarea id="ld-text" rows="3" placeholder="Paste a LinkedIn or X post: who's hiring, the role, any link"></textarea></div>
+      <div class="bar"><button id="ld-add">Read it</button><span class="note" id="ld-note"></span></div></div>
+    <div class="tabs" role="tablist" id="ld-tabs">
+      <button data-st="new" class="on">New</button><button data-st="watching">Watching</button>
+      <button data-st="dismissed">Dismissed</button><button data-st="all">All</button></div>
+    <div id="ld-list">Loading…</div>
+    <h2>Sources</h2><div class="panel" id="ld-settings"></div>`;
+  let status = "new";
+  $$("#ld-tabs button").forEach(b => b.onclick = () => {
+    $$("#ld-tabs button").forEach(x => x.classList.toggle("on", x === b)); status = b.dataset.st; drawLeads(status);
+  });
+  $("#ld-fetch").onclick = async () => {
+    const r = await api("/api/leads/fetch", {}); toast(r.started ? "Collecting; new leads appear in a minute." : r.note);
+    setTimeout(() => drawLeads(status), 15000);
+  };
+  $("#ld-add").onclick = async () => {
+    const t = $("#ld-text").value.trim(); if (!t) return;
+    $("#ld-note").textContent = "Reading…";
+    try {
+      const r = await api("/api/leads/add", { text: t });
+      $("#ld-note").textContent = r.found.length ? `Found ${r.found.map(f => [f.company, f.role].filter(Boolean).join(": ")).join("; ")}`
+        : "That doesn't read as a hiring post.";
+      $("#ld-text").value = ""; drawLeads(status);
+    } catch (e) { $("#ld-note").textContent = e.message; }
+  };
+  await drawLeads(status);
+}
+
+async function drawLeads(status) {
+  let d;
+  try { d = await api(`/api/leads?status=${status}`); } catch (e) { $("#ld-list").textContent = e.message; return; }
+  const box = $("#ld-list");
+  if (!d.leads.length) {
+    box.innerHTML = `<div class="panel empty"><strong>${status === "new" ? "No new leads." : "Nothing here."}</strong>
+      ${status === "new" ? "Collection runs every " + d.settings.every_minutes + " minutes while the crawler runs, or press Collect now." : ""}</div>`;
+  } else {
+    box.innerHTML = d.leads.map(l => {
+      const age = l.posted_at ? Math.max(0, Math.round((Date.now() - new Date(l.posted_at)) / 3600000)) : null;
+      return `<div class="lead" data-id="${esc(l.id)}">
+        <div class="top"><div><div class="name">${esc(l.company || "Unknown company")}${l.role ? `: ${esc(l.role)}` : ""}</div>
+          <div class="sub">${SRC[l.source] || esc(l.source)}${age !== null ? ` · ${age < 24 ? age + " h" : Math.round(age / 24) + " d"} ago` : ""}
+            ${l.location ? ` · ${esc(l.location)}` : ""}${l.remote ? " · remote" : ""}${l.author ? ` · by ${esc(l.author)}` : ""}</div></div>
+          <div class="tags"><span class="score">${Math.round(l.score)}</span>
+            ${l.visa === "yes" ? `<span class="tag good">visa mentioned</span>` : l.visa === "no" ? `<span class="tag stop">no sponsorship</span>` : ""}
+            ${l.board ? `<span class="tag plain">watching ${esc(l.board)}</span>` : ""}</div></div>
+        <p class="snippet">${esc(l.snippet)}</p>
+        <div class="bar">${l.url ? `<a class="btn" href="${esc(l.url)}" target="_blank" rel="noopener">Open the post</a>` : ""}
+          ${l.apply_url && l.apply_url !== l.url ? `<a class="btn" href="${esc(l.apply_url)}" target="_blank" rel="noopener">Apply link</a>` : ""}
+          ${l.author_url ? `<a class="btn quiet" href="${esc(l.author_url)}" target="_blank" rel="noopener">Poster's profile</a>` : ""}
+          ${l.status !== "watching" ? `<button data-a="watch">Watch company</button>` : ""}
+          ${l.status === "dismissed" ? `<button class="quiet" data-a="restore">Restore</button>` : `<button class="quiet" data-a="dismiss">Dismiss</button>`}
+        </div></div>`;
+    }).join("");
+    $$(".lead [data-a]", box).forEach(b => b.onclick = async () => {
+      b.disabled = true;
+      try { await api("/api/leads/action", { id: b.closest(".lead").dataset.id, action: b.dataset.a }); drawLeads(status); }
+      catch (e) { toast(e.message, true); b.disabled = false; }
+    });
+  }
+  const s = d.settings, c = d.counts.by_source || {};
+  $("#ld-settings").innerHTML = `<div class="src-row">
+      <label class="check"><input type="checkbox" id="ls-hn" ${s.hn ? "checked" : ""}> Hacker News <span class="note">${c.hn || 0} leads · free</span></label>
+      <label class="check"><input type="checkbox" id="ls-bluesky" ${s.bluesky ? "checked" : ""}> Bluesky <span class="note">${c.bluesky || 0} leads · free</span></label>
+      <label class="check"><input type="checkbox" id="ls-x" ${s.x ? "checked" : ""} ${s.has_x_token ? "" : "disabled"}> X <span class="note">${s.has_x_token
+        ? `${c.x || 0} leads · ${s.x_today} of ${s.x_daily_posts} posts read today` : "add a token below"}</span></label>
+    </div>
+    <div class="grid2">
+      <div class="field"><label for="ls-xtok">X API bearer token</label><input type="password" id="ls-xtok" autocomplete="off"
+        placeholder="${s.has_x_token ? "Saved. Paste a new one to replace it" : "From console.x.com"}">
+        <div class="hint">Pay-per-use, about $0.005 per post read.</div></div>
+      <div class="field"><label for="ls-cap">X posts per day at most</label><input type="number" id="ls-cap" min="0" max="5000" value="${s.x_daily_posts}">
+        <div class="hint">About $${(s.x_daily_posts * 0.005).toFixed(2)} a day at this cap.</div></div>
+      <div class="field"><label for="ls-min">Alert me and watch the company from score</label><input type="number" id="ls-min" min="0" max="100" value="${s.alert_min_score}"></div>
+    </div>
+    <div class="field"><label for="ls-q">Search phrases for Bluesky and X, one per line</label><textarea id="ls-q" rows="5">${esc(s.queries.join("\n"))}</textarea></div>
+    <div class="bar"><button class="primary" id="ls-save">Save</button><span class="note">${d.counts.posts_read} posts read so far.</span></div>`;
+  $("#ls-save").onclick = async () => {
+    const body = { hn: $("#ls-hn").checked, bluesky: $("#ls-bluesky").checked, x: $("#ls-x").checked,
+      x_daily_posts: +$("#ls-cap").value, alert_min_score: +$("#ls-min").value, queries: $("#ls-q").value };
+    if ($("#ls-xtok").value) { body.x_token = $("#ls-xtok").value; body.x = true; }
+    try { await api("/api/leads/settings", body); toast("Saved."); drawLeads(status); } catch (e) { toast(e.message, true); }
+  };
+}
+
 const routes = { jobs: pageJobs, attention: pageAttention, applied: pageApplied, search: pageSearch, auto: pageAuto,
-  crawler: pageCrawler, career: pageCareer, outreach: pageOutreach };
+  crawler: pageCrawler, career: pageCareer, outreach: pageOutreach, leads: pageLeads };
 
 function route() {
   timers.forEach(clearInterval); timers = [];

@@ -246,6 +246,34 @@ With no profile saved, the older path runs: Claude picks and rewords bullets
 from `config/profile.yaml`, with a guard that discards any rewrite adding a
 number or technology the original lacked. A resume costs a few cents.
 
+## Leads: hiring posts from people
+
+Founders and engineers often post "we're hiring" before a job board shows
+it. The **Leads** page collects those posts every 20 minutes while the
+crawler runs:
+
+- **Hacker News:** every new comment on the monthly "Ask HN: Who is hiring?"
+  thread, and YC companies' job posts (free official API).
+- **Bluesky:** public post search for phrases you choose (free official API).
+- **X:** recent search through the official API if you add a bearer token
+  (`jobpipe leads x-token`). X charges about $0.005 per post read, so a
+  daily cap (default 100 posts, about $0.50 a day) keeps it cheap.
+- **Posts you send in:** forward a post's text, link or **screenshot** to
+  your Telegram bot (Claude reads screenshots), paste it on the Leads page,
+  or `jobpipe leads add`. This is the way to use LinkedIn: jobpipe never
+  scrapes LinkedIn, because its User Agreement forbids automated collection
+  and accounts get restricted for it.
+
+Claude reads each post (company, role, location, remote, visa, apply link),
+skipping people looking for work and spam, and scores it against your
+profile; "no sponsorship" sinks the score, "visa sponsorship" raises it.
+Without an AI key, Hacker News postings are read by their
+`Company | Role | Location` format. For good leads, the company's job board
+is added to the crawler, so the real opening is caught and applied to like
+any other job, and Telegram shows you the post with **Watch company**,
+**Dismiss** and the poster's profile (often the hiring manager: worth a
+direct note). `jobpipe leads fetch` runs a pass now.
+
 ## Outreach
 
 From **Applied** (Reach out) or the **Outreach** page:
@@ -324,6 +352,12 @@ Guard rails, from what goes wrong with other auto-apply tools:
   failing board reads, crashing apply runs, AI budget or key problems and low
   disk, and tells you on Telegram (at most every 6 hours per problem, plus a
   note when it's fixed). In the cloud, a stalled crawler restarts the machine.
+
+**Test on your computer first:** `jobpipe rehearse` runs every step of an
+unattended application on a real job without sending anything: the setup
+check, filling your best match's real form in a visible browser, the Telegram
+approval round trip (marked as a rehearsal), reading a security code from
+your Gmail, and collecting hiring posts. When it passes, deploy.
 
 `jobpipe doctor` checks every part of the setup (`--online` also contacts the
 AI, Telegram, Gmail and the job sites). `jobpipe selftest` fetches a live

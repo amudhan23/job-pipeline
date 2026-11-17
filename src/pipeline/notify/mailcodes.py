@@ -236,3 +236,40 @@ def test_login(private_dir: Path | None = None, connect: Callable[[str], Any] | 
                        f"IMAP is on in Gmail settings. ({str(e)[:80]})")
     except OSError as e:
         return False, f"Couldn't reach {s['host']} ({type(e).__name__})."
+
+
+def latest_code(days: int = 60, private_dir: Path | None = None,
+                connect: Callable[[str], Any] | None = None) -> dict[str, str] | None:
+    """For the rehearsal: the newest security code already in your inbox
+    (proves the reader works on your real mail). Code masked."""
+    s = settings(private_dir)
+    if not configured(private_dir):
+        return None
+    connect = connect or (lambda host: imaplib.IMAP4_SSL(host, 993, timeout=30))
+    imap = connect(s["host"])
+    try:
+        imap.login(s["email"], s["app_password"])
+        imap.select("INBOX", readonly=True)
+        typ, data = imap.search(None, "SINCE", (datetime.now() - timedelta(days=days)).strftime("%d-%b-%Y"))
+        if typ != "OK" or not data or not data[0]:
+            return None
+        for mid in data[0].split()[::-1][:400]:
+            typ, head = imap.fetch(mid, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")
+            if typ != "OK" or not head or not isinstance(head[0], tuple):
+                continue
+            h = email.message_from_bytes(head[0][1])
+            sender, subject = _decode(h.get("From")), _decode(h.get("Subject"))
+            if not (any(site in sender.lower() for site in JOB_SITES) and _SUBJECT.search(subject)):
+                continue
+            typ, body = imap.fetch(mid, "(BODY.PEEK[])")
+            if typ == "OK" and body and isinstance(body[0], tuple):
+                code = extract_code(_text(email.message_from_bytes(body[0][1][:300_000])))
+                if code:
+                    return {"code": code[:2] + "•" * (len(code) - 2), "subject": subject[:80],
+                            "from": sender[:80], "date": h.get("Date", "")}
+        return None
+    finally:
+        try:
+            imap.logout()
+        except Exception:
+            pass

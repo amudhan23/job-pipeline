@@ -76,6 +76,15 @@ jobs:
         run: docker exec jp jobpipe doctor --online || true      # fails on purpose: no details in CI
       - name: Live self-test inside the image (fills a real form, sends nothing)
         run: docker exec jp jobpipe selftest --fake --out /app/data/selftest
+      - name: Hiring posts from Hacker News and Bluesky (live, no AI)
+        run: |
+          docker exec jp python -c "
+          from pipeline import leads
+          r = leads.fetch(sources=['hn', 'bluesky'])
+          print('posts:', r['posts'], 'errors:', r['errors'])
+          for x in sorted(r['new'], key=lambda x: -x['score'])[:8]: print(round(x['score']), x['source'], x['company'], '|', x['role'], '|', x['visa'])
+          assert r['posts'].get('hn', 0) > 0, 'Hacker News returned nothing'
+          "
       - name: Crawler is running
         run: |
           sleep 20

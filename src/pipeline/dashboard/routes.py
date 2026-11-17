@@ -166,6 +166,14 @@ class ApiMixin:
             from pipeline import outreach
             return {"records": outreach.overview(self._pdir()), "hunter": bool(outreach.hunter_key(self._pdir())),
                     "ai": __import__("pipeline.ai.client", fromlist=["status"]).status(self._pdir())[0]}, 200
+        if path == "/api/leads":
+            from pipeline import leads
+            store = leads.LeadStore()
+            status = q.get("status") or None
+            items = store.list(status=None if status == "all" else (status or "new"), limit=300,
+                               min_score=float(q.get("min") or 0))
+            return {"leads": items, "settings": leads.public_settings(self._pdir()), "counts": store.counts(),
+                    "running": leads._RUNNING.locked()}, 200
         if path == "/api/doctor":
             from pipeline import doctor
             return {"checks": doctor.checks(online=q.get("online") == "1", private_dir=self._pdir())}, 200
@@ -185,6 +193,51 @@ class ApiMixin:
             meta = Runner(self._pdir()).get(m.group(1)) or {}
             return {"text": text, "offset": offset, "status": meta.get("status")}, 200
         return None
+
+    def _leads_post(self, path: str, data: dict):
+        import threading
+        from pipeline import leads
+        pdir = self._pdir()
+        store = leads.LeadStore()
+        try:
+            if path == "/api/leads/settings":
+                return leads.save_settings(data, pdir), 200
+            if path == "/api/leads/add":
+                found = leads.add_shared(str(data.get("text", "")), store=store, private_dir=pdir)
+                for lead in found:
+                    if lead["score"] >= leads.load_settings(pdir)["alert_min_score"]:
+                        b = leads.watch(lead, resolve=leads._resolver())
+                        if b:
+                            store.update(lead["id"], board=b, status="watching")
+                return {"found": found}, 200
+            if path == "/api/leads/fetch":
+                if leads._RUNNING.locked():
+                    return {"started": False, "note": "Already collecting."}, 200
+                store.put("last_run", "0")
+                from pipeline.notify.telegram import Telegram
+                threading.Thread(target=lambda: leads.maybe_run(Telegram(pdir), pdir, store, background=False),
+                                 daemon=True).start()
+                return {"started": True}, 200
+            if path == "/api/leads/action":
+                lead = store.lead(str(data.get("id", "")))
+                if not lead:
+                    return {"error": "no such lead"}, 404
+                act = data.get("action")
+                if act == "dismiss":
+                    store.update(lead["id"], status="dismissed")
+                elif act == "restore":
+                    store.update(lead["id"], status="new")
+                elif act == "watch":
+                    b = leads.watch(lead, resolve=leads._resolver())
+                    if not b:
+                        return {"error": "Couldn't find this company's job board. Try Search companies."}, 400
+                    store.update(lead["id"], status="watching", board=b)
+                else:
+                    return {"error": "unknown action"}, 400
+                return store.lead(lead["id"]), 200
+        except ValueError as e:
+            return {"error": str(e)}, 400
+        return {"error": "not found"}, 404
 
     def _sent(self, job_id: str):
         """Every answer on one application: what was sent, or what to paste
@@ -331,6 +384,8 @@ class ApiMixin:
     def api_post(self, path: str, data: dict):
         from pipeline import autoapply
         pdir = self._pdir()
+        if path.startswith("/api/leads"):
+            return self._leads_post(path, data)
         if path.startswith("/api/mail"):
             from pipeline.notify import mailcodes
             if path == "/api/mail":

@@ -178,7 +178,7 @@ def status(private_dir: Path | None = None) -> tuple[bool, str]:
     return True, ""
 
 
-def complete(system: list[dict] | str, prompt: str, purpose: str, max_tokens: int = 600,
+def complete(system: list[dict] | str, prompt: str | list[dict], purpose: str, max_tokens: int = 600,
              private_dir: Path | None = None, client: Any = None, model: str | None = None) -> Reply:
     """One Messages API call, budget-checked and logged. model: "haiku" /
     "sonnet" / "opus" to override your setting (the fit check uses haiku)."""
@@ -188,7 +188,8 @@ def complete(system: list[dict] | str, prompt: str, purpose: str, max_tokens: in
     settings = load_settings(private_dir)
     model = MODELS[model or settings["model"]]
     # Worst case for this call must still fit the budget
-    worst = cost_of(model, {"input_tokens": (len(str(system)) + len(prompt)) // 3,
+    size = len(prompt) if isinstance(prompt, str) else sum(len(str(b.get("text", ""))) + 2000 for b in prompt)
+    worst = cost_of(model, {"input_tokens": (len(str(system)) + size) // 3,
                             "output_tokens": max_tokens})
     if worst > spend_summary(private_dir)["remaining"]:
         raise AIUnavailable("not enough of this month's AI budget left for this request")

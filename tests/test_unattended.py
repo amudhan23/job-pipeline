@@ -297,3 +297,11 @@ def test_doctor_reports_what_to_fix(pdir, monkeypatch):  # noqa: F811
     assert found["Dashboard password"]["level"] == "fail"
     assert found["Python"]["level"] == "ok"
     assert all(c["level"] in ("ok", "warn", "fail") for c in found.values())
+
+
+def test_rehearse_reports_setup_and_stops_on_failures(pdir):  # noqa: F811
+    from click.testing import CliRunner
+    from pipeline.cli import main
+    r = CliRunner().invoke(main, ["rehearse", "--skip", "apply,telegram,mail,leads"])
+    assert "Setup check" in r.output and "Your details" in r.output
+    assert r.exit_code == 1 and "to fix before the cloud" in r.output
