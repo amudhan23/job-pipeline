@@ -78,12 +78,16 @@ jobs:
         run: docker exec jp jobpipe selftest --fake --out /app/data/selftest
       - name: Hiring posts from Hacker News and Bluesky (live, no AI)
         run: |
+          sleep 30   # the server collects on its own after its first crawler pass
           docker exec jp python -c "
           from pipeline import leads
           r = leads.fetch(sources=['hn', 'bluesky'])
-          print('posts:', r['posts'], 'errors:', r['errors'])
-          for x in sorted(r['new'], key=lambda x: -x['score'])[:8]: print(round(x['score']), x['source'], x['company'], '|', x['role'], '|', x['visa'])
-          assert r['posts'].get('hn', 0) > 0, 'Hacker News returned nothing'
+          print('this pass:', r['posts'], 'errors:', r['errors'])
+          st = leads.LeadStore()
+          c = st.counts(); print('collected so far:', c)
+          for x in sorted(st.list(limit=500), key=lambda x: -x['score'])[:10]: print(round(x['score']), x['source'], x['company'], '|', x['role'], '|', x['visa'])
+          assert c['posts_read'] > 20, 'too few posts read'
+          assert c['by_source'].get('hn', 0) > 5, 'too few Hacker News leads'
           "
       - name: Crawler is running
         run: |
