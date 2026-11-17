@@ -43,9 +43,9 @@ class GreenhouseScraper(BaseScraper):
         detail read can decide."""
         jobs: list[Job] = []
         for item in data.get("jobs", []):
-            title = item.get("title", "")
-            location = (item.get("location") or {}).get("name", "")
-            content = item.get("content", "")
+            title = item.get("title") or ""
+            location = (item.get("location") or {}).get("name") or ""     # some boards send null
+            content = item.get("content") or ""
             if light and not location.strip():
                 if not self.passes_title(title):
                     continue
@@ -58,12 +58,12 @@ class GreenhouseScraper(BaseScraper):
         job_id = str(item["id"])
         return Job(
             id=f"gh-{company_slug}-{job_id}",
-            title=item.get("title", ""),
+            title=item.get("title") or "",
             company=item.get("company_name")
             or (item.get("company") or {}).get("name")
             or company_slug,
             company_slug=company_slug,
-            location=(item.get("location") or {}).get("name", ""),
+            location=(item.get("location") or {}).get("name") or "",
             url=item.get("absolute_url", f"https://boards.greenhouse.io/{company_slug}/jobs/{job_id}"),
             platform=ATSPlatform.GREENHOUSE,
             description=item.get("content", "") or "",

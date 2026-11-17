@@ -268,3 +268,13 @@ def test_slow_platform_pauses_after_429():
     second = asyncio.run(src.read(None, "b", {}, {}))
     assert first.status == 429 and not first.defer_s                 # the real 429: an error
     assert second.defer_s > 0 and "resuming" in second.error and Limited.calls == 1   # then deferred, not counted
+
+
+def test_greenhouse_null_location_and_title():
+    from pipeline.scrapers.greenhouse import GreenhouseScraper
+    gh = GreenhouseScraper({"role_keywords": ["engineer"], "locations": ["New York"]})
+    data = {"jobs": [{"id": 1, "title": "Software Engineer", "location": {"name": None}, "content": None,
+                      "absolute_url": "https://x/1"},
+                     {"id": 2, "title": None, "location": None, "absolute_url": "https://x/2"}]}
+    gh.parse_listing("getbuilt", data, light=True)          # must not raise
+    gh.parse_listing("getbuilt", data)
