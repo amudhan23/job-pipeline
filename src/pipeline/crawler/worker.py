@@ -244,6 +244,16 @@ class Crawler:
             self.new_log.append((iso(utcnow()), i))
         return new_ids
 
+    def _close_hirebase_reposts(self) -> None:
+        """Hirebase jobs stored before reposts were filtered (agency/aggregator links)."""
+        from pipeline.hirebase import _REPOST_HOSTS, _REPOSTERS
+        conn = self.tracker._connect()
+        rows = conn.execute("SELECT id, url, company FROM jobs WHERE source = 'hirebase' AND closed_at IS NULL").fetchall()
+        conn.close()
+        bad = [r[0] for r in rows if _REPOST_HOSTS.search(r[1] or "") or (r[2] or "").lower().strip() in _REPOSTERS]
+        if bad:
+            self.tracker.close_jobs(bad)
+
     async def poll_hirebase(self) -> list[str]:
         """New postings from Hirebase: crawlable boards are registered and read
         now; jobs elsewhere go straight into the tracker."""
@@ -259,7 +269,9 @@ class Crawler:
         if outside:
             self._prepare(outside, {})
             new_ids = self.tracker.insert_feed_jobs(outside, source="hirebase")
-        self.last_hirebase = {"at": iso(utcnow()), "returned": got["returned"], "matching": len(got["jobs"]),
+        self._close_hirebase_reposts()
+        self.last_hirebase = {"at": iso(utcnow()), "returned": got["returned"], "reposts": got.get("reposts", 0),
+                              "matching": len(got["jobs"]),
                               "new_boards": added, "new_jobs": len(new_ids), "error": got["error"]}
         if got["error"]:
             self.errors.append({"at": iso(utcnow()), "board": "hirebase", "error": got["error"]})

@@ -162,6 +162,25 @@ def queries(config: dict, s: dict[str, Any], since: str | None, limit: int) -> l
     return out
 
 
+_REPOST_HOSTS = re.compile(r"(linkedin\.com|indeed\.com|glassdoor\.|ziprecruiter\.com|dice\.com|lensa\.com|"
+                           r"talent\.com|simplyhired\.|monster\.com|careerbuilder\.com|jooble\.|adzuna\.|"
+                           r"jobright\.ai|remotehunter\.|builtin\.com|wellfound\.com|otta\.com|jobot\.com)", re.I)
+_REPOSTERS = {"remotehunter", "jobright", "jobright.ai", "lensa", "jobot", "dice", "talentify", "jobs via dice",
+              "hiring cafe", "turing", "crossover", "braintrust", "mercor", "outlier", "dataannotation"}
+
+
+def is_repost(h: dict) -> bool:
+    """An agency or aggregator reposting someone else's job: no real employer
+    form to apply on, and a middleman in between."""
+    cd = h.get("company_data") or {}
+    if h.get("recruiter_agency") or h.get("recruiter_ageny") or cd.get("is_recruiting_agency") or cd.get("is_3rd_party_agency"):
+        return True
+    link = h.get("application_link") or h.get("job_board_link") or ""
+    if _REPOST_HOSTS.search(link):
+        return True
+    return re.sub(r"[^a-z. ]", "", (h.get("company_name") or "").lower()).strip() in _REPOSTERS
+
+
 def to_job(h: dict) -> tuple[Any, tuple[str, str] | None]:
     """A Hirebase posting → (Job, crawlable board or None)."""
     from pipeline.models import ATSPlatform, Job
@@ -200,7 +219,7 @@ def fetch_new(config: dict, passes: Callable[[str, str, str], bool] | None = Non
     s = state(private_dir)
     now = now or datetime.now(timezone.utc)
     key = get_key(private_dir)
-    out: dict[str, Any] = {"jobs": [], "boards": set(), "returned": 0, "error": ""}
+    out: dict[str, Any] = {"jobs": [], "boards": set(), "returned": 0, "reposts": 0, "error": ""}
     limit = per_ask(s, now)
     if not key or limit <= 0:
         out["error"] = "no key" if not key else "this month's allowance is used up"
@@ -223,6 +242,9 @@ def fetch_new(config: dict, passes: Callable[[str, str, str], bool] | None = Non
             hits = r.json().get("jobs") or []
             out["returned"] += len(hits)
             for h in hits:
+                if is_repost(h):
+                    out["reposts"] += 1
+                    continue
                 job, board = to_job(h)
                 if passes is not None and not passes(job.title, job.location, job.description):
                     continue
@@ -237,7 +259,7 @@ def fetch_new(config: dict, passes: Callable[[str, str, str], bool] | None = Non
     s["used"] = s.get("used", 0) + out["returned"]
     s["next_due"] = (now + timedelta(hours=s["every_hours"])).isoformat()
     if not out["error"]:
-        s["last"] = {"asked_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "returned": out["returned"],
+        s["last"] = {"asked_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "returned": out["returned"], "reposts": out["reposts"],
                      "matching": len(out["jobs"]), "boards": len(out["boards"])}
     else:
         s["last"] = {**(s.get("last") or {}), "error": out["error"], "error_at": now.isoformat(timespec="seconds")}

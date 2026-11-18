@@ -1471,7 +1471,8 @@ def hirebase_fetch() -> None:
             tag = " [green]visa ✓[/green]" if (j.get("description") or "").startswith("Visa sponsorship: offered") else ""
             console.print(f"{j['fit_score']:>4.0f}  {j['company']}: {j['title']} · {j['location']}{tag}  [dim]{j['url']}[/dim]")
     st = hb.public()
-    console.print(f"{info['returned']} returned, {info['matching']} match your filters, {info['new_jobs']} new in Live jobs, "
+    console.print(f"{info['returned']} returned, {info.get('reposts', 0)} agency/aggregator reposts dropped, "
+                  f"{info['matching']} match your filters, {info['new_jobs']} new in Live jobs, "
                   f"{info['new_boards']} new boards for the crawler. {st['used']} of {st['monthly_jobs']} used this month.")
 
 

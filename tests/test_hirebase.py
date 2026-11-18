@@ -126,3 +126,14 @@ def test_with_the_real_scraper_filters(pdir):  # noqa: F811
         lambda r: httpx.Response(200, json=body))))
     ids = {j.id for j in got["jobs"]}
     assert "hb-a1" in ids and "hb-b2" in ids and "hb-c3" not in ids      # senior excluded by your filters
+
+
+def test_reposts_are_dropped(pdir, tmp_path):  # noqa: F811
+    rh = {**HIT_ICIMS, "_id": "r1", "company_name": "RemoteHunter",
+          "application_link": "https://www.linkedin.com/jobs/view/4491813754"}
+    agency = {**HIT_ICIMS, "_id": "r2", "company_name": "Acme Staffing", "company_data": {"is_recruiting_agency": True}}
+    assert hb.is_repost(rh) and hb.is_repost(agency) and not hb.is_repost(HIT_GH) and not hb.is_repost(HIT_ICIMS)
+    hb.save_key("hb_" + "w" * 30)
+    got = hb.fetch_new(CONFIG, client=httpx.Client(transport=httpx.MockTransport(
+        lambda r: httpx.Response(200, json={"jobs": [rh, agency, HIT_GH]}))))
+    assert got["reposts"] >= 2 and all(j.company != "RemoteHunter" for j in got["jobs"])
