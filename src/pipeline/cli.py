@@ -1157,6 +1157,15 @@ def profile_set(path: str) -> None:
                   + (f"; [yellow]{left} \\[confirm] notes still to check[/yellow]." if left else "."))
 
 
+@profile.command("reference")
+@click.argument("pdf", type=click.Path(exists=True, dir_okay=False))
+def profile_reference(pdf: str) -> None:
+    """Save a resume whose style new resumes should copy (never its facts)."""
+    from pipeline.resume import writer as pw
+    n = pw.save_reference(Path(pdf).read_bytes())
+    console.print(f"[green]Saved your reference resume[/green] ({n:,} characters of text read).")
+
+
 @profile.command("show")
 def profile_show() -> None:
     """Print where the profile is and what the checker reads from it."""

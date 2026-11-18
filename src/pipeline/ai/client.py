@@ -36,7 +36,7 @@ PRICES = {
     "claude-haiku-5-5": (0.10, 0.50, 0.01, 0.125),
     "claude-opus-5-5": (4.00, 20.00, 0.20, 5.00),
 }
-DEFAULTS = {"model": "sonnet", "monthly_budget": 5.0, "enabled": True}
+DEFAULTS = {"model": "sonnet", "resume_model": "opus", "monthly_budget": 10.0, "enabled": True}
 
 
 class AIUnavailable(Exception):
@@ -98,6 +98,10 @@ def save_settings(values: dict[str, Any], private_dir: Path | None = None) -> di
         if values["model"] not in MODELS:
             raise ValueError(f"model must be one of {', '.join(MODELS)}")
         data["model"] = values["model"]
+    if "resume_model" in values:
+        if values["resume_model"] not in ("sonnet", "opus"):
+            raise ValueError("resume_model must be sonnet or opus")
+        data["resume_model"] = values["resume_model"]
     if "monthly_budget" in values:
         budget = float(values["monthly_budget"])
         if not 0 <= budget <= 1000:

@@ -523,7 +523,7 @@ class DashboardHandler(ApiMixin, SimpleHTTPRequestHandler):
                         ai_client.forget_key(self._pdir())
                     if data.get("key"):
                         ai_client.save_key(str(data["key"]), self._pdir())
-                    ai_client.save_settings({k: data[k] for k in ("model", "monthly_budget", "enabled")
+                    ai_client.save_settings({k: data[k] for k in ("model", "resume_model", "monthly_budget", "enabled")
                                              if k in data}, self._pdir())
                     return self._send_json(self._ai_payload())
                 if path == "/api/answers":
@@ -543,6 +543,12 @@ class DashboardHandler(ApiMixin, SimpleHTTPRequestHandler):
                 except Exception:
                     found = {}  # unreadable PDF text (e.g. scanned image) — still saved
                 return self._send_json({"found": found, "has_resume": True})
+            if path == "/api/career-profile/reference":
+                if ctype != "application/pdf":
+                    return self._send_json({"error": "Upload a PDF"}, 415)
+                from pipeline.resume import writer as pw
+                chars = pw.save_reference(body, self._pdir())
+                return self._send_json({"saved": True, "chars": chars})
             if ctype != "application/json":
                 return self._send_json({"error": "Expected application/json"}, 415)
             data = json.loads(body or b"{}")

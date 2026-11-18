@@ -62,6 +62,35 @@ def save_profile(text: str, private_dir: Path | None = None) -> None:
     os.chmod(p, 0o600)
 
 
+REFERENCE_FILE = "reference_resume.pdf"
+
+
+def save_reference(pdf: bytes, private_dir: Path | None = None) -> int:
+    """A resume whose look and writing you like. Used for style only."""
+    from pipeline import applicant
+    if not pdf.startswith(b"%PDF"):
+        raise ValueError("that isn't a PDF")
+    text = applicant.resume_text(pdf)
+    path = _pdir(private_dir) / REFERENCE_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(pdf)
+    path.chmod(0o600)
+    return len(text)
+
+
+def reference_text(private_dir: Path | None = None) -> str:
+    """Your reference resume's text, or your uploaded resume's if you haven't set one."""
+    from pipeline import applicant
+    from pipeline.ai.context import load_resume_text
+    path = _pdir(private_dir) / REFERENCE_FILE
+    try:
+        if path.exists():
+            return applicant.resume_text(path.read_bytes())
+    except Exception:
+        pass
+    return load_resume_text(private_dir)
+
+
 def has_profile(private_dir: Path | None = None) -> bool:
     return len(load_profile(private_dir).strip()) > 400
 
@@ -347,18 +376,21 @@ RESUME_SCHEMA = _obj({
 def draft(job: dict[str, Any], profile: str, private_dir: Path | None = None, client: Any = None) -> dict[str, Any]:
     from pipeline.ai import client as ai
     from pipeline.ai.context import job_block
-    from pipeline.ai.context import load_resume_text
     system = [{"type": "text", "text": _SYSTEM},
               {"type": "text", "text": f"<career_profile>\n{profile[:60000]}\n</career_profile>",
                "cache_control": {"type": "ephemeral"}}]
-    current = load_resume_text(private_dir).strip()
+    current = reference_text(private_dir).strip()
     prompt = job_block(job, limit=10000)
     if current:
-        prompt += ("\n\n<current_resume>\nThe applicant's own current resume. It is the floor for quality: "
-                   "be at least this specific and dense. Facts still come only from the career profile.\n"
-                   f"{current[:8000]}\n</current_resume>")
+        prompt += ("\n\n<reference_resume>\nA resume the applicant likes. Match its STYLE only: how many "
+                   "bullets per role, bullet length, tone, how it leads with the job's keywords and what it bolds. "
+                   "It is NOT a source of facts: it may overstate things (a title, a location, a skill). Every fact "
+                   "must still come from the career profile.\n"
+                   f"{current[:8000]}\n</reference_resume>")
     # Resumes are worth the better model: never Haiku, even if it's your everyday setting
-    model = "opus" if ai.load_settings(private_dir).get("model") == "opus" else "sonnet"
+    model = ai.load_settings(private_dir).get("resume_model", "opus")
+    if model == "haiku":
+        model = "sonnet"
     reply = ai.complete(system, prompt, purpose=f"resume: {job.get('company')} — {job.get('title', '')[:50]}",
                         max_tokens=16000, private_dir=private_dir, client=client, thinking=4000,
                         schema=RESUME_SCHEMA, model=model)
@@ -411,31 +443,29 @@ def tex_escape(s: str) -> str:
     return "".join(out)
 
 
-_PREAMBLE = r"""\documentclass[letterpaper,11pt]{article}
+_PREAMBLE = r"""\documentclass[letterpaper,10pt]{article}
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
-\usepackage[empty]{fullpage}
+\usepackage[letterpaper,top=0.45in,bottom=0.4in,left=0.5in,right=0.5in]{geometry}
 \usepackage{titlesec}
 \usepackage{enumitem}
 \usepackage[hidelinks]{hyperref}
 \usepackage{tabularx}
-\addtolength{\oddsidemargin}{-0.55in}
-\addtolength{\evensidemargin}{-0.55in}
-\addtolength{\textwidth}{1.1in}
-\addtolength{\topmargin}{-.6in}
-\addtolength{\textheight}{1.2in}
 \urlstyle{same}
+\pagestyle{empty}
 \raggedbottom
 \raggedright
 \setlength{\tabcolsep}{0in}
-\titleformat{\section}{\scshape\raggedright\large}{}{0em}{}[\titlerule]
-\titlespacing*{\section}{0pt}{9pt}{5pt}
-\newcommand{\role}[4]{\vspace{1pt}\begin{tabular*}{\textwidth}[t]{l@{\extracolsep{\fill}}r}
-  \textbf{#1} & #2 \\ \textit{\small #3} & \textit{\small #4} \\ \end{tabular*}\vspace{-3pt}}
-\newcommand{\proj}[2]{\vspace{1pt}\begin{tabular*}{\textwidth}{l@{\extracolsep{\fill}}r}
-  \small #1 & \small #2 \\ \end{tabular*}\vspace{-3pt}}
-\setlist[itemize]{leftmargin=0.18in, itemsep=1pt, topsep=1pt, parsep=0pt, partopsep=0pt}
 \setlength{\parindent}{0pt}
+\titleformat{\section}{\scshape\raggedright\large}{}{0em}{}[\vspace{-4pt}\titlerule]
+\titlespacing*{\section}{0pt}{6pt}{4pt}
+% Title (bold) and dates on one line; employer and place (italic) below
+\newcommand{\role}[4]{\begin{tabular*}{\textwidth}[t]{@{}l@{\extracolsep{\fill}}r@{}}
+  \textbf{#1} & #2 \\ \textit{#3} & \textit{#4} \\ \end{tabular*}\vspace{-4pt}}
+% Project: name | stack on the left (wraps if long), links and context on the right
+\newcommand{\proj}[2]{\begin{tabularx}{\textwidth}{@{}X@{\hspace{8pt}}r@{}}
+  #1 & #2 \\ \end{tabularx}\vspace{-4pt}}
+\setlist[itemize]{leftmargin=0.32in, label=\textbullet, itemsep=0.5pt, topsep=1pt, parsep=0pt, partopsep=0pt}
 \begin{document}
 """
 
@@ -456,40 +486,55 @@ def render(resume: dict[str, Any], details: dict[str, str]) -> str:
         return bool(a) and k(a) == k(b)
     website = "" if _same(details.get("website", ""), details.get("github", "")) else details.get("website", "")
     links = [(details.get("linkedin", ""), "LinkedIn"), (details.get("github", ""), "GitHub"), (website, "")]
-    head = " $\\cdot$ ".join([e(c) for c in contact if c] + [_href(u, label) for u, label in links if u])
-    plain = len(" . ".join([c for c in contact if c] + [label or u for u, label in links if u]))
-    size = r"\small" if plain <= 105 else r"\footnotesize"     # keep contact details on one line
-    out = [_PREAMBLE, rf"\begin{{center}}{{\Large \textbf{{{e(name)}}}}}\\ \vspace{{2pt}}{size} {head}\end{{center}}",
-           r"\vspace{-8pt}"]
+    head = r" $\cdot$ ".join([e(c) for c in contact if c] +
+                            [r"\underline{" + _href(u) + "}" for u, _ in links if u])
+    plain = len(" . ".join([c for c in contact if c] + [u for u, _ in links if u]))
+    size = r"\small" if plain <= 125 else r"\footnotesize"     # keep contact details on one line
+    out = [_PREAMBLE, rf"\begin{{center}}{{\huge \textbf{{{e(name)}}}}}\\[2pt]{size} {head}\end{{center}}",
+           r"\vspace{-10pt}"]
+
+    def bullets(items: list[str]) -> str:
+        return r"\begin{itemize}" + "".join(rf"\item {e(b)}" + "\n" for b in items) + r"\end{itemize}"
+
     if resume.get("experience"):
         out.append(r"\section{Experience}")
         for x in resume["experience"]:
-            out.append(rf"\role{{{e(x.get('company', ''))}}}{{{e(x.get('location', ''))}}}"
-                       rf"{{{e(x.get('title', ''))}}}{{{e(x.get('dates', ''))}}}")
-            out.append(r"\begin{itemize}" + "".join(rf"\item \small {e(b)}" + "\n" for b in x["bullets"]) + r"\end{itemize}")
-    if resume.get("projects"):
-        out.append(r"\section{Projects}")
-        for p in resume["projects"]:
-            left = rf"\textbf{{{e(p.get('name', ''))}}}" + (rf" $|$ \emph{{{e(p['stack'])}}}" if p.get("stack") else "")
-            link = p.get("link", "")
-            right = " $\\cdot$ ".join(x for x in (_href(link, "repo" if "github" in link else "link") if link else "",
-                                                 e(p.get("context", ""))) if x)
-            out.append(rf"\proj{{{left}}}{{{right}}}")
-            out.append(r"\begin{itemize}" + "".join(rf"\item \small {e(b)}" + "\n" for b in p["bullets"]) + r"\end{itemize}")
+            out.append(rf"\role{{{e(x.get('title', ''))}}}{{{e(x.get('dates', ''))}}}"
+                       rf"{{{e(x.get('company', ''))}}}{{{e(x.get('location', ''))}}}")
+            out.append(bullets(x["bullets"]))
     if resume.get("education"):
         out.append(r"\section{Education}")
         for ed in resume["education"]:
-            out.append(rf"\role{{{e(ed.get('school', ''))}}}{{{e(ed.get('location', ''))}}}"
-                       rf"{{{e(ed.get('degree', ''))}}}{{{e(ed.get('dates', ''))}}}")
+            out.append(rf"\role{{{e(ed.get('school', ''))}}}{{{e(ed.get('dates', ''))}}}"
+                       rf"{{{e(ed.get('degree', ''))}}}{{{e(ed.get('location', ''))}}}")
             if ed.get("detail"):
-                out.append(r"\begin{itemize}\item \small " + e(ed["detail"]) + "\n" + r"\end{itemize}")
+                out.append(bullets([ed["detail"]]))
+    if resume.get("projects"):
+        out.append(r"\section{Projects}")
+        for p in resume["projects"]:
+            stack = ", ".join([t.strip() for t in (p.get("stack") or "").split(",") if t.strip()][:5])
+            left = rf"\textbf{{{e(p.get('name', ''))}}}" + (rf" $|$ \emph{{{e(stack)}}}" if stack else "")
+            link = p.get("link", "")
+            context = _short(p.get("context", ""), 34)
+            right = r" $\cdot$ ".join(x for x in ("[" + _href(link, "repo" if "github" in link else "link") + "]"
+                                                 if link else "", e(context)) if x)
+            out.append(rf"\proj{{{left}}}{{{right}}}")
+            out.append(bullets(p["bullets"]))
     if resume.get("skills"):
-        out.append(r"\section{Technical Skills}\small")
+        out.append(r"\section{Technical Skills}")
         out.append(r" \\ ".join(rf"\textbf{{{e(s['label'])}:}} {e(s['items'])}" for s in resume["skills"]))
     for x in resume.get("extras") or []:
-        out.append(rf"\section{{{e(x.get('label', ''))}}}\small {e(x.get('text', ''))}")
+        out.append(rf"\section{{{e(x.get('label', ''))}}}{e(x.get('text', ''))}")
     out.append(r"\end{document}")
     return "\n".join(out)
+
+
+def _short(text: str, n: int) -> str:
+    text = (text or "").strip()
+    if len(text) <= n:
+        return text
+    cut = text[:n].rsplit(" ", 1)[0].rstrip(",;·-")
+    return cut
 
 
 def _pages(pdf: Path) -> int:
@@ -515,24 +560,47 @@ def build_pdf(resume: dict[str, Any], details: dict[str, str], out: Path) -> Pat
     return out
 
 
+def _main_role(resume: dict[str, Any]) -> dict | None:
+    """The job the resume rests on: the role with the most bullets in the draft."""
+    roles = resume.get("experience") or []
+    return max(roles, key=lambda x: len(x["bullets"])) if roles else None
+
+
 def fit_one_page(resume: dict[str, Any], details: dict[str, str], out: Path) -> tuple[Path | None, list[str]]:
-    """Build; while it runs past one page, drop a bullet from the longest
-    project, then the longest non-first role. Returns (pdf, what was trimmed)."""
+    """Build; while it runs past one page, cut the least important thing first:
+    extra sections, a fourth skills line, project bullets past the first, the
+    last project (keeping two), other roles down to two bullets then one, and
+    the main job never below three. Returns (pdf, what was trimmed)."""
     trimmed: list[str] = []
-    for _ in range(12):
+    main = _main_role(resume)
+    for _ in range(30):
         pdf = build_pdf(resume, details, out)
         if not pdf or _pages(pdf) <= 1:
             return pdf, trimmed
-        pools = [p for p in resume.get("projects", []) if len(p["bullets"]) > 1] or \
-                [x for x in resume.get("experience", [])[1:] if len(x["bullets"]) > 1] or \
-                [x for x in resume.get("experience", [])[:1] if len(x["bullets"]) > 3]
-        if pools:
-            target = max(pools, key=lambda x: len(x["bullets"]))
-            trimmed.append(target["bullets"].pop())
-        elif len(resume.get("projects", [])) > 1:
-            trimmed.append(f"project {resume['projects'].pop()['name']}")
-        elif resume.get("extras"):
+        projects = resume.get("projects") or []
+        others = [x for x in resume.get("experience") or [] if x is not main]
+        if resume.get("extras"):
             trimmed.append(f"section {resume['extras'].pop()['label']}")
+        elif len(resume.get("skills") or []) > 3:
+            trimmed.append(f"skills line {resume['skills'].pop()['label']}")
+        elif [p for p in projects if len(p["bullets"]) > 2]:
+            target = max(projects, key=lambda x: len(x["bullets"]))
+            trimmed.append(target["bullets"].pop())
+        elif len(projects) > 3:
+            trimmed.append(f"project {projects.pop()['name']}")
+        elif [x for x in others if len(x["bullets"]) > 2]:
+            target = max(others, key=lambda x: len(x["bullets"]))
+            trimmed.append(target["bullets"].pop())
+        elif [p for p in projects if len(p["bullets"]) > 1]:
+            target = [p for p in projects if len(p["bullets"]) > 1][-1]
+            trimmed.append(target["bullets"].pop())
+        elif len(projects) > 2:
+            trimmed.append(f"project {projects.pop()['name']}")
+        elif main and len(main["bullets"]) > 3:
+            trimmed.append(main["bullets"].pop())
+        elif [x for x in others if len(x["bullets"]) > 1]:
+            target = [x for x in others if len(x["bullets"]) > 1][-1]
+            trimmed.append(target["bullets"].pop())
         else:
             return pdf, trimmed
     return build_pdf(resume, details, out), trimmed

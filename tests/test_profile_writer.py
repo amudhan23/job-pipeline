@@ -231,3 +231,48 @@ def test_schema_dropped_when_the_api_rejects_it(tmp_path):
             return super().create(**kw)
     fake = NoSchema(text="{}")
     assert ai.complete("s", "p", purpose="t", private_dir=tmp_path, client=fake, schema={"type": "object"}).text == "{}"
+
+
+def test_resumes_use_opus_by_default_and_never_haiku(tmp_path):
+    w.save_profile(PROFILE, tmp_path)
+    ai.save_key(KEY, tmp_path)
+    fake = FakeClient(text=json.dumps(GOOD_AND_BAD))
+    w.draft({"company": "A", "title": "B", "description": "Java"}, PROFILE, tmp_path, fake)
+    assert fake.calls[-1]["model"] == ai.MODELS["opus"]
+    ai.save_settings({"model": "haiku", "resume_model": "sonnet"}, tmp_path)
+    w.draft({"company": "A", "title": "B", "description": "Java"}, PROFILE, tmp_path, fake)
+    assert fake.calls[-1]["model"] == ai.MODELS["sonnet"]
+
+
+@pytest.mark.skipif(not shutil.which("pdflatex"), reason="needs pdflatex")
+def test_trimming_never_guts_the_main_job(tmp_path):
+    long = "Built and shipped a service with careful attention to many details across teams " * 2
+    resume = {"experience": [
+        {"company": "NYU", "title": "Research", "location": "NY", "dates": "2026", "bullets": [long] * 2},
+        {"company": "Sahara", "title": "Intern", "location": "Remote", "dates": "2025", "bullets": [long] * 3},
+        {"company": "IBM", "title": "Engineer", "location": "India", "dates": "2021", "bullets": [long] * 6}],
+        "projects": [{"name": f"P{i}", "stack": "Rust", "link": "", "context": "", "bullets": [long] * 3}
+                     for i in range(5)],
+        "skills": [{"label": "L", "items": "Rust"}] * 5, "education": [],
+        "extras": [{"label": "Awards", "text": "x"}, {"label": "Publications", "text": "y"}]}
+    pdf, trimmed = w.fit_one_page(resume, {"first_name": "T"}, tmp_path / "r.pdf")
+    assert pdf and w._pages(pdf) == 1
+    ibm = resume["experience"][2]
+    assert len(ibm["bullets"]) >= 3
+    assert not resume["extras"]                       # extras go first
+
+
+def test_reference_resume_is_style_only(tmp_path):
+    w.save_profile(PROFILE, tmp_path)
+    ai.save_key(KEY, tmp_path)
+    (tmp_path / w.REFERENCE_FILE).write_bytes(b"%PDF fake")
+    import pipeline.applicant as appl
+    orig = appl.resume_text
+    appl.resume_text = lambda b: "REFERENCE STYLE TEXT"
+    try:
+        fake = FakeClient(text=json.dumps(GOOD_AND_BAD))
+        w.draft({"company": "A", "title": "B", "description": "Java"}, PROFILE, tmp_path, fake)
+    finally:
+        appl.resume_text = orig
+    prompt = fake.calls[-1]["messages"][0]["content"]
+    assert "REFERENCE STYLE TEXT" in prompt and "NOT a source of facts" in prompt

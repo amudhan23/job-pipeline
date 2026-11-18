@@ -889,7 +889,15 @@ async function pageCareer() {
         <button class="quiet" id="cp-tpl">Start from the outline</button>
         <span class="note" id="cp-dirty"></span></div>
       <p class="note">Write <b>[confirm …]</b> next to anything you haven't checked; text inside it never counts as proof for a resume line.
-      Stays in your private folder, never in the repo.</p></div>`;
+      Stays in your private folder, never in the repo.</p></div>
+    <div class="panel"><h2>How resumes are written</h2>
+      <div class="field choice row"><span>Model</span>
+        <label class="check"><input type="radio" name="cp-model" value="opus"> Opus (best, about $0.25 a resume)</label>
+        <label class="check"><input type="radio" name="cp-model" value="sonnet"> Sonnet (about $0.10)</label></div>
+      <p class="note" id="cp-ref-note"></p>
+      <div class="bar"><label class="btn file-btn">Upload a reference resume (PDF)<input type="file" id="cp-ref" accept="application/pdf" hidden></label></div>
+      <p class="note">A resume whose look and writing you like. New resumes copy its style: bullets per role, length, tone,
+      what it bolds. Never its facts; those only come from your profile.</p></div>`;
   const ta = $("#cp-text");
   const stats = d => {
     $("#cp-stats").innerHTML = d.ready ? `<span><b>${d.roles.length}</b> sections found</span>
@@ -900,6 +908,23 @@ async function pageCareer() {
   let d;
   try { d = await api("/api/career-profile"); } catch (e) { $("#cp-stats").textContent = e.message; return; }
   ta.value = d.text; stats(d);
+  $("#cp-ref-note").textContent = d.has_reference ? "Reference resume saved." :
+    "No reference resume yet: your uploaded resume on My details sets the style.";
+  $$("input[name=cp-model]").forEach(r => {
+    r.checked = r.value === d.resume_model;
+    r.onchange = async () => {
+      try { await api("/api/ai", { resume_model: r.value }); toast(`Resumes will be written with ${r.value === "opus" ? "Opus" : "Sonnet"}.`); }
+      catch (e) { toast(e.message, true); }
+    };
+  });
+  $("#cp-ref").onchange = async e => {
+    const f = e.target.files[0]; if (!f) return;
+    try {
+      const r = await fetch("/api/career-profile/reference", { method: "POST", headers: { "Content-Type": "application/pdf" }, body: f });
+      const j = await r.json(); if (!r.ok) throw new Error(j.error || "Upload failed");
+      $("#cp-ref-note").textContent = "Reference resume saved."; toast(`Saved ${f.name} as your reference resume.`);
+    } catch (err) { toast(err.message, true); }
+  };
   let saved = ta.value;
   ta.oninput = () => { $("#cp-dirty").textContent = ta.value !== saved ? "Unsaved changes" : ""; };
   $("#cp-save").onclick = async () => {

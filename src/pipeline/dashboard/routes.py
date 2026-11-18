@@ -543,10 +543,13 @@ class ApiMixin:
         text = pw.load_profile(self._pdir())
         secs = pw.sections(text) if text else {}
         return {"text": text, "ready": pw.has_profile(self._pdir()),
-                "confirm": len(re.findall(r"\[confirm", text, re.I)),
+                "confirm": len(re.findall(r"\[confirm(?! \.\.\.)", text, re.I)),
                 "roles": [h for h in secs if not h.startswith("project:") and h not in
                           ("_top", "Rules", "Experience", "Projects", "Skills by level", "Education")][:20],
-                "never_claim": pw.never_claim(text) if text else []}
+                "never_claim": pw.never_claim(text) if text else [],
+                "has_reference": (self._pdir() / pw.REFERENCE_FILE).exists(),
+                "resume_model": __import__("pipeline.ai.client", fromlist=["x"]).load_settings(self._pdir())
+                .get("resume_model", "opus")}
 
     def _outreach_post(self, path: str, data: dict):
         from pipeline import outreach
