@@ -319,6 +319,28 @@ Reply with JSON only:
  "note": "<one sentence: what the job emphasises and what you led with>"}"""
 
 
+def _obj(props: dict, required: list[str]) -> dict:
+    return {"type": "object", "properties": props, "required": required, "additionalProperties": False}
+
+
+_STR = {"type": "string"}
+_BULLETS = {"type": "array", "items": _STR}
+RESUME_SCHEMA = _obj({
+    "experience": {"type": "array", "items": _obj(
+        {"company": _STR, "title": _STR, "location": _STR, "dates": _STR, "bullets": _BULLETS},
+        ["company", "title", "location", "dates", "bullets"])},
+    "projects": {"type": "array", "items": _obj(
+        {"name": _STR, "stack": _STR, "link": _STR, "context": _STR, "bullets": _BULLETS},
+        ["name", "stack", "link", "context", "bullets"])},
+    "skills": {"type": "array", "items": _obj({"label": _STR, "items": _STR}, ["label", "items"])},
+    "education": {"type": "array", "items": _obj(
+        {"school": _STR, "degree": _STR, "dates": _STR, "location": _STR, "detail": _STR},
+        ["school", "degree", "dates", "location", "detail"])},
+    "extras": {"type": "array", "items": _obj({"label": _STR, "text": _STR}, ["label", "text"])},
+    "note": _STR,
+}, ["experience", "projects", "skills", "education", "extras", "note"])
+
+
 def draft(job: dict[str, Any], profile: str, private_dir: Path | None = None, client: Any = None) -> dict[str, Any]:
     from pipeline.ai import client as ai
     from pipeline.ai.context import job_block
@@ -333,14 +355,33 @@ def draft(job: dict[str, Any], profile: str, private_dir: Path | None = None, cl
                    "be at least this specific and dense. Facts still come only from the career profile.\n"
                    f"{current[:8000]}\n</current_resume>")
     reply = ai.complete(system, prompt, purpose=f"resume: {job.get('company')} — {job.get('title', '')[:50]}",
-                        max_tokens=10000, private_dir=private_dir, client=client, thinking=3000)
-    m = re.search(r"\{.*\}", reply.text, re.S)
+                        max_tokens=10000, private_dir=private_dir, client=client, thinking=3000,
+                        schema=RESUME_SCHEMA)
+    return parse_json(reply.text, private_dir, client)
+
+
+def parse_json(text: str, private_dir: Path | None = None, client: Any = None) -> dict:
+    """The resume JSON from a reply. Structured outputs make it valid; if a
+    reply still isn't (a model without them), a quick Haiku call repairs it."""
+    try:
+        return json.loads(text)
+    except ValueError:
+        pass
+    m = re.search(r"\{.*\}", text, re.S)
     if not m:
-        raise ValueError("the reply had no resume in it" + (" (it was cut off)" if reply.text else ""))
+        raise ValueError("the reply had no resume in it" + (" (it was cut off)" if text else ""))
     try:
         return json.loads(m.group(0))
-    except ValueError as e:
-        raise ValueError(f"the reply wasn't valid JSON ({e})") from e
+    except ValueError as first:
+        from pipeline.ai import client as ai
+        fixed = ai.complete("Repair this JSON so it parses: escape stray quotes, add missing commas, close "
+                            "brackets. Change nothing else. Reply with the JSON only.", m.group(0),
+                            purpose="resume: repair JSON", max_tokens=8000, private_dir=private_dir,
+                            client=client, model="haiku")
+        try:
+            return json.loads(re.search(r"\{.*\}", fixed.text, re.S).group(0))
+        except (ValueError, AttributeError):
+            raise ValueError(f"the reply wasn't valid JSON ({first})") from first
 
 
 # ── LaTeX ──────────────────────────────────────────────────────────────

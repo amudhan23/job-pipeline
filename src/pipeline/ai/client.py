@@ -180,7 +180,7 @@ def status(private_dir: Path | None = None) -> tuple[bool, str]:
 
 def complete(system: list[dict] | str, prompt: str | list[dict], purpose: str, max_tokens: int = 600,
              private_dir: Path | None = None, client: Any = None, model: str | None = None,
-             thinking: int = 0) -> Reply:
+             thinking: int = 0, schema: dict | None = None) -> Reply:
     """One Messages API call, budget-checked and logged. model: "haiku" /
     "sonnet" / "opus" to override your setting (the fit check uses haiku)."""
     ready, why = status(private_dir)
@@ -206,13 +206,23 @@ def complete(system: list[dict] | str, prompt: str | list[dict], purpose: str, m
                               messages=[{"role": "user", "content": prompt}])
     if thinking:                   # think before writing (resumes): a budget of thinking tokens
         kw["thinking"] = {"type": "enabled", "budget_tokens": thinking}
-    try:
-        msg = client.messages.create(**kw)
-    except Exception as e:         # a model without extended thinking: ask again without it
-        if not thinking or "thinking" not in str(e).lower():
-            raise
-        kw.pop("thinking")
-        msg = client.messages.create(**kw)
+    if schema:                     # the API guarantees JSON matching this schema (structured outputs);
+        # sent as extra_body so older SDK versions pass it through too
+        kw["extra_body"] = {"output_config": {"format": {"type": "json_schema", "schema": schema}}}
+    for _ in range(3):
+        try:
+            msg = client.messages.create(**kw)
+            break
+        except Exception as e:     # a model or account without one of these features: drop it and ask again
+            err = str(e).lower()
+            if "thinking" in kw and "thinking" in err:
+                kw.pop("thinking")
+            elif "extra_body" in kw and any(w in err for w in ("output_config", "json_schema", "schema", "format")):
+                kw.pop("extra_body")
+            else:
+                raise
+    else:
+        raise RuntimeError("the AI request kept failing")
     u = msg.usage
     usage = {k: int(getattr(u, k, 0) or 0) for k in
              ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")}

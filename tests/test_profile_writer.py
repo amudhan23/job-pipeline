@@ -202,3 +202,32 @@ def test_thinking_falls_back_when_the_model_lacks_it(tmp_path):
     fake = NoThinking(text="ok")
     r = ai.complete("sys", "hi", purpose="t", max_tokens=5000, private_dir=tmp_path, client=fake, thinking=2000)
     assert r.text == "ok" and "thinking" not in fake.calls[-1]
+
+
+def test_resume_request_asks_for_guaranteed_json(tmp_path):
+    w.save_profile(PROFILE, tmp_path)
+    ai.save_key(KEY, tmp_path)
+    fake = FakeClient(text=json.dumps(GOOD_AND_BAD))
+    w.draft({"company": "Acme", "title": "Backend", "description": "Java"}, PROFILE, tmp_path, fake)
+    fmt = fake.calls[0]["extra_body"]["output_config"]["format"]
+    assert fmt["type"] == "json_schema" and fmt["schema"]["additionalProperties"] is False
+
+
+def test_broken_json_is_repaired_once(tmp_path):
+    ai.save_key(KEY, tmp_path)
+    broken = '{"experience": [{"company": "IBM", "bullets": ["Built the "fast" path"]}]}'
+    fake = FakeClient(text='{"experience": [{"company": "IBM", "bullets": ["Built the fast path"]}]}')
+    out = w.parse_json(broken, tmp_path, fake)
+    assert out["experience"][0]["company"] == "IBM" and len(fake.calls) == 1
+
+
+def test_schema_dropped_when_the_api_rejects_it(tmp_path):
+    ai.save_key(KEY, tmp_path)
+
+    class NoSchema(FakeClient):
+        def create(self, **kw):
+            if "extra_body" in kw:
+                raise RuntimeError("output_config: unknown field")
+            return super().create(**kw)
+    fake = NoSchema(text="{}")
+    assert ai.complete("s", "p", purpose="t", private_dir=tmp_path, client=fake, schema={"type": "object"}).text == "{}"
