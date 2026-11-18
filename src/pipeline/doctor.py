@@ -81,9 +81,10 @@ def checks(online: bool = False, private_dir: Path | None = None) -> list[dict[s
         import re
         from pipeline.resume.writer import has_profile, load_profile
         if not has_profile(pdir):
-            return WARN, "No career profile: resumes reuse the bullets in config (Career profile page)"
-        left = len(re.findall(r"\[confirm", load_profile(pdir), re.I))
-        return (WARN, f"{left} [confirm] notes still to check") if left else (OK, "Saved, nothing left to confirm")
+            return WARN, "No career profile: resumes can't be written until you add one (Career profile page)"
+        left = len(re.findall(r"\[confirm(?! \.\.\.)", load_profile(pdir), re.I))
+        return (WARN, f"{left} [confirm] notes still to check (`jobpipe profile check` lists them)") if left \
+            else (OK, "Saved, nothing left to confirm")
     out.append(_check("Career profile", profile))
 
     def ai() -> tuple[str, str]:

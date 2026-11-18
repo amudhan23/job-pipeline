@@ -1171,14 +1171,42 @@ def profile_show() -> None:
 
 
 @profile.command("check")
-@click.argument("resume_json", type=click.Path(exists=True, dir_okay=False))
-def profile_check(resume_json: str) -> None:
-    """Run the fact check on a resume JSON (same shape the writer uses)."""
+@click.argument("resume_json", required=False, type=click.Path(exists=True, dir_okay=False))
+def profile_check(resume_json: str | None) -> None:
+    """Show what the writer finds in your career profile and the notes left to confirm.
+
+    Give a resume JSON (the shape the writer uses) to fact-check it instead."""
+    import re
     from pipeline.resume import writer as pw
-    _, dropped = pw.check(json.loads(Path(resume_json).read_text()), pw.load_profile())
-    for d in dropped:
-        console.print(f"[red]✗[/red] {d['where']}: {d['line']}  [dim]({d['why']})[/dim]")
-    console.print("[green]Every line is supported.[/green]" if not dropped else f"{len(dropped)} line(s) would be dropped.")
+    if not pw.has_profile():
+        console.print("[red]No career profile.[/red] Save one with `jobpipe profile set FILE` "
+                      "or on the Career profile page.")
+        raise SystemExit(1)
+    profile_text = pw.load_profile()
+    if resume_json:
+        _, dropped = pw.check(json.loads(Path(resume_json).read_text()), profile_text)
+        for d in dropped:
+            console.print(f"[red]✗[/red] {d['where']}: {d['line']}  [dim]({d['why']})[/dim]")
+        console.print("[green]Every line is supported.[/green]" if not dropped
+                      else f"{len(dropped)} line(s) would be dropped.")
+        return
+    secs = pw.sections(profile_text)
+    roles = [h for h in secs if not h.startswith("project:") and ":" in h]
+    projects = [h[len("project:"):] for h in secs if h.startswith("project:") and not h.rstrip().endswith(":")]
+    console.print(f"[green]Career profile found[/green] ({len(profile_text):,} characters).")
+    console.print(f"[bold]Roles ({len(roles)}):[/bold] " + "; ".join(roles))
+    console.print(f"[bold]Projects ({len(projects)}):[/bold] " + ", ".join(projects))
+    never = pw.never_claim(profile_text)
+    if never:
+        console.print(f"[bold]Never claimed:[/bold] " + ", ".join(sorted(never)))
+    from rich.markup import escape
+    notes = [(i, line.strip()) for i, line in enumerate(profile_text.splitlines(), 1)
+             if re.search(r"\[confirm(?! \.\.\.)", line, re.I)]      # not the rule explaining notes
+    if notes:
+        console.print(f"\n[yellow]{len(notes)} notes to confirm[/yellow] (the writer won't use these as facts "
+                      "until you edit them into plain text or delete them):")
+        for i, line in notes:
+            console.print(f"  line {i}: {escape(line[:220])}")
 
 
 @main.command()
