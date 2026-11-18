@@ -236,8 +236,10 @@ def tailored_resume(job: dict[str, Any], config: dict[str, Any], details: dict[s
             try:
                 built, meta = pw.write_resume(job, details, folder, name, private_dir, client)
             except Exception as e:
-                logger.warning(f"resume writer, try {attempt + 1}: {e}")
+                logger.warning(f"resume writer, try {attempt + 1}: {type(e).__name__}: {e}")
                 built, meta = None, {"error": f"{type(e).__name__}: {e}"[:300]}
+                if "timeout" in type(e).__name__.lower() or "budget" in str(e).lower():
+                    break                          # trying again won't help, and the page is waiting
             if built:
                 break
         if not built:

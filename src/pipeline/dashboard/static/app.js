@@ -615,8 +615,10 @@ async function showResume(jobId, title) {
           <div class="before">${esc(c.before)}</div>
           ${c.kept ? `<div class="after">${esc(c.after)}</div>` : `<div class="kept-no">Kept the original: the rewrite ${esc(c.why)}.</div>`}</div>`).join("")}` :
           r.by === "profile" ? "" : `<p class="note">No bullet was reworded; they're chosen and ordered for the job.</p>`}` :
-      `<p class="note">No resume has been made for this job yet. Building one takes about 15 seconds.</p>
-        <div class="bar"><button class="primary" data-rb="1">Build resume</button><button class="quiet" data-close>Close</button></div>`}`;
+      `${r.last_error ? `<p class="note warn" id="rb-err">The last build failed: ${esc(r.last_error)}</p>` :
+          `<p class="note" id="rb-err">No resume has been made for this job yet. Building one takes about a minute.</p>`}
+        <div class="bar"><button class="primary" data-rb="1">${r.last_error ? "Try again" : "Build resume"}</button>
+        <button class="quiet" data-close>Close</button></div>`}`;
     $$("[data-rb]", body).forEach(b => b.onclick = async () => {
       b.disabled = true;
       const t0 = Date.now();
@@ -627,11 +629,15 @@ async function showResume(jobId, title) {
         const res = await Promise.race([
           api(`/api/resume/${encodeURIComponent(jobId)}/build`, { reword: b.dataset.rb === "1" }),
           new Promise((_, no) => setTimeout(() => no(new Error(
-            "The build is taking over 3 minutes. Check the terminal running jobpipe serve for an error, " +
-            "and run jobpipe doctor to confirm LaTeX and the AI key work.")), 180000))]);
+            "The build is taking over 9 minutes. Check the terminal running jobpipe serve for an error, " +
+            "and run jobpipe doctor to confirm LaTeX and the AI key work.")), 540000))]);
         render(res);
       }
-      catch (e) { toast(e.message, true); b.disabled = false; b.textContent = "Try again"; }
+      catch (e) {
+        toast(e.message, true); b.disabled = false; b.textContent = "Try again";
+        const note = $("#rb-err", body);          // keep the reason on screen, not just in a toast
+        if (note) { note.className = "note warn"; note.textContent = e.message; }
+      }
       finally { clearInterval(timer); }
     });
     $$("[data-close]", body).forEach(b => b.onclick = () => dlg.close());

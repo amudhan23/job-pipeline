@@ -593,7 +593,10 @@ class ApiMixin:
         info = folder / "tailor.json"
         data = json.loads(info.read_text()) if info.exists() else {}
         pdf = _resume_pdf(folder, data)
-        return {"exists": bool(pdf), "file": _file_url(job_id, str(pdf)) if pdf else None, **data}
+        failed = folder / "last_error.txt"
+        last_error = failed.read_text()[:600] if failed.exists() and not pdf else ""
+        return {"exists": bool(pdf), "file": _file_url(job_id, str(pdf)) if pdf else None,
+                "last_error": last_error, **data}
 
     def _resume_build(self, job_id: str, reword: bool):
         from pipeline import applicant
@@ -603,14 +606,22 @@ class ApiMixin:
         if not job:
             return {"error": "no such job"}, 404
         folder = _folder(self._pdir(), job_id)
-        for old in list(folder.glob("*Resume.pdf")) + [folder / "tailor.json"] if folder.exists() else []:
+        for old in list(folder.glob("*Resume.pdf")) + [folder / "tailor.json", folder / "last_error.txt"] \
+                if folder.exists() else []:
             old.unlink(missing_ok=True)
         import logging
         import time as _time
         t0 = _time.time()
         logging.getLogger(__name__).info(f"Building a resume for {job.get('company')} — {job.get('title')}")
-        pdf, note = tailored_resume(job, load_config(None), applicant.load(self._pdir()), folder,
-                                    private_dir=self._pdir(), rewrite=reword)
+        try:
+            pdf, note = tailored_resume(job, load_config(None), applicant.load(self._pdir()), folder,
+                                        private_dir=self._pdir(), rewrite=reword)
+        except Exception as e:             # say what broke rather than a bare 500
+            logging.getLogger(__name__).exception("resume build crashed")
+            pdf, note = None, f"{type(e).__name__}: {e}"
+        if not pdf:
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "last_error.txt").write_text(str(note))
         logging.getLogger(__name__).info(f"Resume for {job.get('company')}: "
                                          f"{'built' if pdf else 'failed'} in {_time.time() - t0:.0f}s ({note})")
         if not pdf:
