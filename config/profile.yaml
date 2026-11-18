@@ -115,9 +115,9 @@ resume:
     ci: "Implemented Jenkins CI/CD pipelines with centralized logging and real-time observability dashboards"
     db: "Tuned PostgreSQL and MySQL query plans and introduced Redis caching reducing API response times by 40%"
   sahara_bullets:
-    ship: "Shipped end-to-end features across React frontend and Node.js backend in fast-paced sprint cycles"
-    int: "Architected third-party integration layer with circuit breakers and failure recovery handling 5K+ daily API calls"
-    tx: "Built transaction validation and consistency checks across distributed services ensuring data integrity at scale"
+    ship: "Built ERC-4337 account abstraction for gasless transactions: custom Paymaster and smart account contracts (about 800 lines of Solidity) on Alchemy's bundler"
+    int: "Implemented EIP-7702 account abstraction with the Pimlico bundler and EIP-2612 permits, so users give offline USDC allowances while the Paymaster pays gas"
+    tx: "Built cross-chain swaps on Biconomy with gas paid in USDC, tested on Base mainnet; wrote about 3,000 lines of Solidity and TypeScript the team built on"
   projects:
     req-guard:
       name: "req-guard"

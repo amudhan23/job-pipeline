@@ -35,6 +35,8 @@ FIELDS: list[dict[str, Any]] = [
     {"key": "email", "label": "Email", "kind": "email"},
     {"key": "phone", "label": "Phone", "kind": "tel"},
     {"key": "city", "label": "City, State", "kind": "text", "help": "e.g. New York, NY"},
+    {"key": "resume_location", "label": "Location line on your resume", "kind": "text",
+     "help": "Optional, e.g. New York, NY (relocating to Bay Area). Blank uses City, State."},
     {"key": "country", "label": "Country you live in", "kind": "text", "default": "United States"},
     {"key": "linkedin", "label": "LinkedIn URL", "kind": "url"},
     {"key": "github", "label": "GitHub URL", "kind": "url"},

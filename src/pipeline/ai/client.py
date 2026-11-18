@@ -179,7 +179,8 @@ def status(private_dir: Path | None = None) -> tuple[bool, str]:
 
 
 def complete(system: list[dict] | str, prompt: str | list[dict], purpose: str, max_tokens: int = 600,
-             private_dir: Path | None = None, client: Any = None, model: str | None = None) -> Reply:
+             private_dir: Path | None = None, client: Any = None, model: str | None = None,
+             thinking: int = 0) -> Reply:
     """One Messages API call, budget-checked and logged. model: "haiku" /
     "sonnet" / "opus" to override your setting (the fit check uses haiku)."""
     ready, why = status(private_dir)
@@ -199,8 +200,17 @@ def complete(system: list[dict] | str, prompt: str | list[dict], purpose: str, m
         for name in ("httpx", "httpx2", "anthropic"):   # no per-request log lines in the terminal
             logging.getLogger(name).setLevel(logging.WARNING)
         client = anthropic.Anthropic(api_key=get_key(private_dir), timeout=120.0, max_retries=2)
-    msg = client.messages.create(model=model, max_tokens=max_tokens, system=system,
-                                 messages=[{"role": "user", "content": prompt}])
+    kw: dict[str, Any] = dict(model=model, max_tokens=max_tokens, system=system,
+                              messages=[{"role": "user", "content": prompt}])
+    if thinking:                   # think before writing (resumes): a budget of thinking tokens
+        kw["thinking"] = {"type": "enabled", "budget_tokens": thinking}
+    try:
+        msg = client.messages.create(**kw)
+    except Exception as e:         # a model without extended thinking: ask again without it
+        if not thinking or "thinking" not in str(e).lower():
+            raise
+        kw.pop("thinking")
+        msg = client.messages.create(**kw)
     u = msg.usage
     usage = {k: int(getattr(u, k, 0) or 0) for k in
              ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")}

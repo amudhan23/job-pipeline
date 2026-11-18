@@ -158,3 +158,47 @@ def test_tailored_resume_prefers_profile(tmp_path):
     assert pdf and "Dropped" in note
     meta = json.loads((tmp_path / "job" / "tailor.json").read_text())
     assert meta["by"] == "profile" and meta["dropped"]
+
+
+def test_find_matches_short_and_long_institution_names():
+    prof = ("### NYU Courant Institute (New York University): Research Affiliate, zero-knowledge proofs\n"
+            "- Implemented **Bulletproofs** in **Rust**.\n\n### IBM: Software Engineer\n- Owned **Java** services.\n")
+    secs = w.sections(prof)
+    assert "Research Affiliate" in (w._find(secs, "New York University, Courant Institute", "role") or "")
+    assert "Research Affiliate" in (w._find(secs, "NYU", "role") or "")
+    assert "IBM" in (w._find(secs, "IBM India", "role") or "")
+    assert w._find(secs, "Google", "role") is None
+
+
+def test_generic_words_are_not_claims():
+    ok, why = w.supported("Built an async **HTTP** reverse proxy in **Rust** with clean **APIs**", "reverse proxy in Rust")
+    assert ok, why
+    assert not w.supported("Deployed on **Kubernetes**", "reverse proxy in Rust")[0]
+
+
+def test_no_bullet_bank_resume_when_the_writer_fails(tmp_path):
+    """With a career profile, a failed write is an error, not a generic resume."""
+    from pipeline.resume.tailor import tailored_resume
+    w.save_profile(PROFILE, tmp_path)
+    ai.save_key(KEY, tmp_path)
+    fake = FakeClient(text="sorry, no JSON here")
+    job = {"company": "Acme", "title": "Backend Engineer", "description": "Java and Redis."}
+    pdf, note = tailored_resume(job, {}, {"first_name": "T", "last_name": "P"}, tmp_path / "job",
+                                private_dir=tmp_path, client=fake)
+    assert pdf is None and "resume writer failed" in note
+    assert len(fake.calls) == 2                       # retried once
+    assert fake.calls[0].get("thinking", {}).get("type") == "enabled"
+    assert not list((tmp_path / "job").glob("*.pdf")) if (tmp_path / "job").exists() else True
+
+
+def test_thinking_falls_back_when_the_model_lacks_it(tmp_path):
+    ai.save_key(KEY, tmp_path)
+
+    class NoThinking(FakeClient):
+        def create(self, **kw):
+            if "thinking" in kw:
+                raise RuntimeError("thinking is not supported for this model")
+            return super().create(**kw)
+    fake = NoThinking(text="ok")
+    r = ai.complete("sys", "hi", purpose="t", max_tokens=5000, private_dir=tmp_path, client=fake, thinking=2000)
+    assert r.text == "ok" and "thinking" not in fake.calls[-1]

@@ -31,6 +31,14 @@ from pipeline.resume.tailor import _NUM, _TECH, _WORD
 
 PROFILE_FILE = "career_profile.md"
 _CASE_SENSITIVE = {"go", "c", "rest", "r"}     # only tech when written "Go", "C", "REST", "R"
+# Plain words of the trade, not claims of a skill: "HTTP proxy", "REST APIs", "on-call"
+_GENERIC = {"http", "https", "api", "apis", "json", "url", "urls", "cli", "ui", "ux", "io", "cpu", "cpus", "gpu",
+            "gpus", "os", "ci", "cd", "id", "ids", "ai", "ml", "sdk", "sdks", "ssd", "ram", "csv", "pdf", "tcp",
+            "ip", "dns", "e2e", "p95", "p99", "qps", "rps", "kb", "mb", "gb", "tb", "ms"}
+# Short names for institutions, both ways
+_ALIASES = {"nyu": "new york university", "iit": "indian institute of technology",
+            "mit": "massachusetts institute of technology", "cmu": "carnegie mellon university"}
+_STOP = {"of", "the", "and", "at", "in", "inc", "llc", "ltd", "corp", "co"}
 
 
 def _pdir(private_dir: Path | None) -> Path:
@@ -115,23 +123,39 @@ def rules_section(profile: str) -> str:
     return ""
 
 
+def _tokens(text: str) -> set[str]:
+    t = re.sub(r"[^a-z0-9]+", " ", text.lower())
+    for short, full in _ALIASES.items():
+        if re.search(rf"\b{short}\b", t):
+            t += " " + full
+        if full in t:
+            t += " " + short
+    return {w for w in t.split() if w not in _STOP}
+
+
 def _find(secs: dict[str, str], name: str, kind: str) -> str | None:
-    """The profile text for an employer or project named in the resume."""
-    n = re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
-    if not n:
+    """The profile text for an employer or project named in the resume.
+    "New York University, Courant Institute" finds "NYU Courant Institute (New York University)"."""
+    want = _tokens(name)
+    if not want:
         return None
-    best = None
+    best, best_score = None, 0.0
     for head, body in secs.items():
         if kind == "project" and not head.startswith("project:"):
             continue
         if kind == "role" and head.startswith("project:"):
             continue
-        h = re.sub(r"[^a-z0-9]+", " ", head.lower().replace("project:", ""))
-        if n in h or (len(h.split()) and h.split()[0] in n.split()):
-            best = head + "\n" + body
-            if n in h:
-                break
-    return best
+        have = _tokens(head.replace("project:", ""))
+        if not have:
+            continue
+        first = re.sub(r"[^a-z0-9]+", " ", head.lower().replace("project:", "")).split()
+        shared = want & have
+        score = len(shared) / len(want)
+        if first and first[0] in want:          # "IBM" heading, "IBM India" in the resume
+            score = max(score, 0.75)
+        if score > best_score:
+            best, best_score = head + "\n" + body, score
+    return best if best_score >= 0.6 else None
 
 
 def _norm_num(s: str) -> str:
@@ -154,7 +178,7 @@ def supported(line: str, source: str) -> tuple[bool, str]:
         else:
             techy = lw in _TECH or any(ch.isdigit() or ch in "+#" for ch in w) or \
                 (any(ch.isupper() for ch in w[1:]) and len(w) > 1)
-        if not techy or lw in src_words:
+        if not techy or lw in src_words or lw in _GENERIC:
             continue
         if len(lw) >= 3 and any(len(s) >= 3 and (s.startswith(lw) or lw.startswith(s)) for s in src_words):
             continue
@@ -182,7 +206,9 @@ def check(resume: dict[str, Any], profile: str) -> tuple[dict[str, Any], list[di
     clean: dict[str, Any] = {"experience": [], "projects": [], "skills": [], "education": [],
                              "extras": [], "note": str(resume.get("note", ""))[:300]}
     for e in resume.get("experience") or []:
-        src = _find(secs, e.get("company", ""), "role")
+        # Company and title together tell apart two roles at one employer
+        src = _find(secs, f"{e.get('company', '')} {e.get('title', '')}", "role") or \
+            _find(secs, e.get("company", ""), "role")
         if not src:
             dropped.append({"where": e.get("company", "?"), "line": "(whole role)",
                             "why": "that employer isn't in your profile"})
@@ -247,25 +273,46 @@ def check(resume: dict[str, Any], profile: str) -> tuple[dict[str, Any], list[di
 
 # ── Asking Claude ──────────────────────────────────────────────────────
 
-_SYSTEM = """You write one applicant's resume for one job, the way a careful career coach would.
+_SYSTEM = """You write one applicant's resume for one job. The bar is the resume a top
+career coach would hand back after an hour with the applicant: dense,
+specific, technical, every line earning its place. Recruiters skim for 7
+seconds, so the first words of each bullet and the bolded terms must carry it.
 
-Use ONLY the applicant's career profile below. Every employer, title, date,
-project, number, tool and claim must come from it, and a fact about one role
-or project may only appear under that role or project. Follow the profile's
-Rules section exactly (it overrides anything here). Never invent metrics. Write employer and project names exactly as the
-profile's headings do (e.g. "IBM", "Sahara AI", "AccessMint").
+FACTS. Use ONLY the applicant's career profile below. Every employer, title,
+date, project, number, tool and claim must come from it, and a fact about one
+role or project may only appear under that role or project. Follow the
+profile's Rules section exactly (it overrides anything here). Never invent a
+metric, tool, scale or outcome. Text inside [confirm: ...] or [add: ...] is a
+note to the applicant, not a fact. Write employer and project names as the
+profile's headings do.
 
-Pick what this job cares about: the most relevant roles (keep the main
-full-time job even if less relevant), 3–5 bullets for the main role, 1–3 for
-others, 2–3 projects, 3–4 skill lines led by the job's stack (only skills the
-profile has, at the level it states), education. Put the job's priorities
-first and use its wording for things the applicant really did. Bold key
-tools and metrics with **double asterisks**. No summary section unless the
-Rules allow one. No em dashes. Keep it to one page: about 13–17 bullets in total.
+WHAT TO PICK.
+- Every role the profile lists as work experience, newest first (research
+  positions count). The main full-time job gets 4-5 bullets; others 2-3.
+- 3-5 projects, the ones closest to this job's stack and problems first;
+  1-2 bullets each.
+- 16-22 bullets in total: the page must be FULL. A half-empty page is a
+  failure; it will be trimmed automatically if it runs over.
+- Skills: 3-4 lines led by the job's stack, only skills the profile has, at
+  the level it states (coursework stays labelled as coursework).
+- Education with relevant coursework; publications or awards if the profile
+  has them (as extras).
+
+HOW TO WRITE A BULLET.
+- Strong past-tense verb, then exactly what was built, how (the specific
+  techniques and technologies), and the result with the profile's number.
+- Prefer the profile's concrete details (sizes, counts, speedups, design
+  choices, bugs found) over generic phrases. Never write filler like "in
+  fast-paced sprint cycles", "ensuring data integrity at scale",
+  "leveraging cutting-edge", "various", "robust", "seamless".
+- Mirror the job's wording only for things the applicant really did.
+- One to two lines each (about 140-230 characters). Bold the 2-3 terms a
+  recruiter scans for (**Java Spring Boot**, **10K+ daily requests**, **40%**).
+- No em dashes. No summary section unless the Rules allow one.
 
 Reply with JSON only:
 {"experience": [{"company": "...", "title": "...", "location": "...", "dates": "...", "bullets": ["..."]}],
- "projects": [{"name": "...", "stack": "...", "link": "...", "bullets": ["..."]}],
+ "projects": [{"name": "...", "stack": "...", "link": "...", "context": "e.g. NYU, 4-person team", "bullets": ["..."]}],
  "skills": [{"label": "Languages", "items": "Java, Python, ..."}],
  "education": [{"school": "...", "degree": "...", "dates": "...", "location": "...", "detail": "Coursework: ..."}],
  "extras": [{"label": "Publications", "text": "..."}],
@@ -275,15 +322,25 @@ Reply with JSON only:
 def draft(job: dict[str, Any], profile: str, private_dir: Path | None = None, client: Any = None) -> dict[str, Any]:
     from pipeline.ai import client as ai
     from pipeline.ai.context import job_block
+    from pipeline.ai.context import load_resume_text
     system = [{"type": "text", "text": _SYSTEM},
               {"type": "text", "text": f"<career_profile>\n{profile[:60000]}\n</career_profile>",
                "cache_control": {"type": "ephemeral"}}]
-    reply = ai.complete(system, job_block(job, limit=10000), purpose=f"resume: {job.get('company')} — "
-                        f"{job.get('title', '')[:50]}", max_tokens=2500, private_dir=private_dir, client=client)
+    current = load_resume_text(private_dir).strip()
+    prompt = job_block(job, limit=10000)
+    if current:
+        prompt += ("\n\n<current_resume>\nThe applicant's own current resume. It is the floor for quality: "
+                   "be at least this specific and dense. Facts still come only from the career profile.\n"
+                   f"{current[:8000]}\n</current_resume>")
+    reply = ai.complete(system, prompt, purpose=f"resume: {job.get('company')} — {job.get('title', '')[:50]}",
+                        max_tokens=10000, private_dir=private_dir, client=client, thinking=3000)
     m = re.search(r"\{.*\}", reply.text, re.S)
     if not m:
-        raise ValueError("no resume in the reply")
-    return json.loads(m.group(0))
+        raise ValueError("the reply had no resume in it" + (" (it was cut off)" if reply.text else ""))
+    try:
+        return json.loads(m.group(0))
+    except ValueError as e:
+        raise ValueError(f"the reply wasn't valid JSON ({e})") from e
 
 
 # ── LaTeX ──────────────────────────────────────────────────────────────
@@ -331,19 +388,23 @@ _PREAMBLE = r"""\documentclass[letterpaper,11pt]{article}
 """
 
 
-def _href(url: str) -> str:
+def _href(url: str, label: str = "") -> str:
     full = url if url.startswith("http") else "https://" + url
-    shown = re.sub(r"^https?://(www\.)?", "", url).rstrip("/")
+    shown = label or re.sub(r"^https?://(www\.)?", "", url).rstrip("/")
     return "\\href{" + full.replace("%", "\\%").replace("#", "\\#") + "}{" + tex_escape(shown) + "}"
 
 
 def render(resume: dict[str, Any], details: dict[str, str]) -> str:
     e = tex_escape
     name = f"{details.get('first_name', '')} {details.get('last_name', '')}".strip() or "Your Name"
-    contact = [details.get(k, "") for k in ("phone", "email", "city")]
-    links = [details.get(k, "") for k in ("linkedin", "github", "website")]
-    head = " $|$ ".join([e(c) for c in contact if c] + [_href(u) for u in links if u])
-    out = [_PREAMBLE, rf"\begin{{center}}{{\Large \textbf{{{e(name)}}}}}\\ \vspace{{2pt}}\small {head}\end{{center}}",
+    where = details.get("resume_location") or details.get("city", "")
+    contact = [where, details.get("phone", ""), details.get("email", "")]
+    links = [(details.get("linkedin", ""), "LinkedIn"), (details.get("github", ""), "GitHub"),
+             (details.get("website", ""), "")]
+    head = " $\\cdot$ ".join([e(c) for c in contact if c] + [_href(u, label) for u, label in links if u])
+    plain = len(" . ".join([c for c in contact if c] + [label or u for u, label in links if u]))
+    size = r"\small" if plain <= 105 else r"\footnotesize"     # keep contact details on one line
+    out = [_PREAMBLE, rf"\begin{{center}}{{\Large \textbf{{{e(name)}}}}}\\ \vspace{{2pt}}{size} {head}\end{{center}}",
            r"\vspace{-8pt}"]
     if resume.get("experience"):
         out.append(r"\section{Experience}")
@@ -356,19 +417,20 @@ def render(resume: dict[str, Any], details: dict[str, str]) -> str:
         for p in resume["projects"]:
             left = rf"\textbf{{{e(p.get('name', ''))}}}" + (rf" $|$ \emph{{{e(p['stack'])}}}" if p.get("stack") else "")
             link = p.get("link", "")
-            right = _href(link) if link else ""
+            right = " $\\cdot$ ".join(x for x in (_href(link, "repo" if "github" in link else "link") if link else "",
+                                                 e(p.get("context", ""))) if x)
             out.append(rf"\proj{{{left}}}{{{right}}}")
             out.append(r"\begin{itemize}" + "".join(rf"\item \small {e(b)}" + "\n" for b in p["bullets"]) + r"\end{itemize}")
-    if resume.get("skills"):
-        out.append(r"\section{Technical Skills}\small")
-        out.append(r" \\ ".join(rf"\textbf{{{e(s['label'])}:}} {e(s['items'])}" for s in resume["skills"]))
     if resume.get("education"):
         out.append(r"\section{Education}")
         for ed in resume["education"]:
             out.append(rf"\role{{{e(ed.get('school', ''))}}}{{{e(ed.get('location', ''))}}}"
                        rf"{{{e(ed.get('degree', ''))}}}{{{e(ed.get('dates', ''))}}}")
             if ed.get("detail"):
-                out.append(rf"\par\vspace{{3pt}}{{\small {e(ed['detail'])}}}\par\vspace{{2pt}}")
+                out.append(r"\begin{itemize}\item \small " + e(ed["detail"]) + "\n" + r"\end{itemize}")
+    if resume.get("skills"):
+        out.append(r"\section{Technical Skills}\small")
+        out.append(r" \\ ".join(rf"\textbf{{{e(s['label'])}:}} {e(s['items'])}" for s in resume["skills"]))
     for x in resume.get("extras") or []:
         out.append(rf"\section{{{e(x.get('label', ''))}}}\small {e(x.get('text', ''))}")
     out.append(r"\end{document}")

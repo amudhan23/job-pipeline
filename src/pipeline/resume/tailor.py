@@ -14,12 +14,15 @@ name a recruiter sees) plus tailor.json saying what was chosen and why.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 from pathlib import Path
 from typing import Any
 
 from pipeline.models import Job, ResumeConfig
+
+logger = logging.getLogger(__name__)
 
 TEMPLATE = Path(__file__).resolve().parents[3] / "templates" / "generic.tex"
 
@@ -222,11 +225,26 @@ def tailored_resume(job: dict[str, Any], config: dict[str, Any], details: dict[s
         return None, why
     from pipeline.ai import client as _ai
     from pipeline.resume import writer as pw
-    if use_ai and pw.has_profile(private_dir) and _ai.status(private_dir)[0]:
-        try:
-            built, meta = pw.write_resume(job, details, folder, name, private_dir, client)
-        except Exception as e:                     # bad reply / API error: fall back to the bullet bank
-            built, meta = None, {"error": str(e)[:200]}
+    if use_ai and pw.has_profile(private_dir):
+        # With a career profile, the resume is written from it or not at all:
+        # the old bullet bank is generic and would go out under your name.
+        ready, why = _ai.status(private_dir)
+        if not ready:
+            return None, f"your career profile needs Claude to write from, and the AI is unavailable: {why}"
+        built, meta = None, {}
+        for attempt in range(2):                   # one retry: a cut-off or malformed reply is usually a one-off
+            try:
+                built, meta = pw.write_resume(job, details, folder, name, private_dir, client)
+            except Exception as e:
+                logger.warning(f"resume writer, try {attempt + 1}: {e}")
+                built, meta = None, {"error": f"{type(e).__name__}: {e}"[:300]}
+            if built:
+                break
+        if not built:
+            why = meta.get("error") or "the PDF didn't build"
+            if meta.get("dropped") and not meta.get("error"):
+                why = f"nothing in the draft passed the check against your profile ({len(meta['dropped'])} lines dropped)"
+            return None, f"the resume writer failed: {why}"
         if built:
             note = meta.get("note") or "written from your career profile"
             if meta.get("dropped"):
