@@ -118,6 +118,20 @@ def checks(online: bool = False, private_dir: Path | None = None) -> list[dict[s
         return OK, f"Reads codes from {mailcodes.settings(pdir)['email']}"
     out.append(_check("Security-code email", mail))
 
+    def hirebase_() -> tuple[str, str]:
+        from pipeline import hirebase
+        if not hirebase.get_key(pdir):
+            return WARN, "No key: jobs beyond your boards aren't searched (`jobpipe hirebase key`, free)"
+        st = hirebase.public(pdir)
+        if online:
+            import httpx
+            r = httpx.post(hirebase.ESTIMATE, json={"job_titles": ["Software Engineer"], "days_ago": 1},
+                           headers={"x-api-key": hirebase.get_key(pdir)}, timeout=20)
+            if r.status_code == 401:
+                return FAIL, "Hirebase rejected the key"
+        return OK, f"Key saved; {st['used']} of {st['monthly_jobs']} jobs used this month"
+    out.append(_check("Hirebase", hirebase_))
+
     def boards() -> tuple[str, str]:
         from pipeline.discovery.registry import BoardRegistry
         n = BoardRegistry().frontier_stats().get("boards", 0)

@@ -246,6 +246,18 @@ With no profile saved, the older path runs: Claude picks and rewords bullets
 from `config/profile.yaml`, with a guard that discards any rewrite adding a
 number or technology the original lacked. A resume costs a few cents.
 
+## Hirebase: jobs beyond your boards
+
+[Hirebase](https://hirebase.org) indexes 500,000+ company career pages,
+including Workday and iCIMS, and tags postings with fields like visa
+sponsorship. With a free key (`jobpipe hirebase key`, or Crawler → Jobs
+beyond your boards), the crawler asks it every 8 hours for postings it saw
+since the last ask that match your titles and locations. Postings on boards
+jobpipe crawls get that board added and read right away (then applied to like
+any other job); the rest land in Live jobs with their link, marked when
+Hirebase says the role sponsors visas. Asks are sized so the free 500 jobs a
+month last the month. `jobpipe hirebase fetch` asks now.
+
 ## Leads: hiring posts from people
 
 Founders and engineers often post "we're hiring" before a job board shows

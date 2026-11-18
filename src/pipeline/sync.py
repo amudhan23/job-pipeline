@@ -18,9 +18,9 @@ from typing import Any
 FILES = [
     "applicant.json", "resume.pdf", "career_profile.md", "answers.json", "pending_questions.json",
     "ai_drafts.json", "autoapply.json", "approvals.json", "ai_settings.json", "telegram.json",
-    "telegram_state.json", "mail.json", "outreach.json", "searches.json",
+    "telegram_state.json", "mail.json", "outreach.json", "searches.json", "leads.json", "hirebase.json",
 ]
-SECRETS = ["anthropic_key", "hunter_key"]
+SECRETS = ["anthropic_key", "hunter_key", "hirebase_key"]
 BOARDS = "boards.json"
 MAX_BYTES = 30 * 1024 * 1024
 

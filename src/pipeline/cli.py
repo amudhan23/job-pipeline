@@ -1419,6 +1419,70 @@ def leads_x_token() -> None:
     console.print("Saved. X is on.")
 
 
+@main.group()
+def hirebase() -> None:
+    """Jobs from 500k+ career pages beyond your boards (free key from hirebase.org)."""
+
+
+@hirebase.command("key")
+def hirebase_key() -> None:
+    """Save your Hirebase API key (Profile → API Key at hirebase.org) and test it."""
+    import httpx
+    from pipeline import hirebase as hb
+    key = click.prompt("Hirebase API key (input hidden)", hide_input=True)
+    try:
+        hb.save_key(key)
+    except ValueError as e:
+        raise click.ClickException(str(e))
+    try:
+        r = httpx.post(hb.ESTIMATE, json={"job_titles": ["Software Engineer"], "days_ago": 1},
+                       headers={"x-api-key": hb.get_key()}, timeout=20)
+        if r.status_code == 401:
+            raise click.ClickException("Saved, but Hirebase rejected it. Copy it again from Profile → API Key.")
+        console.print(f"[green]Saved and working.[/green] (Hirebase answered {r.status_code}.) "
+                      "The crawler asks for new matches every 8 hours, within the free 500 jobs a month.")
+    except httpx.HTTPError as e:
+        console.print(f"Saved. Couldn't reach Hirebase to test it ({type(e).__name__}).")
+
+
+@hirebase.command("fetch")
+def hirebase_fetch() -> None:
+    """Ask Hirebase for new matching jobs now and store them (uses some of the monthly allowance)."""
+    import asyncio
+    from pipeline import hirebase as hb
+    from pipeline.crawler.worker import Crawler
+    if not hb.get_key():
+        raise click.ClickException("No key yet: `jobpipe hirebase key`.")
+    crawler = Crawler(load_config())
+
+    async def go():
+        try:
+            return await crawler.poll_hirebase()
+        finally:
+            await crawler.fetcher.aclose()
+    new_ids = asyncio.run(go())
+    info = crawler.last_hirebase
+    if info.get("error"):
+        raise click.ClickException(info["error"])
+    tracker = Tracker()
+    for i in new_ids[:30]:
+        j = tracker.get_job(i)
+        if j:
+            tag = " [green]visa ✓[/green]" if (j.get("description") or "").startswith("Visa sponsorship: offered") else ""
+            console.print(f"{j['fit_score']:>4.0f}  {j['company']}: {j['title']} · {j['location']}{tag}  [dim]{j['url']}[/dim]")
+    st = hb.public()
+    console.print(f"{info['returned']} returned, {info['matching']} match your filters, {info['new_jobs']} new in Live jobs, "
+                  f"{info['new_boards']} new boards for the crawler. {st['used']} of {st['monthly_jobs']} used this month.")
+
+
+@hirebase.command("status")
+def hirebase_status() -> None:
+    """This month's usage and the last ask."""
+    from pipeline import hirebase as hb
+    st = hb.public()
+    console.print(json.dumps(st, indent=1))
+
+
 # ── Cloud ──────────────────────────────────────────────────────────────
 
 CLOUD_FILE = Path.home() / ".config" / "jobpipe" / "cloud.json"

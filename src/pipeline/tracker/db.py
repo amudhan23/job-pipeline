@@ -242,7 +242,7 @@ class Tracker:
         conn.close()
         return new, closed, reopened
 
-    def insert_feed_jobs(self, jobs: list[Job], baseline: bool = False) -> list[str]:
+    def insert_feed_jobs(self, jobs: list[Job], baseline: bool = False, source: str = "feed") -> list[str]:
         """Jobs from a feed whose board we can't crawl (Workday, iCIMS…):
         insert new ones (as new events), refresh known ones. Returns new ids."""
         now = datetime.now().isoformat(timespec="seconds")
@@ -259,9 +259,9 @@ class Tracker:
                      description, department, posted_at, scraped_at, sponsorship,
                      h1b_filings_count, fit_score, fit_breakdown, run_id, last_seen,
                      resume_path, status, applied_at, notes, first_seen_at, baseline, source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'feed')
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET {updates}, closed_at = NULL
-            """, [(*self._row(j, None, now), now, 1 if baseline else 0) for j in jobs])
+            """, [(*self._row(j, None, now), now, 1 if baseline else 0, source) for j in jobs])
             if not baseline:
                 conn.executemany("INSERT INTO job_events (job_id, kind, at) VALUES (?, 'new', ?)",
                                  [(i, now) for i in new])

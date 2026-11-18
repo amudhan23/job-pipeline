@@ -730,7 +730,9 @@ function showLog(id) {
 
 async function pageCrawler() {
   page.innerHTML = `<div class="head"><div><h1>Crawler</h1><p class="lede">It reads every company job board it knows,
-    more often where postings appear, and checks the job feed every few minutes.</p></div></div><div id="cr">Loading…</div>`;
+    more often where postings appear, and checks the job feed every few minutes.</p></div></div><div id="cr">Loading…</div>
+    <h2>Jobs beyond your boards (Hirebase)</h2><div class="panel" id="hb">Loading…</div>`;
+  hirebaseCard();
   const draw = async () => {
     let d;
     try { d = await api("/api/crawler"); } catch (e) { $("#cr").textContent = e.message; return; }
@@ -769,6 +771,35 @@ async function pageCrawler() {
   };
   await draw();
   every(15000, draw);
+}
+
+async function hirebaseCard() {
+  const box = $("#hb"); if (!box) return;
+  let h;
+  try { h = await api("/api/hirebase"); } catch (e) { box.textContent = e.message; return; }
+  const last = h.last || {};
+  box.innerHTML = `<p class="note" style="margin-top:0">Hirebase indexes 500,000+ company career pages, including Workday and iCIMS.
+    Every few hours jobpipe asks it for postings it saw since the last ask that match your titles and locations. Ones on boards
+    jobpipe can crawl get added to the crawler (and applied to like any other); the rest appear in Live jobs with their link.</p>
+    ${h.has_key ? `<p><span class="ready">Connected</span> ${h.used} of ${h.monthly_jobs} jobs used this month
+      ${last.asked_at ? ` · last ask ${new Date(last.asked_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}: ${last.returned} returned, ${last.matching} matched` : ""}
+      ${last.error ? `<br><span class="note warn">${esc(last.error)}</span>` : ""}</p>` : ""}
+    <div class="grid2">
+      <div class="field"><label for="hb-key">API key</label><input type="password" id="hb-key" autocomplete="off"
+        placeholder="${h.has_key ? "Saved. Paste a new one to replace it" : "hirebase.org → Profile → API Key (free)"}"></div>
+      <div class="field"><label for="hb-month">Jobs per month at most</label><input type="number" id="hb-month" min="0" value="${h.monthly_jobs}">
+        <div class="hint">The free plan allows 500. Asks are sized so this lasts the whole month.</div></div>
+      <div class="field"><label for="hb-every">Ask every (hours)</label><input type="number" id="hb-every" min="1" max="48" value="${h.every_hours}"></div>
+      <label class="check"><input type="checkbox" id="hb-visa" ${h.visa_only ? "checked" : ""}> Only postings Hirebase marks as sponsoring visas</label>
+      <label class="check"><input type="checkbox" id="hb-on" ${h.enabled ? "checked" : ""}> On</label>
+    </div>
+    <div class="bar"><button class="primary" id="hb-save">Save</button>${h.has_key ? `<button class="quiet" id="hb-forget">Remove key</button>` : ""}</div>`;
+  $("#hb-save").onclick = async () => {
+    const body = { monthly_jobs: +$("#hb-month").value, every_hours: +$("#hb-every").value, visa_only: $("#hb-visa").checked, enabled: $("#hb-on").checked };
+    if ($("#hb-key").value) body.key = $("#hb-key").value;
+    try { await api("/api/hirebase", body); toast("Saved."); hirebaseCard(); } catch (e) { toast(e.message, true); }
+  };
+  if ($("#hb-forget")) $("#hb-forget").onclick = async () => { await api("/api/hirebase/forget", {}); toast("Removed."); hirebaseCard(); };
 }
 
 /* ── Frame ───────────────────────────────────────────────── */

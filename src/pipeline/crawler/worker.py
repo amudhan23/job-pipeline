@@ -89,6 +89,7 @@ class Crawler:
         self.errors: deque = deque(maxlen=30)
         self.last_discovery: dict[str, Any] = {}
         self.last_feed: dict[str, Any] = {}
+        self.last_hirebase: dict[str, Any] = {}
 
     # ── One board ──────────────────────────────────────────────────────
 
@@ -243,6 +244,29 @@ class Crawler:
             self.new_log.append((iso(utcnow()), i))
         return new_ids
 
+    async def poll_hirebase(self) -> list[str]:
+        """New postings from Hirebase: crawlable boards are registered and read
+        now; jobs elsewhere go straight into the tracker."""
+        from pipeline import hirebase
+        passes = next(iter(self.pipeline.scrapers.values())).passes_filters
+        got = await asyncio.to_thread(hirebase.fetch_new, self.config, passes)
+        boards = {b for b in got["boards"] if b[0] in self.sources}
+        added = self.registry.add_many(boards, source="hirebase") if boards else 0
+        if boards:
+            self.registry.make_due_now(boards)
+        outside = [j for j in got["jobs"] if (j.platform.value, j.company_slug) not in boards]
+        new_ids: list[str] = []
+        if outside:
+            self._prepare(outside, {})
+            new_ids = self.tracker.insert_feed_jobs(outside, source="hirebase")
+        self.last_hirebase = {"at": iso(utcnow()), "returned": got["returned"], "matching": len(got["jobs"]),
+                              "new_boards": added, "new_jobs": len(new_ids), "error": got["error"]}
+        if got["error"]:
+            self.errors.append({"at": iso(utcnow()), "board": "hirebase", "error": got["error"]})
+        for i in new_ids:
+            self.new_log.append((iso(utcnow()), i))
+        return new_ids
+
     # ── Discovery ──────────────────────────────────────────────────────
 
     async def discover(self) -> None:
@@ -277,6 +301,9 @@ class Crawler:
         # Feed first: boards it just pointed at get read in this same pass
         if utcnow() >= self.next_feed:
             new_ids += await self._safe(self.poll_feeds(), {"platform": "feed", "slug": "simplify"})
+        from pipeline import hirebase
+        if hirebase.due():
+            new_ids += await self._safe(self.poll_hirebase(), {"platform": "feed", "slug": "hirebase"})
         due = self.registry.due(iso(now), limit=self.batch)
         # Slow platforms (Workday & co.) go one company at a time; take a few per
         # pass so they never hold up the fast Greenhouse/Lever/Ashby checks.
@@ -373,7 +400,7 @@ class Crawler:
             "last_hour": {"reads": len(recent), "outcomes": outcomes,
                           "new_postings": sum(r[4] for r in recent)},
             "http": dict(self.fetcher.stats),
-            "next_feed_at": iso(self.next_feed), "last_feed": self.last_feed,
+            "next_feed_at": iso(self.next_feed), "last_feed": self.last_feed, "last_hirebase": self.last_hirebase,
             "next_discovery_at": iso(self.next_discovery), "last_discovery": self.last_discovery,
             "discovering": bool(self.discovery_task and not self.discovery_task.done()),
             "recent_new": [{"at": a, "job_id": j} for a, j in list(self.new_log)[-50:]][::-1],

@@ -174,6 +174,9 @@ class ApiMixin:
                                min_score=float(q.get("min") or 0))
             return {"leads": items, "settings": leads.public_settings(self._pdir()), "counts": store.counts(),
                     "running": leads._RUNNING.locked()}, 200
+        if path == "/api/hirebase":
+            from pipeline import hirebase
+            return hirebase.public(self._pdir()), 200
         if path == "/api/doctor":
             from pipeline import doctor
             return {"checks": doctor.checks(online=q.get("online") == "1", private_dir=self._pdir())}, 200
@@ -386,6 +389,17 @@ class ApiMixin:
         pdir = self._pdir()
         if path.startswith("/api/leads"):
             return self._leads_post(path, data)
+        if path in ("/api/hirebase", "/api/hirebase/forget"):
+            from pipeline import hirebase
+            try:
+                if path.endswith("forget"):
+                    hirebase.forget_key(pdir)
+                    return hirebase.public(pdir), 200
+                if data.get("key"):
+                    hirebase.save_key(str(data["key"]), pdir)
+                return hirebase.save_settings(data, pdir), 200
+            except ValueError as e:
+                return {"error": str(e)}, 400
         if path.startswith("/api/mail"):
             from pipeline.notify import mailcodes
             if path == "/api/mail":
