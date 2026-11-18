@@ -287,8 +287,10 @@ note to the applicant, not a fact. Write employer and project names as the
 profile's headings do.
 
 WHAT TO PICK.
-- Every role the profile lists as work experience, newest first (research
-  positions count). The main full-time job gets 4-5 bullets; others 2-3.
+- Work experience newest first: always the main full-time job (4-5
+  bullets) and internships (2-3 bullets); research roles when they fit the
+  job (2 bullets). Teaching, grading and advisory roles only if the page has
+  room after the projects. Never drop the main full-time job.
 - 3-5 projects, the ones closest to this job's stack and problems first;
   1-2 bullets each.
 - 16-22 bullets in total: the page must be FULL. A half-empty page is a
@@ -306,7 +308,8 @@ HOW TO WRITE A BULLET.
   fast-paced sprint cycles", "ensuring data integrity at scale",
   "leveraging cutting-edge", "various", "robust", "seamless".
 - Mirror the job's wording only for things the applicant really did.
-- One to two lines each (about 140-230 characters). Bold the 2-3 terms a
+- One to two lines each: 120-200 characters, never more. Cut the why-story;
+  keep what, how and the result. Bold the 2-3 terms a
   recruiter scans for (**Java Spring Boot**, **10K+ daily requests**, **40%**).
 - No em dashes. No summary section unless the Rules allow one.
 
@@ -354,10 +357,18 @@ def draft(job: dict[str, Any], profile: str, private_dir: Path | None = None, cl
         prompt += ("\n\n<current_resume>\nThe applicant's own current resume. It is the floor for quality: "
                    "be at least this specific and dense. Facts still come only from the career profile.\n"
                    f"{current[:8000]}\n</current_resume>")
+    # Resumes are worth the better model: never Haiku, even if it's your everyday setting
+    model = "opus" if ai.load_settings(private_dir).get("model") == "opus" else "sonnet"
     reply = ai.complete(system, prompt, purpose=f"resume: {job.get('company')} — {job.get('title', '')[:50]}",
-                        max_tokens=10000, private_dir=private_dir, client=client, thinking=3000,
-                        schema=RESUME_SCHEMA)
-    return parse_json(reply.text, private_dir, client)
+                        max_tokens=16000, private_dir=private_dir, client=client, thinking=4000,
+                        schema=RESUME_SCHEMA, model=model)
+    if reply.stop_reason == "max_tokens":
+        raise ValueError("the reply was cut off before the resume was finished")
+    out = parse_json(reply.text, private_dir, client)
+    missing = [k for k in ("experience", "projects", "skills", "education") if not out.get(k)]
+    if missing:
+        raise ValueError(f"the draft came back without {', '.join(missing)}")
+    return out
 
 
 def parse_json(text: str, private_dir: Path | None = None, client: Any = None) -> dict:
@@ -440,8 +451,11 @@ def render(resume: dict[str, Any], details: dict[str, str]) -> str:
     name = f"{details.get('first_name', '')} {details.get('last_name', '')}".strip() or "Your Name"
     where = details.get("resume_location") or details.get("city", "")
     contact = [where, details.get("phone", ""), details.get("email", "")]
-    links = [(details.get("linkedin", ""), "LinkedIn"), (details.get("github", ""), "GitHub"),
-             (details.get("website", ""), "")]
+    def _same(a: str, b: str) -> bool:
+        k = lambda u: re.sub(r"^https?://(www\.)?", "", u or "").rstrip("/").lower()
+        return bool(a) and k(a) == k(b)
+    website = "" if _same(details.get("website", ""), details.get("github", "")) else details.get("website", "")
+    links = [(details.get("linkedin", ""), "LinkedIn"), (details.get("github", ""), "GitHub"), (website, "")]
     head = " $\\cdot$ ".join([e(c) for c in contact if c] + [_href(u, label) for u, label in links if u])
     plain = len(" . ".join([c for c in contact if c] + [label or u for u, label in links if u]))
     size = r"\small" if plain <= 105 else r"\footnotesize"     # keep contact details on one line

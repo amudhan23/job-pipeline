@@ -160,6 +160,7 @@ class Reply:
     text: str
     model: str
     cost: float
+    stop_reason: str = ""
 
 
 def status(private_dir: Path | None = None) -> tuple[bool, str]:
@@ -230,4 +231,4 @@ def complete(system: list[dict] | str, prompt: str | list[dict], purpose: str, m
     _record(private_dir, {"at": datetime.now().isoformat(timespec="seconds"), "purpose": purpose,
                           "model": model, **usage, "cost": round(cost, 6)})
     text = "".join(getattr(b, "text", "") for b in msg.content).strip()
-    return Reply(text=text, model=model, cost=cost)
+    return Reply(text=text, model=model, cost=cost, stop_reason=str(getattr(msg, "stop_reason", "") or ""))
