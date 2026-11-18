@@ -322,8 +322,9 @@ WHAT TO PICK.
   room after the projects. Never drop the main full-time job.
 - 3-5 projects, the ones closest to this job's stack and problems first;
   1-2 bullets each.
-- 16-22 bullets in total: the page must be FULL. A half-empty page is a
-  failure; it will be trimmed automatically if it runs over.
+- About 15-17 bullets in total, which fills one page at 10pt. Don't write
+  more expecting them to be cut: overflow is trimmed from the end, not by
+  quality.
 - Skills: 3-4 lines led by the job's stack, only skills the profile has, at
   the level it states (coursework stays labelled as coursework).
 - Education with relevant coursework; publications or awards if the profile
