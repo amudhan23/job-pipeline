@@ -16,6 +16,35 @@ logger = logging.getLogger(__name__)
 DEFAULT_DB_PATH = Path(__file__).resolve().parents[3] / "data" / "tracker.db"
 
 
+# A posting the company dated longer ago than this isn't "new" just because
+# we hadn't stored it before (your filters widened, a board was re-added…)
+STALE_DAYS = 3
+
+
+FRESH_HOURS = 48
+
+
+def _local(dt: datetime) -> datetime:
+    """A posting date as local naive time, like first_seen_at."""
+    return dt.astimezone().replace(tzinfo=None) if dt.tzinfo else dt
+
+
+def _fresh_posting(job: Job) -> bool:
+    """The company dated it within the last two days."""
+    if not job.posted_at:
+        return False
+    from datetime import timedelta
+    return datetime.now() - _local(job.posted_at) <= timedelta(hours=FRESH_HOURS)
+
+
+def _old_posting(job: Job) -> bool:
+    if not job.posted_at:
+        return False
+    from datetime import timedelta, timezone
+    now = datetime.now(timezone.utc) if job.posted_at.tzinfo else datetime.now()
+    return now - job.posted_at > timedelta(days=STALE_DAYS)
+
+
 class Tracker:
     """Track job applications in SQLite."""
 
@@ -83,6 +112,9 @@ class Tracker:
                 conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {ddl}")
         if "first_seen_at" not in cols:
             conn.execute("UPDATE jobs SET first_seen_at = COALESCE(scraped_at, last_seen), baseline = 1")
+        # Postings first stored days after the company posted them weren't caught opening
+        conn.execute("UPDATE jobs SET baseline = 1 WHERE COALESCE(baseline, 0) = 0 AND posted_at IS NOT NULL "
+                     "AND julianday(posted_at) < julianday(first_seen_at) - ?", (STALE_DAYS,))
         conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_run ON jobs(run_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_first_seen ON jobs(first_seen_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_board ON jobs(platform, company_slug)")
@@ -215,7 +247,11 @@ class Tracker:
         now = datetime.now().isoformat(timespec="seconds")
         known = self.known_ids(platform, slug)
         seen = {j.id for j in jobs}
-        new = [j.id for j in jobs if j.id not in known]
+        stale = {j.id for j in jobs if _old_posting(j)}
+        # First read of a board: what's up is mostly old, except roles the
+        # company dated in the last two days (often why we found the board)
+        fresh = {j.id for j in jobs if baseline and _fresh_posting(j)}
+        new = [j.id for j in jobs if j.id not in known and j.id not in stale and (not baseline or j.id in fresh)]
         reopened = [j.id for j in jobs if j.id in known and known[j.id]]
         closed = [i for i, c in known.items() if c is None and i not in seen] if close_missing else []
         # Known postings: only what a listing can change. Description, score
@@ -232,11 +268,13 @@ class Tracker:
                      resume_path, status, applied_at, notes, first_seen_at, baseline, source)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'board')
                 ON CONFLICT(id) DO UPDATE SET {updates}, closed_at = NULL
-            """, [(*self._row(j, None, now), now, 1 if baseline else 0) for j in jobs])
+            """, [(*self._row(j, None, now),
+                   _local(j.posted_at).isoformat(timespec="seconds") if j.id in fresh else now,
+                   0 if j.id in fresh else (1 if baseline or j.id in stale else 0)) for j in jobs])
             if closed:
                 conn.executemany("UPDATE jobs SET closed_at = ? WHERE id = ?", [(now, i) for i in closed])
             conn.executemany("INSERT INTO job_events (job_id, kind, at) VALUES (?, ?, ?)",
-                             [(i, "new", now) for i in new if not baseline]
+                             [(i, "new", now) for i in new]
                              + [(i, "closed", now) for i in closed]
                              + [(i, "reopened", now) for i in reopened])
         conn.close()
@@ -250,7 +288,8 @@ class Tracker:
         known = {r[0] for r in conn.execute(
             f"SELECT id FROM jobs WHERE id IN ({','.join('?' * len(jobs))})", [j.id for j in jobs])} \
             if jobs else set()
-        new = [j.id for j in jobs if j.id not in known]
+        stale = {j.id for j in jobs if _old_posting(j)}
+        new = [j.id for j in jobs if j.id not in known and j.id not in stale]
         updates = ", ".join(f"{c} = excluded.{c}" for c in self._SCRAPED_FIELDS if c != "run_id")
         with conn:
             conn.executemany(f"""
@@ -261,7 +300,7 @@ class Tracker:
                      resume_path, status, applied_at, notes, first_seen_at, baseline, source)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET {updates}, closed_at = NULL
-            """, [(*self._row(j, None, now), now, 1 if baseline else 0, source) for j in jobs])
+            """, [(*self._row(j, None, now), now, 1 if baseline or j.id in stale else 0, source) for j in jobs])
             if not baseline:
                 conn.executemany("INSERT INTO job_events (job_id, kind, at) VALUES (?, 'new', ?)",
                                  [(i, now) for i in new])

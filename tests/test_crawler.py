@@ -12,6 +12,11 @@ from pipeline.crawler.policy import Policy
 from pipeline.crawler.worker import Crawler, iso, read_status, utcnow
 from pipeline.discovery.registry import BoardRegistry
 from pipeline.tracker.db import Tracker
+from datetime import datetime, timedelta, timezone
+
+
+def _when(old: bool) -> str:
+    return (datetime.now(timezone.utc) - (timedelta(days=10) if old else timedelta(minutes=5))).isoformat()
 
 CONFIG = {
     "filters": {"role_keywords": ["software engineer"], "exclude_keywords": ["senior", "intern"],
@@ -35,7 +40,8 @@ class FakeATS:
     @staticmethod
     def _gh(i, title, loc, content="<p>Build Java services.</p>"):
         return {"id": i, "title": title, "location": {"name": loc},
-                "updated_at": "2026-11-13T10:00:00-05:00", "first_published": "2026-11-13T10:00:00-05:00",
+                # The board's first posting is old; ones added during a test just went up
+                "updated_at": _when(i == 1), "first_published": _when(i == 1),
                 "absolute_url": f"https://job-boards.greenhouse.io/acme/jobs/{i}",
                 "company_name": "Acme", "_content": content}
 
@@ -43,7 +49,7 @@ class FakeATS:
     def _lv(i, title, loc):
         return {"id": i, "text": title, "categories": {"location": loc, "team": "Eng"},
                 "descriptionPlain": "Python and Go", "hostedUrl": f"https://jobs.lever.co/leverco/{i}",
-                "createdAt": 1763046000000}
+                "createdAt": int((datetime.now(timezone.utc) - timedelta(days=10)).timestamp() * 1000)}
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         url = str(request.url)

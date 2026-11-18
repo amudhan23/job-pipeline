@@ -115,6 +115,12 @@ class BoardRegistry:
             )
             return True
 
+    def missing(self, boards: set[tuple[str, str]]) -> set[tuple[str, str]]:
+        """The boards not in the registry yet."""
+        with self._conn() as conn:
+            have = set(conn.execute("SELECT platform, slug FROM boards").fetchall())
+        return {b for b in boards if b not in have}
+
     def add_many(self, boards: set[tuple[str, str]], source: str) -> int:
         """Record many sightings in one transaction. Returns how many were new."""
         if not boards:

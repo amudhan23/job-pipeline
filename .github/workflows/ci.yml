@@ -100,7 +100,7 @@ jobs:
           from pipeline.crawler.worker import read_status as r
           from pipeline.tracker.db import Tracker
           s = r(); f = s.get('frontier') or {}
-          print('seed:', s.get('last_seed')); print('frontier:', f); print('last hour:', s.get('last_hour'))
+          print('seed:', s.get('last_seed')); print('lists:', s.get('last_links')); print('frontier:', f); print('last hour:', s.get('last_hour'))
           t = Tracker(); print('open matching roles:', t.count_open(), '| opened in the last day:', t.count_open(24))
           for j in t.open_jobs(limit=25): print('  ', j['company'], '|', j['title'], '|', j['location'])
           assert f.get('boards', 0) > 3000, 'seed did not add the company boards'

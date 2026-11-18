@@ -92,6 +92,8 @@ class Crawler:
         self.last_hirebase: dict[str, Any] = {}
         self.last_seed: dict[str, Any] = {}
         self.next_seed_try = utcnow()
+        self.next_links = utcnow()
+        self.last_links: dict[str, Any] = {}
 
     # ── One board ──────────────────────────────────────────────────────
 
@@ -152,7 +154,7 @@ class Crawler:
             jobs = self._prepare(listing.jobs, known)
             new, closed, _ = self.tracker.observe_board(platform, slug, jobs, baseline=baseline,
                                                         close_missing=listing.complete)
-            new_ids = [] if baseline else [i for i in new if self._is_open(i, jobs)]
+            new_ids = [i for i in new if self._is_open(i, jobs)]
             if closed:
                 logger.info(f"{platform}/{slug}: {len(closed)} posting(s) closed")
 
@@ -286,6 +288,28 @@ class Crawler:
         logger.info(f"Seed: {len(boards)} company boards, {added} new")
         return []
 
+    async def poll_links(self) -> list[str]:
+        """Community new-grad lists: companies new to them are read now."""
+        from pipeline.discovery import seed
+        self.next_links = utcnow() + seed.LINK_EVERY
+        boards: set[tuple[str, str]] = set()
+        errors = []
+        for url in seed.LINK_FEEDS:
+            r = await self.fetcher.get(url)
+            if not r.ok:
+                errors.append(f"{url.split('/')[3]}/{url.split('/')[4]}: {r.error or r.status}")
+                continue
+            boards |= seed.harvest_links(r.body.decode("utf-8", "replace"))
+        boards = {b for b in boards if b[0] in self.sources}
+        fresh = await asyncio.to_thread(self.registry.missing, boards)
+        if fresh:
+            await asyncio.to_thread(self.registry.add_many, fresh, "feed")
+            await asyncio.to_thread(self.registry.make_due_now, fresh)
+        self.last_links = {"at": iso(utcnow()), "boards": len(boards), "new": len(fresh), "errors": errors}
+        for e in errors:
+            self.errors.append({"at": iso(utcnow()), "board": "new-grad lists", "error": e})
+        return []
+
     def _close_hirebase_reposts(self) -> None:
         """Hirebase jobs stored before reposts were filtered (agency/aggregator links)."""
         from pipeline.hirebase import _REPOST_HOSTS, _REPOSTERS
@@ -360,6 +384,10 @@ class Crawler:
             new_ids += await self._safe(self.poll_hirebase(), {"platform": "feed", "slug": "hirebase"})
         if self.seed_wanted():
             await self._safe(self.poll_seed(), {"platform": "feed", "slug": "seed"})
+        disc = self.config.get("discovery", {}) or {}
+        if utcnow() >= self.next_links and disc.get("seed", True) and \
+                (disc.get("feeds") or {}).get("simplify_new_grad", True):
+            await self._safe(self.poll_links(), {"platform": "feed", "slug": "lists"})
         # Slow platforms (Workday & co.) go one company at a time; take a few per
         # pass so they never hold up the fast Greenhouse/Lever/Ashby checks.
         # Asked for separately, so a backlog of Workday boards can't fill the batch.
@@ -451,6 +479,7 @@ class Crawler:
                           "new_postings": sum(r[4] for r in recent)},
             "http": dict(self.fetcher.stats),
             "next_feed_at": iso(self.next_feed), "last_feed": self.last_feed, "last_hirebase": self.last_hirebase,
+            "last_links": self.last_links,
             "last_seed": self.last_seed or __import__("pipeline.discovery.seed", fromlist=["state"]).state(self._seed_path()),
             "next_discovery_at": iso(self.next_discovery), "last_discovery": self.last_discovery,
             "discovering": bool(self.discovery_task and not self.discovery_task.done()),

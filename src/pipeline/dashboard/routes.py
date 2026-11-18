@@ -113,8 +113,9 @@ def _age(job: dict) -> tuple[float | None, str | None]:
         if posted is not None:
             p = _minutes_since(posted)
             s = _minutes_since(seen)
-            if p < s:                       # the board's own date is more recent? trust the earlier sighting
-                return round(s, 1), "seen"
+            if p > s + 24 * 60:             # posted a day+ before we saw it: we didn't catch it opening
+                # (show the company's date, not ours)
+                return round(p, 1), "posted"
         return round(_minutes_since(seen), 1), "seen"
     if posted:
         return round(_minutes_since(posted), 1), "posted"

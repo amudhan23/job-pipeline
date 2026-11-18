@@ -61,3 +61,38 @@ def test_title_variants_and_mts():
     assert s.passes_title("Member of Technical Staff")
     assert not s.passes_title("Staff Software Engineer") and not s.passes_title("Sr. SWE")
     assert not s.passes_title("Software Engineering Intern")
+
+
+def _gh_job(i, posted):
+    from pipeline.models import ATSPlatform, Job
+    return Job(id=f"gh-{i}", title="Software Engineer", company="Acme", company_slug="acme", location="Remote",
+               url=f"https://x/{i}", platform=ATSPlatform.GREENHOUSE, description="", posted_at=posted)
+
+
+def test_first_read_keeps_fresh_roles_new_and_old_ones_quiet(tmp_path):
+    from pipeline.tracker.db import Tracker
+    t = Tracker(tmp_path / "t.db")
+    now = datetime.now()
+    jobs = [_gh_job(1, now - timedelta(hours=5)), _gh_job(2, now - timedelta(days=20)), _gh_job(3, None)]
+    new, _, _ = t.observe_board("greenhouse", "acme", jobs, baseline=True)
+    assert new == ["gh-1"]                                   # posted 5h ago: genuinely new
+    j1 = t.get_job("gh-1")
+    assert j1["baseline"] == 0 and j1["first_seen_at"].startswith((now - timedelta(hours=5)).isoformat()[:13])
+    assert t.get_job("gh-2")["baseline"] == 1 and t.get_job("gh-3")["baseline"] == 1
+
+
+def test_old_role_that_starts_matching_is_not_new(tmp_path):
+    """Your filters widen: a role posted weeks ago on a watched board isn't 'just opened'."""
+    from pipeline.tracker.db import Tracker
+    t = Tracker(tmp_path / "t.db")
+    now = datetime.now()
+    t.observe_board("greenhouse", "acme", [_gh_job(1, now - timedelta(days=30))], baseline=True)
+    jobs = [_gh_job(1, now - timedelta(days=30)), _gh_job(2, now - timedelta(days=25)), _gh_job(3, now)]
+    new, _, _ = t.observe_board("greenhouse", "acme", jobs)
+    assert new == ["gh-3"]
+    assert t.get_job("gh-2")["baseline"] == 1
+
+
+def test_harvest_links_from_markdown():
+    text = "| Acme | [Apply](https://jobs.ashbyhq.com/acme/123) | <a href=\"https://boards.greenhouse.io/foo/jobs/9\">x</a>"
+    assert seed.harvest_links(text) == {("ashby", "acme"), ("greenhouse", "foo")}

@@ -23,6 +23,14 @@ SEED_URLS = [
     "https://raw.githubusercontent.com/SimplifyJobs/Summer2025-Internships/dev/.github/scripts/listings.json",
 ]
 EVERY = timedelta(days=7)
+
+# Community new-grad lists (markdown, updated through the day). Their apply
+# links name the ATS board; a company new to these lists is read at once.
+LINK_FEEDS = [
+    "https://raw.githubusercontent.com/speedyapply/2026-SWE-College-Jobs/master/README.md",
+    "https://raw.githubusercontent.com/ambicuity/New-Grad-Jobs/master/README.md",
+]
+LINK_EVERY = timedelta(minutes=30)
 STATE = Path("data/seed_state.json")
 
 
@@ -43,6 +51,18 @@ def harvest(listings: list[dict[str, Any]]) -> tuple[set[tuple[str, str]], dict[
         if item.get("company_name"):
             names[key] = item["company_name"]
     return boards, names
+
+
+def harvest_links(text: str) -> set[tuple[str, str]]:
+    """Every scrapable ATS board linked from a page of text."""
+    import re
+    from pipeline.discovery.feeds import _platform_for
+    boards: set[tuple[str, str]] = set()
+    for url in re.findall(r"https?://[^\s)\"'<>\]]+", text):
+        platform, slug = _platform_for(url)
+        if slug:
+            boards.add((platform.value, slug))
+    return boards
 
 
 def state(path: Path = STATE) -> dict[str, Any]:
