@@ -194,7 +194,7 @@ def to_job(h: dict) -> tuple[Any, tuple[str, str] | None]:
     return job, board
 
 
-def fetch_new(config: dict, passes: Callable[[Any], bool] | None = None, private_dir: Path | None = None,
+def fetch_new(config: dict, passes: Callable[[str, str, str], bool] | None = None, private_dir: Path | None = None,
               client: httpx.Client | None = None, now: datetime | None = None) -> dict[str, Any]:
     """One ask. Returns {jobs (not on crawlable boards), boards, returned, error}."""
     s = state(private_dir)
@@ -224,7 +224,7 @@ def fetch_new(config: dict, passes: Callable[[Any], bool] | None = None, private
             out["returned"] += len(hits)
             for h in hits:
                 job, board = to_job(h)
-                if passes is not None and not passes(job):
+                if passes is not None and not passes(job.title, job.location, job.description):
                     continue
                 if board:
                     out["boards"].add(board)

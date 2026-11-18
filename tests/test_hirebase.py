@@ -73,7 +73,7 @@ def test_fetch_counts_usage_and_remembers_where_it_left_off(pdir):  # noqa: F811
         return httpx.Response(200, json={"jobs": [HIT_GH, HIT_ICIMS, HIT_SENIOR] if "geo_locations" in body
                                          and body["location_types"] != ["Remote"] else [],
                                          "total_count": 3, "page": 1, "limit": body["limit"], "total_pages": 1})
-    passes = lambda j: "senior" not in j.title.lower()  # noqa: E731
+    passes = lambda title, location, description="": "senior" not in title.lower()  # noqa: E731
     now = datetime(2026, 11, 17, 18, tzinfo=timezone.utc)
     got = hb.fetch_new(CONFIG, passes, client=httpx.Client(transport=httpx.MockTransport(handler)), now=now)
     assert got["returned"] == 3 and [j.id for j in got["jobs"]] == ["hb-a1", "hb-b2"]
@@ -113,3 +113,16 @@ def test_crawler_registers_boards_and_stores_the_rest(pdir, tmp_path, monkeypatc
     assert c.last_hirebase["new_boards"] == 1
     # The Simplify feed's clean-up doesn't touch Hirebase jobs
     assert "hb-b2" not in tracker.open_feed_ids()
+
+
+def test_with_the_real_scraper_filters(pdir):  # noqa: F811
+    """The same filter the crawler uses (title, location, description)."""
+    from pipeline.orchestrator import Pipeline
+    hb.save_key("hb_" + "z" * 30)
+    cfg = {**CONFIG, "filters": {**CONFIG["filters"], "locations": ["New York", "Remote"]}}
+    passes = next(iter(Pipeline.make_scrapers(cfg).values())).passes_filters
+    body = {"jobs": [HIT_GH, HIT_ICIMS, HIT_SENIOR], "total_count": 3}
+    got = hb.fetch_new(cfg, passes, client=httpx.Client(transport=httpx.MockTransport(
+        lambda r: httpx.Response(200, json=body))))
+    ids = {j.id for j in got["jobs"]}
+    assert "hb-a1" in ids and "hb-b2" in ids and "hb-c3" not in ids      # senior excluded by your filters
