@@ -90,6 +90,8 @@ class Crawler:
         self.last_discovery: dict[str, Any] = {}
         self.last_feed: dict[str, Any] = {}
         self.last_hirebase: dict[str, Any] = {}
+        self.last_seed: dict[str, Any] = {}
+        self.next_seed_try = utcnow()
 
     # ── One board ──────────────────────────────────────────────────────
 
@@ -244,6 +246,46 @@ class Crawler:
             self.new_log.append((iso(utcnow()), i))
         return new_ids
 
+    def _seed_path(self) -> Path:
+        return Path(getattr(self.registry, "db_path", "data/registry.db")).parent / "seed_state.json"
+
+    def seed_wanted(self) -> bool:
+        from pipeline.discovery import seed
+        disc = self.config.get("discovery", {}) or {}
+        if not disc.get("seed", True) or not (disc.get("feeds") or {}).get("simplify_new_grad", True):
+            return False
+        return utcnow() >= self.next_seed_try and seed.due(self._seed_path())
+
+    async def poll_seed(self) -> list[str]:
+        """Add every company that has hired new grads or interns (weekly)."""
+        from pipeline.discovery import seed
+        self.next_seed_try = utcnow() + timedelta(hours=6)     # on failure, try again later
+        boards: set[tuple[str, str]] = set()
+        names: dict[tuple[str, str], str] = {}
+        errors = []
+        for url in seed.SEED_URLS:
+            r = await self.fetcher.get(url)
+            if not r.ok:
+                errors.append(f"{url.split('/')[4]}: {r.error or r.status}")
+                continue
+            try:
+                b, n = await asyncio.to_thread(seed.harvest, r.json())
+            except ValueError as e:
+                errors.append(f"{url.split('/')[4]}: {e}"[:160])
+                continue
+            boards |= b
+            names.update(n)
+        boards = {b for b in boards if b[0] in self.sources}
+        added = await asyncio.to_thread(self.registry.add_many, boards, "seed")
+        await asyncio.to_thread(self.registry.set_names, {k: v for k, v in names.items() if k in boards})
+        self.last_seed = {"at": iso(utcnow()), "boards": len(boards), "new": added, "errors": errors}
+        if boards:
+            seed.save({"boards": len(boards), "new": added, "errors": errors}, self._seed_path())
+        for e in errors:
+            self.errors.append({"at": iso(utcnow()), "board": "seed list", "error": e})
+        logger.info(f"Seed: {len(boards)} company boards, {added} new")
+        return []
+
     def _close_hirebase_reposts(self) -> None:
         """Hirebase jobs stored before reposts were filtered (agency/aggregator links)."""
         from pipeline.hirebase import _REPOST_HOSTS, _REPOSTERS
@@ -316,19 +358,15 @@ class Crawler:
         from pipeline import hirebase
         if hirebase.due():
             new_ids += await self._safe(self.poll_hirebase(), {"platform": "feed", "slug": "hirebase"})
-        due = self.registry.due(iso(now), limit=self.batch)
+        if self.seed_wanted():
+            await self._safe(self.poll_seed(), {"platform": "feed", "slug": "seed"})
         # Slow platforms (Workday & co.) go one company at a time; take a few per
         # pass so they never hold up the fast Greenhouse/Lever/Ashby checks.
+        # Asked for separately, so a backlog of Workday boards can't fill the batch.
         fast = ("greenhouse", "lever", "ashby")
         slow_cap = int((self.config.get("crawler") or {}).get("slow_per_tick", 4))
-        picked, slow = [], 0
-        for b in due:
-            if b.get("platform") in fast:
-                picked.append(b)
-            elif slow < slow_cap:
-                picked.append(b)
-                slow += 1
-        due = picked
+        due = self.registry.due(iso(now), limit=self.batch, platforms=fast) + \
+            self.registry.due(iso(now), limit=slow_cap, exclude=fast)
         results = await asyncio.gather(*(self._safe(self.crawl_board(b), b) for b in due))
         new_ids += [i for r in results for i in r]
         if self.discover_every and utcnow() >= self.next_discovery and \
@@ -413,6 +451,7 @@ class Crawler:
                           "new_postings": sum(r[4] for r in recent)},
             "http": dict(self.fetcher.stats),
             "next_feed_at": iso(self.next_feed), "last_feed": self.last_feed, "last_hirebase": self.last_hirebase,
+            "last_seed": self.last_seed or __import__("pipeline.discovery.seed", fromlist=["state"]).state(self._seed_path()),
             "next_discovery_at": iso(self.next_discovery), "last_discovery": self.last_discovery,
             "discovering": bool(self.discovery_task and not self.discovery_task.done()),
             "recent_new": [{"at": a, "job_id": j} for a, j in list(self.new_log)[-50:]][::-1],

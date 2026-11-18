@@ -116,8 +116,18 @@ class BoardRegistry:
             return True
 
     def add_many(self, boards: set[tuple[str, str]], source: str) -> int:
-        """Record many sightings. Returns how many were new."""
-        return sum(self.add(p, s, source) for p, s in boards)
+        """Record many sightings in one transaction. Returns how many were new."""
+        if not boards:
+            return 0
+        now = datetime.now().isoformat(timespec="seconds")
+        with self._conn() as conn:
+            before = conn.execute("SELECT COUNT(*) FROM boards").fetchone()[0]
+            conn.executemany("INSERT OR IGNORE INTO boards (platform, slug, source, first_seen, last_seen) "
+                             "VALUES (?, ?, ?, ?, ?)", [(p, s, source, now, now) for p, s in boards])
+            conn.executemany("UPDATE boards SET last_seen = ? WHERE platform = ? AND slug = ?",
+                             [(now, p, s) for p, s in boards])
+            after = conn.execute("SELECT COUNT(*) FROM boards").fetchone()[0]
+        return after - before
 
     def active(self, platform: str | None = None) -> list[Board]:
         """Boards that haven't been retired for repeated failures."""
@@ -174,15 +184,22 @@ class BoardRegistry:
 
     # ── Frontier ────────────────────────────────────────────────────────
 
-    def due(self, now: str, limit: int = 50) -> list[dict]:
+    def due(self, now: str, limit: int = 50, platforms: tuple[str, ...] | None = None,
+            exclude: tuple[str, ...] | None = None) -> list[dict]:
         """Active boards whose next read is due, most overdue first
-        (never-read boards first of all)."""
+        (never-read boards first of all). platforms/exclude narrow by ATS."""
+        sql = "SELECT * FROM boards WHERE fail_count < ? AND (next_due_at IS NULL OR next_due_at <= ?)"
+        params: list = [MAX_FAILURES, now]
+        if platforms:
+            sql += f" AND platform IN ({','.join('?' * len(platforms))})"
+            params += list(platforms)
+        if exclude:
+            sql += f" AND platform NOT IN ({','.join('?' * len(exclude))})"
+            params += list(exclude)
+        sql += " ORDER BY next_due_at IS NOT NULL, next_due_at LIMIT ?"
         with self._conn() as conn:
             conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT * FROM boards WHERE fail_count < ? AND (next_due_at IS NULL OR next_due_at <= ?) "
-                "ORDER BY next_due_at IS NOT NULL, next_due_at LIMIT ?",
-                (MAX_FAILURES, now, limit)).fetchall()
+            rows = conn.execute(sql, (*params, limit)).fetchall()
         return [dict(r) for r in rows]
 
     def next_due(self) -> str | None:

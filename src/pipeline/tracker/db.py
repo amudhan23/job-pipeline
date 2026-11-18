@@ -307,6 +307,21 @@ class Tracker:
         conn.close()
         return [dict(r) for r in rows]
 
+    def count_open(self, max_age_hours: float | None = None, seen_within_hours: float = 72) -> int:
+        """How many postings open_jobs would return (without loading them)."""
+        from datetime import timedelta
+        now = datetime.now()
+        where = ["closed_at IS NULL", "COALESCE(last_seen, scraped_at) >= ?"]
+        params: list[Any] = [(now - timedelta(hours=seen_within_hours)).isoformat(timespec="seconds")]
+        if max_age_hours is not None:
+            cut = (now - timedelta(hours=max_age_hours)).isoformat(timespec="seconds")
+            where.append("((COALESCE(baseline, 0) = 0 AND first_seen_at >= ?) OR posted_at >= ?)")
+            params += [cut, cut]
+        conn = self._connect()
+        n = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where)}", params).fetchone()[0]
+        conn.close()
+        return n
+
     def events(self, since: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
         conn = self._connect()
         conn.row_factory = sqlite3.Row

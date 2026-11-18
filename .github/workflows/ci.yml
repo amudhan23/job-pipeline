@@ -93,6 +93,18 @@ jobs:
         run: |
           sleep 20
           docker exec jp python -c "from pipeline.crawler.worker import read_status as r; s=r(); print(s.get('frontier'), s.get('last_hour')); [print('  error:', e.get('board'), e.get('error')) for e in s.get('errors', [])]; assert s.get('updated_at')"
+      - name: Board coverage after a few minutes (live)
+        run: |
+          sleep 150
+          docker exec jp python -c "
+          from pipeline.crawler.worker import read_status as r
+          from pipeline.tracker.db import Tracker
+          s = r(); f = s.get('frontier') or {}
+          print('seed:', s.get('last_seed')); print('frontier:', f); print('last hour:', s.get('last_hour'))
+          t = Tracker(); print('open matching roles:', t.count_open(), '| opened in the last day:', t.count_open(24))
+          for j in t.open_jobs(limit=25): print('  ', j['company'], '|', j['title'], '|', j['location'])
+          assert f.get('boards', 0) > 3000, 'seed did not add the company boards'
+          "
       - name: Logs
         if: always()
         run: docker logs jp 2>&1 | tail -80

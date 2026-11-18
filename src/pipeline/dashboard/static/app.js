@@ -90,8 +90,11 @@ async function setStatus(id, status) {
 
 /* ── Live jobs ───────────────────────────────────────────── */
 
-const feedState = Object.assign({ hours: "24", minScore: 0, fit: "any", sponsor: "any", q: "", hideDone: true, sort: "age" },
+const feedState = Object.assign({ hours: "all", minScore: 0, fit: "any", sponsor: "any", q: "", hideDone: true, sort: "age" },
   store("feed") || {});
+// "Today" used to be the default; it only lists roles that opened since the
+// crawler started, so on a fresh install it looks almost empty
+if (!feedState.v) { feedState.hours = "all"; feedState.v = 2; }
 let feedJobs = [], seenIds = null, notifyOn = store("notify") || false;
 
 async function pageJobs() {
@@ -145,19 +148,27 @@ async function loadFeed() {
   if (seenIds) data.jobs.forEach(j => { if (!seenIds.has(j.id)) fresh.add(j.id); });
   seenIds = new Set(data.jobs.map(j => j.id));
   feedJobs = data.jobs;
-  crawlLine(data.crawler);
+  crawlLine(data.crawler, data.counts);
   renderRibbon();
   renderRows(fresh);
   if (fresh.size && notifyOn) notifyAbout(data.jobs.filter(j => fresh.has(j.id)));
 }
 
-function crawlLine(st) {
+function crawlLine(st, counts) {
   const el = $("#crawl-line");
   if (!el) return;
+  const c = counts || {};
+  const tally = c.open !== undefined ?
+    `${c.open.toLocaleString()} open roles match your filters, ${c.today.toLocaleString()} opened in the last day. ` : "";
   if (st && st.running) {
     const f = st.frontier || {}, h = st.last_hour || {};
-    el.textContent = `Watching ${f.boards || 0} company job boards. ${h.reads || 0} reads and ` +
-      `${h.new_postings || 0} new postings in the last hour.`;
+    const unread = (f.boards || 0) - (f.bootstrapped || 0);
+    const learning = unread > 0 ? ` ${unread.toLocaleString()} boards not read yet.` : "";
+    el.innerHTML = esc(tally) + esc(`Watching ${(f.boards || 0).toLocaleString()} company job boards. ${h.reads || 0} reads and ` +
+      `${h.new_postings || 0} new postings in the last hour.${learning}`) +
+      (feedState.hours !== "all" && c.open > (c.shown || 0) ? ` <a href="#" id="show-all">Show all ${c.open.toLocaleString()} open</a>` : "");
+    const a = $("#show-all");
+    if (a) a.onclick = e => { e.preventDefault(); feedState.hours = "all"; saveFeed(); pageJobs(); };
   } else {
     el.innerHTML = `The crawler isn't running, so this list only changes when you run <code>jobpipe run</code>. ` +
       `Start <code>jobpipe watch</code> to catch jobs minutes after they open.`;
@@ -607,9 +618,21 @@ async function showResume(jobId, title) {
       `<p class="note">No resume has been made for this job yet. Building one takes about 15 seconds.</p>
         <div class="bar"><button class="primary" data-rb="1">Build resume</button><button class="quiet" data-close>Close</button></div>`}`;
     $$("[data-rb]", body).forEach(b => b.onclick = async () => {
-      b.disabled = true; b.textContent = "Building…";
-      try { render(await api(`/api/resume/${encodeURIComponent(jobId)}/build`, { reword: b.dataset.rb === "1" })); }
+      b.disabled = true;
+      const t0 = Date.now();
+      const tick = () => { b.textContent = `Building… ${Math.round((Date.now() - t0) / 1000)}s`; };
+      tick();
+      const timer = setInterval(tick, 1000);
+      try {
+        const res = await Promise.race([
+          api(`/api/resume/${encodeURIComponent(jobId)}/build`, { reword: b.dataset.rb === "1" }),
+          new Promise((_, no) => setTimeout(() => no(new Error(
+            "The build is taking over 3 minutes. Check the terminal running jobpipe serve for an error, " +
+            "and run jobpipe doctor to confirm LaTeX and the AI key work.")), 180000))]);
+        render(res);
+      }
       catch (e) { toast(e.message, true); b.disabled = false; b.textContent = "Try again"; }
+      finally { clearInterval(timer); }
     });
     $$("[data-close]", body).forEach(b => b.onclick = () => dlg.close());
   };

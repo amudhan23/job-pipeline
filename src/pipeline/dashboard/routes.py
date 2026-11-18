@@ -279,7 +279,8 @@ class ApiMixin:
         jobs = t.open_jobs(max_age_hours=max_age, limit=1500)
         pdir = self._pdir()
         cards = [job_card(j, pdir) for j in jobs]
-        return {"jobs": cards, "now": datetime.now().isoformat(timespec="seconds"),
+        counts = {"open": t.count_open(), "today": t.count_open(24), "shown": len(cards)}
+        return {"jobs": cards, "now": datetime.now().isoformat(timespec="seconds"), "counts": counts,
                 "crawler": self._crawler_status(), "can_open_browser": can_open_browser()}
 
     # Needs you: applications the bot prepared that are waiting on you
@@ -603,8 +604,14 @@ class ApiMixin:
         folder = _folder(self._pdir(), job_id)
         for old in list(folder.glob("*Resume.pdf")) + [folder / "tailor.json"] if folder.exists() else []:
             old.unlink(missing_ok=True)
+        import logging
+        import time as _time
+        t0 = _time.time()
+        logging.getLogger(__name__).info(f"Building a resume for {job.get('company')} — {job.get('title')}")
         pdf, note = tailored_resume(job, load_config(None), applicant.load(self._pdir()), folder,
                                     private_dir=self._pdir(), rewrite=reword)
+        logging.getLogger(__name__).info(f"Resume for {job.get('company')}: "
+                                         f"{'built' if pdf else 'failed'} in {_time.time() - t0:.0f}s ({note})")
         if not pdf:
             return {"error": f"The resume didn't build: {note}"}, 400
         return self._resume_info(job_id), 200

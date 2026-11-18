@@ -15,6 +15,24 @@ logger = logging.getLogger(__name__)
 _US_WORDS = ("us", "usa", "u.s.", "united states")
 
 
+def norm_title(text: str) -> str:
+    """Lowercase, and spell the usual variants one way: "Full-Stack" and
+    "Fullstack" → "full stack", "Back-end" → "backend", "SWE" → "software engineer"."""
+    t = re.sub(r"[-_/,|()]+", " ", text.lower())
+    t = re.sub(r"\bfull\s*stack\b", "full stack", t)
+    t = re.sub(r"\bback\s+end\b", "backend", t)
+    t = re.sub(r"\bfront\s+end\b", "frontend", t)
+    t = re.sub(r"\bswe\b", "software engineer", t)
+    t = re.sub(r"\bsde\b", "software development engineer", t)
+    t = re.sub(r"\bsoftware engineering\b", "software engineer", t)
+    t = re.sub(r"\bengineer,?\s+software\b", "software engineer", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+# Job titles that contain an excluded word but aren't senior roles
+_NOT_SENIOR = ("member of technical staff", "technical staff")
+
+
 def _has_word(text: str, word: str) -> bool:
     """Whole-word, case-insensitive match (handles "sr." and "co-op")."""
     return re.search(rf"(?<![a-z0-9]){re.escape(word.lower())}(?![a-z0-9])", text) is not None
@@ -66,13 +84,17 @@ class BaseScraper(ABC):
 
     def passes_title(self, title: str) -> bool:
         """Role keyword present and no exclude keyword (whole words)."""
-        title_lower = title.lower()
+        title_lower = norm_title(title)
         role_keywords = self.filters.get("role_keywords", [])
-        if role_keywords and not any(kw.lower() in title_lower for kw in role_keywords):
+        if role_keywords and not any(norm_title(kw) in title_lower for kw in role_keywords):
             return False
-        # Whole words, so "sr" catches "Sr Software Engineer" but not "Israel"
+        # Whole words, so "sr" catches "Sr Software Engineer" but not "Israel".
+        # "Member of Technical Staff" is the new-grad title at many AI labs.
+        checked = title_lower
+        for phrase in _NOT_SENIOR:
+            checked = checked.replace(phrase, " ")
         exclude = self.filters.get("exclude_keywords", [])
-        return not any(_has_word(title_lower, exc) for exc in exclude)
+        return not any(_has_word(checked, exc) for exc in exclude)
 
     def passes_filters(self, title: str, location: str, description: str = "") -> bool:
         """Check if a job passes the configured filters."""

@@ -64,7 +64,7 @@ class Policy:
 
 
 # Starting estimates: a board a feed just pointed us to is actively hiring
-INITIAL_RATE = {"feed": 2.0, "web": 0.5, "pinned": 1.0, "search": 2.0}
+INITIAL_RATE = {"feed": 2.0, "web": 0.5, "pinned": 1.0, "search": 2.0, "seed": 0.1}
 
 # Companies you searched for by name: never wait longer than this between reads
 WATCHLIST_MAX_SECONDS = 15 * 60

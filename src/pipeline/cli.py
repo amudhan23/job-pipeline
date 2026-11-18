@@ -571,6 +571,26 @@ def boards(ctx: click.Context, platform: str | None, limit: int) -> None:
     console.print(table)
 
 
+@main.command()
+def seed() -> None:
+    """Watch every company that has hired new grads or interns (~4,000 boards).
+
+    The crawler does this by itself once a week; run it to do it now."""
+    from pipeline.discovery import BoardRegistry
+    from pipeline.discovery import seed as seeder
+    registry = BoardRegistry()
+    console.print("Downloading the company lists…")
+    info = seeder.run_sync(registry)
+    for e in info["errors"]:
+        console.print(f"[yellow]{e}[/yellow]")
+    counts = registry.counts()
+    console.print(f"[green]{info['new']} new company boards added[/green] "
+                  f"({info['boards']} in the lists). Now watching {sum(counts.values())}: "
+                  + ", ".join(f"{p} {n}" for p, n in sorted(counts.items())))
+    console.print("The crawler reads each new board once to learn what's already open, "
+                  "then reports roles that open after that.")
+
+
 def _application_keys(j: dict) -> set:
     import re as _re
     from pipeline.apply.filler import application_url

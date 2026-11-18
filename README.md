@@ -62,6 +62,7 @@ jobpipe watch
 | `jobpipe status` | Latest run's stats and top jobs (`--all` for every saved job) |
 | `jobpipe export jobs.csv` | Export to CSV |
 | `jobpipe resume -j JOB_ID` | Generate tailored resume for a job |
+| `jobpipe seed` | Watch every company that has hired new grads or interns (~4,000 boards; the crawler also does this weekly) |
 | `jobpipe seed-h1b` | Seed H-1B database from data/h1b_seed.json |
 | `jobpipe probe SLUG` | Check which ATS a company uses |
 | `jobpipe discover` | Run web discovery on its own and show new companies |
