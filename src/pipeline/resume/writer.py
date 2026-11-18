@@ -315,6 +315,10 @@ metric, tool, scale or outcome. Text inside [confirm: ...] or [add: ...] is a
 note to the applicant, not a fact. Write employer and project names as the
 profile's headings do.
 
+A PLAN made from this job comes with the request. Follow it: its order,
+bullet counts, angles, facts and the technologies to show. The rules below
+fill in anything it leaves open.
+
 WHAT TO PICK.
 - Work experience newest first: always the main full-time job (4-5
   bullets) and internships (2-3 bullets); research roles when they fit the
@@ -337,7 +341,12 @@ HOW TO WRITE A BULLET.
   choices, bugs found) over generic phrases. Never write filler like "in
   fast-paced sprint cycles", "ensuring data integrity at scale",
   "leveraging cutting-edge", "various", "robust", "seamless".
-- Mirror the job's wording only for things the applicant really did.
+- Open each bullet with the part of the work that answers one of this
+  job's requirements, in the job's own words where honest. The same IBM work
+  reads differently for an agents team (production reliability, owning
+  services end to end) than for a data team (query tuning, batch jobs).
+- A project's "stack" shows only the 2-4 technologies this job cares about,
+  never every tool used. Skills list only what's relevant to this job.
 - One to two lines each: 120-200 characters, never more. Cut the why-story;
   keep what, how and the result. Bold the 2-3 terms a
   recruiter scans for (**Java Spring Boot**, **10K+ daily requests**, **40%**).
@@ -374,27 +383,120 @@ RESUME_SCHEMA = _obj({
 }, ["experience", "projects", "skills", "education", "extras", "note"])
 
 
-def draft(job: dict[str, Any], profile: str, private_dir: Path | None = None, client: Any = None) -> dict[str, Any]:
+_PLAN_SYSTEM = """You are a senior technical recruiter and the hiring manager for this job,
+planning one applicant's resume before anyone writes it. Think the way a
+great coach does in a long conversation with the applicant.
+
+1. The job: what will this person actually do in their first six months?
+   Which 4-6 requirements decide the hire (must-haves), which are
+   nice-to-haves, what exact terms does the posting use, and what will the
+   hiring manager worry about (level, startup pace, production ownership)?
+2. Evidence: for each requirement, the applicant's strongest honest evidence
+   in the career profile: which role or project and which specific fact.
+   Mark it strong, partial or none. Never stretch.
+3. The resume: which roles and projects, in what order, how many bullets
+   each, the angle for each (which part of that work to lead with for THIS
+   job) and the profile facts each should use. Pick projects by relevance
+   to this job, not general impressiveness; a project in an unrelated stack
+   goes unless it proves a requirement. The main full-time job always stays.
+4. For each project, the 2-4 technologies to show: only ones this job cares
+   about.
+5. Skills: 3-4 lines grouped and named for this job, only relevant skills
+   the profile has. Leave out unrelated ones (blockchain tooling for a
+   non-blockchain role, say) unless the job asks for them.
+6. Extras (publications, awards): only if they help for this job.
+About 15-17 bullets in total fills one page. Use only the career profile;
+follow its Rules section."""
+
+_REVIEW_SYSTEM = """You are the hiring manager for this job. You have 30 seconds with this
+resume draft, then you fix it before it goes out.
+
+Check, and fix what fails:
+- The top third shows the must-haves from the plan.
+- Every bullet opens with what matters for THIS job. A bullet that is
+  generic, vague or about something this job doesn't care about gets
+  rewritten from a better fact in the career profile, or replaced.
+- Project stacks show 2-4 technologies this job cares about, not every tool.
+- Skills hold only what's relevant here; drop the rest.
+- Terms from the plan's keyword list that the applicant honestly has are
+  present.
+- Bullets are 120-200 characters, specific, with the profile's numbers, the
+  2-3 scan terms bolded, no filler, no em dashes. About 15-17 in total.
+
+Facts: only from the career profile, each under its own role or project;
+follow its Rules. Return the full improved resume. In "note", say in one or
+two sentences what the job needs and what you changed."""
+
+
+def _str_list() -> dict:
+    return {"type": "array", "items": {"type": "string"}}
+
+
+PLAN_SCHEMA = _obj({
+    "job_summary": _STR,
+    "requirements": {"type": "array", "items": _obj(
+        {"need": _STR, "must": {"type": "boolean"}, "evidence": _STR,
+         "strength": {"type": "string", "enum": ["strong", "partial", "none"]}},
+        ["need", "must", "evidence", "strength"])},
+    "keywords": _str_list(),
+    "experience": {"type": "array", "items": _obj(
+        {"company": _STR, "title": _STR, "bullets": {"type": "integer"}, "angle": _STR, "facts": _str_list()},
+        ["company", "title", "bullets", "angle", "facts"])},
+    "projects": {"type": "array", "items": _obj(
+        {"name": _STR, "bullets": {"type": "integer"}, "angle": _STR, "show_stack": _str_list(),
+         "facts": _str_list()},
+        ["name", "bullets", "angle", "show_stack", "facts"])},
+    "skills": {"type": "array", "items": _obj({"label": _STR, "items": _STR}, ["label", "items"])},
+    "extras": _str_list(),
+    "leave_out": _str_list(),
+}, ["job_summary", "requirements", "keywords", "experience", "projects", "skills", "extras", "leave_out"])
+
+
+def _resume_model(private_dir: Path | None) -> str:
     from pipeline.ai import client as ai
+    # Resumes are worth the better model: never Haiku, even if it's your everyday setting
+    model = ai.load_settings(private_dir).get("resume_model", "opus")
+    return "sonnet" if model == "haiku" else model
+
+
+def _system(profile: str, instructions: str) -> list[dict]:
+    # The profile goes first and is cached, so the plan, write and review
+    # calls all reuse it (cache is by prefix)
+    return [{"type": "text", "text": f"<career_profile>\n{profile[:60000]}\n</career_profile>",
+             "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": instructions}]
+
+
+def _job_and_style(job: dict[str, Any], private_dir: Path | None) -> str:
     from pipeline.ai.context import job_block
-    system = [{"type": "text", "text": _SYSTEM},
-              {"type": "text", "text": f"<career_profile>\n{profile[:60000]}\n</career_profile>",
-               "cache_control": {"type": "ephemeral"}}]
+    prompt = job_block(job, limit=12000)
     current = reference_text(private_dir).strip()
-    prompt = job_block(job, limit=10000)
     if current:
         prompt += ("\n\n<reference_resume>\nA resume the applicant likes. Match its STYLE only: how many "
                    "bullets per role, bullet length, tone, how it leads with the job's keywords and what it bolds. "
                    "It is NOT a source of facts: it may overstate things (a title, a location, a skill). Every fact "
                    "must still come from the career profile.\n"
                    f"{current[:8000]}\n</reference_resume>")
-    # Resumes are worth the better model: never Haiku, even if it's your everyday setting
-    model = ai.load_settings(private_dir).get("resume_model", "opus")
-    if model == "haiku":
-        model = "sonnet"
-    reply = ai.complete(system, prompt, purpose=f"resume: {job.get('company')} — {job.get('title', '')[:50]}",
-                        max_tokens=16000, private_dir=private_dir, client=client, thinking=4000,
-                        schema=RESUME_SCHEMA, model=model)
+    return prompt
+
+
+def plan(job: dict[str, Any], profile: str, private_dir: Path | None = None, client: Any = None) -> dict[str, Any]:
+    """Read the job like a recruiter and decide what the resume should say."""
+    from pipeline.ai import client as ai
+    from pipeline.ai.context import job_block
+    reply = ai.complete(_system(profile, _PLAN_SYSTEM), job_block(job, limit=12000),
+                        purpose=f"resume plan: {job.get('company')} — {job.get('title', '')[:50]}",
+                        max_tokens=9000, private_dir=private_dir, client=client, thinking=4000,
+                        schema=PLAN_SCHEMA, model=_resume_model(private_dir))
+    if reply.stop_reason == "max_tokens":
+        raise ValueError("the plan was cut off")
+    out = parse_json(reply.text, private_dir, client)
+    if not out.get("requirements") and not out.get("experience"):
+        raise ValueError("the plan came back empty")
+    return out
+
+
+def _check_draft(reply: Any, private_dir: Path | None, client: Any) -> dict[str, Any]:
     if reply.stop_reason == "max_tokens":
         raise ValueError("the reply was cut off before the resume was finished")
     out = parse_json(reply.text, private_dir, client)
@@ -402,6 +504,36 @@ def draft(job: dict[str, Any], profile: str, private_dir: Path | None = None, cl
     if missing:
         raise ValueError(f"the draft came back without {', '.join(missing)}")
     return out
+
+
+def draft(job: dict[str, Any], profile: str, private_dir: Path | None = None, client: Any = None,
+          the_plan: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Write the resume JSON (from the plan, when there is one)."""
+    from pipeline.ai import client as ai
+    prompt = _job_and_style(job, private_dir)
+    if the_plan:
+        prompt += f"\n\n<plan>\n{json.dumps(the_plan, indent=1)[:12000]}\n</plan>"
+    reply = ai.complete(_system(profile, _SYSTEM), prompt,
+                        purpose=f"resume: {job.get('company')} — {job.get('title', '')[:50]}",
+                        max_tokens=12000, private_dir=private_dir, client=client,
+                        thinking=0 if the_plan else 4000, schema=RESUME_SCHEMA, model=_resume_model(private_dir))
+    return _check_draft(reply, private_dir, client)
+
+
+def review(job: dict[str, Any], profile: str, the_plan: dict[str, Any] | None, resume: dict[str, Any],
+           private_dir: Path | None = None, client: Any = None) -> dict[str, Any]:
+    """Read the draft as the hiring manager and return the fixed version."""
+    from pipeline.ai import client as ai
+    from pipeline.ai.context import job_block
+    prompt = job_block(job, limit=12000)
+    if the_plan:
+        prompt += f"\n\n<plan>\n{json.dumps(the_plan, indent=1)[:12000]}\n</plan>"
+    prompt += f"\n\n<draft>\n{json.dumps(resume, indent=1)}\n</draft>"
+    reply = ai.complete(_system(profile, _REVIEW_SYSTEM), prompt,
+                        purpose=f"resume review: {job.get('company')} — {job.get('title', '')[:50]}",
+                        max_tokens=12000, private_dir=private_dir, client=client, thinking=3000,
+                        schema=RESUME_SCHEMA, model=_resume_model(private_dir))
+    return _check_draft(reply, private_dir, client)
 
 
 def parse_json(text: str, private_dir: Path | None = None, client: Any = None) -> dict:
@@ -610,10 +742,29 @@ def fit_one_page(resume: dict[str, Any], details: dict[str, str], out: Path) -> 
 def write_resume(job: dict[str, Any], details: dict[str, str], folder: Path, filename: str,
                  private_dir: Path | None = None, client: Any = None) -> tuple[Path | None, dict[str, Any]]:
     """Draft → check against the profile → fit one page. Returns (pdf, info)."""
+    import logging
+    log = logging.getLogger(__name__)
     profile = load_profile(private_dir)
-    raw = draft(job, profile, private_dir, client)
+    from pipeline.ai.context import ensure_description
+    job = ensure_description(job)
+    the_plan, steps = None, []
+    try:                                   # 1. read the job and decide what to say
+        the_plan = plan(job, profile, private_dir, client)
+        steps.append("planned")
+    except Exception as e:                 # write without a plan rather than not at all
+        log.warning(f"resume plan failed: {e}")
+        steps.append(f"no plan ({e})"[:120])
+    raw = draft(job, profile, private_dir, client, the_plan)      # 2. write it
+    steps.append("written")
+    try:                                   # 3. the hiring manager's pass
+        raw = review(job, profile, the_plan, raw, private_dir, client)
+        steps.append("reviewed")
+    except Exception as e:
+        log.warning(f"resume review failed: {e}")
+        steps.append(f"not reviewed ({e})"[:120])
     clean, dropped = check(raw, profile)
     if not clean["experience"]:
         return None, {"error": "nothing in the draft passed the profile check", "dropped": dropped}
     pdf, trimmed = fit_one_page(clean, details, folder / filename)
-    return pdf, {"note": clean.get("note", ""), "dropped": dropped, "trimmed": trimmed, "resume": clean}
+    return pdf, {"note": clean.get("note", ""), "dropped": dropped, "trimmed": trimmed, "resume": clean,
+                 "plan": the_plan, "steps": steps, "had_description": bool((job.get("description") or "").strip())}

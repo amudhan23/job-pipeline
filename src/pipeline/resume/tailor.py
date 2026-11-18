@@ -254,7 +254,9 @@ def tailored_resume(job: dict[str, Any], config: dict[str, Any], details: dict[s
                 note += f" Dropped {n} line{'s' if n > 1 else ''} the profile didn't support."
             info.write_text(json.dumps({"note": note, "by": "profile", "pdf_name": name,
                                         "dropped": meta.get("dropped", []), "trimmed": meta.get("trimmed", []),
-                                        "resume": meta.get("resume"),
+                                        "resume": meta.get("resume"), "plan": meta.get("plan"),
+                                        "steps": meta.get("steps", []),
+                                        "had_description": meta.get("had_description", True),
                                         "built_at": __import__("datetime").datetime.now()
                                         .isoformat(timespec="seconds")}, indent=2))
             return built, note

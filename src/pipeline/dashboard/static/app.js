@@ -604,6 +604,15 @@ async function showResume(jobId, title) {
         <div class="bar" style="margin-top:6px"><a class="btn" href="${esc(r.file)}" target="_blank">Open the PDF</a>
         <button data-rb="1">Rebuild</button><button data-rb="0" class="quiet">Rebuild without rewording</button>
         <button class="quiet" data-close style="margin-left:auto">Close</button></div>
+        ${r.had_description === false ? `<p class="note warn">This job had no description to read, so the resume is
+          aimed at the title only. Paste the description below and rebuild.</p>` : ""}
+        ${r.had_description === false ? `<textarea id="rb-jd" class="profile-text" style="min-height:120px"
+          placeholder="Paste the job description here"></textarea>` : ""}
+        ${r.plan ? `<h2>What the job needs</h2><p class="note">${esc(r.plan.job_summary || "")}</p>
+          ${(r.plan.requirements || []).map(q => `<div class="change"><div class="before"><b>${q.must ? "Must" : "Nice"}:</b>
+            ${esc(q.need)}</div><div class="${q.strength === "none" ? "kept-no" : "after"}">${esc(q.strength)}: ${esc(q.evidence)}</div></div>`).join("")}
+          ${(r.plan.leave_out || []).length ? `<p class="note">Left out for this job: ${r.plan.leave_out.map(esc).join("; ")}</p>` : ""}` : ""}
+        ${(r.steps || []).length ? `<p class="note">Steps: ${r.steps.map(esc).join(" → ")}</p>` : ""}
         ${r.by === "profile" ? `<p class="note">Written from your career profile and checked line by line against it.</p>
           ${(r.dropped || []).length ? `<h2>Left out by the fact check</h2>${r.dropped.map(d => `<div class="change">
             <div class="before">${esc(d.where)}: ${esc(d.line)}</div><div class="kept-no">${esc(d.why)}</div></div>`).join("")}` :
@@ -616,7 +625,9 @@ async function showResume(jobId, title) {
           ${c.kept ? `<div class="after">${esc(c.after)}</div>` : `<div class="kept-no">Kept the original: the rewrite ${esc(c.why)}.</div>`}</div>`).join("")}` :
           r.by === "profile" ? "" : `<p class="note">No bullet was reworded; they're chosen and ordered for the job.</p>`}` :
       `${r.last_error ? `<p class="note warn" id="rb-err">The last build failed: ${esc(r.last_error)}</p>` :
-          `<p class="note" id="rb-err">No resume has been made for this job yet. Building one takes about a minute.</p>`}
+          `<p class="note" id="rb-err">No resume has been made for this job yet. Building one takes 2-4 minutes: it reads the job, writes, then reviews as the hiring manager.</p>`}
+        <details class="note"><summary>Paste the job description (if the posting's text didn't come through)</summary>
+          <textarea id="rb-jd" class="profile-text" style="min-height:120px" placeholder="Paste the job description here"></textarea></details>
         <div class="bar"><button class="primary" data-rb="1">${r.last_error ? "Try again" : "Build resume"}</button>
         <button class="quiet" data-close>Close</button></div>`}`;
     $$("[data-rb]", body).forEach(b => b.onclick = async () => {
@@ -627,7 +638,8 @@ async function showResume(jobId, title) {
       const timer = setInterval(tick, 1000);
       try {
         const res = await Promise.race([
-          api(`/api/resume/${encodeURIComponent(jobId)}/build`, { reword: b.dataset.rb === "1" }),
+          api(`/api/resume/${encodeURIComponent(jobId)}/build`,
+              { reword: b.dataset.rb === "1", description: ($("#rb-jd", body) || {}).value || "" }),
           new Promise((_, no) => setTimeout(() => no(new Error(
             "The build is taking over 9 minutes. Check the terminal running jobpipe serve for an error, " +
             "and run jobpipe doctor to confirm LaTeX and the AI key work.")), 540000))]);

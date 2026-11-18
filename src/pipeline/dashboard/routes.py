@@ -478,7 +478,8 @@ class ApiMixin:
             return {"started": True}, 200
         m = re.fullmatch(r"/api/resume/([A-Za-z0-9_.:-]+)/build", path)
         if m:
-            return self._resume_build(m.group(1), bool(data.get("reword", True)))
+            return self._resume_build(m.group(1), bool(data.get("reword", True)),
+                                      str(data.get("description") or "")[:30000])
         return None
 
     # ── Search ─────────────────────────────────────────────────────────
@@ -601,7 +602,7 @@ class ApiMixin:
         return {"exists": bool(pdf), "file": _file_url(job_id, str(pdf)) if pdf else None,
                 "last_error": last_error, **data}
 
-    def _resume_build(self, job_id: str, reword: bool):
+    def _resume_build(self, job_id: str, reword: bool, description: str = ""):
         from pipeline import applicant
         from pipeline.resume.tailor import tailored_resume
         from pipeline.utils.config import load_config
@@ -609,6 +610,12 @@ class ApiMixin:
         if not job:
             return {"error": "no such job"}, 404
         folder = _folder(self._pdir(), job_id)
+        pasted = folder / "job_description.txt"       # a description you pasted, kept for rebuilds
+        if description.strip():
+            folder.mkdir(parents=True, exist_ok=True)
+            pasted.write_text(description.strip())
+        if pasted.exists() and len(pasted.read_text().split()) > len((job.get("description") or "").split()):
+            job = {**job, "description": pasted.read_text()}
         for old in list(folder.glob("*Resume.pdf")) + [folder / "tailor.json", folder / "last_error.txt"] \
                 if folder.exists() else []:
             old.unlink(missing_ok=True)

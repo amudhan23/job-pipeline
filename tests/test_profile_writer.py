@@ -143,7 +143,8 @@ def test_write_resume_builds_one_page(tmp_path):
     tex = pdf.with_suffix(".tex").read_text()
     assert "Kubernetes" not in tex and "Moon Lander" not in tex and r"\textbf{50,000-line}" in tex
     assert info["dropped"]
-    assert "<career_profile>" in fake.calls[0]["system"][1]["text"]
+    assert "<career_profile>" in fake.calls[0]["system"][0]["text"]       # first, so it's cached across calls
+    assert fake.calls[0]["system"][0].get("cache_control")
 
 
 @pytest.mark.skipif(not shutil.which("pdflatex"), reason="needs pdflatex")
@@ -186,7 +187,7 @@ def test_no_bullet_bank_resume_when_the_writer_fails(tmp_path):
     pdf, note = tailored_resume(job, {}, {"first_name": "T", "last_name": "P"}, tmp_path / "job",
                                 private_dir=tmp_path, client=fake)
     assert pdf is None and "resume writer failed" in note
-    assert len(fake.calls) == 2                       # retried once
+    assert len(fake.calls) == 4                       # plan + write, retried once
     assert fake.calls[0].get("thinking", {}).get("type") == "enabled"
     assert not list((tmp_path / "job").glob("*.pdf")) if (tmp_path / "job").exists() else True
 
@@ -276,3 +277,51 @@ def test_reference_resume_is_style_only(tmp_path):
         appl.resume_text = orig
     prompt = fake.calls[-1]["messages"][0]["content"]
     assert "REFERENCE STYLE TEXT" in prompt and "NOT a source of facts" in prompt
+
+
+
+class Scripted(FakeClient):
+    """Answers each call with the next reply in a list."""
+    def __init__(self, replies):
+        super().__init__()
+        self.replies = list(replies)
+
+    def create(self, **kw):
+        self.text = self.replies.pop(0)
+        return super().create(**kw)
+
+
+@pytest.mark.skipif(not shutil.which("pdflatex"), reason="needs pdflatex")
+def test_plan_then_write_then_review(tmp_path):
+    w.save_profile(PROFILE, tmp_path)
+    ai.save_key(KEY, tmp_path)
+    the_plan = {"job_summary": "Backend for payments", "requirements": [
+        {"need": "Java services in production", "must": True, "evidence": "IBM Spring Boot", "strength": "strong"}],
+        "keywords": ["Spring Boot"], "experience": [], "projects": [], "skills": [], "extras": [],
+        "leave_out": ["blockchain projects"]}
+    reviewed = json.loads(json.dumps(GOOD_AND_BAD))
+    reviewed["note"] = "REVIEWED"
+    fake = Scripted([json.dumps(the_plan), json.dumps(GOOD_AND_BAD), json.dumps(reviewed)])
+    job = {"company": "Acme", "title": "Backend Engineer", "description": "Java, Spring Boot, Redis. " * 30}
+    pdf, info = w.write_resume(job, {"first_name": "T"}, tmp_path / "out", "Resume.pdf", tmp_path, fake)
+    assert pdf and info["steps"] == ["planned", "written", "reviewed"]
+    assert info["note"] == "REVIEWED" and info["plan"]["requirements"][0]["strength"] == "strong"
+    assert "Backend for payments" in fake.calls[1]["messages"][0]["content"]          # the plan reached the writer
+    assert "<draft>" in fake.calls[2]["messages"][0]["content"]                      # the reviewer saw the draft
+    assert fake.calls[0]["extra_body"]["output_config"]["format"]["schema"]["required"][0] == "job_summary"
+    assert all(c["system"][0]["text"] == fake.calls[0]["system"][0]["text"] for c in fake.calls)   # cache reuse
+
+
+def test_missing_description_is_fetched(monkeypatch):
+    from pipeline.ai import context
+    import httpx
+
+    class R:
+        status_code = 200
+        headers = {"content-type": "text/html"}
+        text = "<html><script>x()</script><main>" + "Build agents that run for hours. " * 20 + "</main></html>"
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: R())
+    job = context.ensure_description({"title": "Founding Engineer", "url": "https://jobs.example.com/1"})
+    assert "agents that run for hours" in job["description"] and "x()" not in job["description"]
+    full = {"description": "word " * 100, "url": "https://x"}
+    assert context.ensure_description(full) is full

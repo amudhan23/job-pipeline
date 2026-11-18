@@ -38,6 +38,26 @@ def job_block(job: dict[str, Any], limit: int = 8000) -> str:
             f"Location: {job.get('location', '')}\nDescription: {jd or '(not available)'}\n</job>")
 
 
+def ensure_description(job: dict[str, Any]) -> dict[str, Any]:
+    """The job with its description; fetches the posting page when the feed
+    that found it didn't carry one (SimplifyJobs listings have none)."""
+    if len(re.sub(r"<[^>]+>", " ", job.get("description") or "").split()) >= 60 or not job.get("url"):
+        return job
+    try:
+        import httpx
+        r = httpx.get(job["url"], timeout=20, follow_redirects=True,
+                      headers={"User-Agent": "Mozilla/5.0 (jobpipe resume writer)"})
+        if r.status_code != 200 or "html" not in r.headers.get("content-type", "html"):
+            return job
+        html = re.sub(r"(?is)<(script|style|noscript|svg|header|footer|nav)[^>]*>.*?</\1>", " ", r.text)
+        text = " ".join(re.sub(r"<[^>]+>", " ", html).split())
+        if len(text.split()) >= 60:
+            return {**job, "description": text[:15000]}
+    except Exception:
+        pass
+    return job
+
+
 def load_resume_text(private_dir: Path | None = None) -> str:
     from pipeline import applicant
     from pipeline.ai.client import _pdir
