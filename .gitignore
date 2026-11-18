@@ -45,3 +45,6 @@ data/crawler_status.json
 data/*.tmp
 data/*.db-wal
 data/*.db-shm
+
+# Your career profile is private: keep it in data/private (jobpipe profile set)
+career_profile*.md

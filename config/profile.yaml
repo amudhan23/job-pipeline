@@ -16,6 +16,7 @@ profile:
   locations:
     - "New York, NY"
     - "San Francisco, CA"
+    - "Fremont, CA"
     - "Remote"
 
 # ── Search Filters ──
@@ -36,6 +37,17 @@ filters:
     - "San Francisco"
     - "SF"
     - "Bay Area"
+    - "Fremont"
+    - "San Jose"
+    - "Sunnyvale"
+    - "Santa Clara"
+    - "Mountain View"
+    - "Palo Alto"
+    - "Menlo Park"
+    - "Redwood City"
+    - "Cupertino"
+    - "Milpitas"
+    - "Oakland"
     - "Remote"
   exclude_keywords:          # matched as whole words in the title
     - "senior"
