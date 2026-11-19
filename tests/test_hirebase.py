@@ -58,7 +58,7 @@ def test_allowance_lasts_the_month():
 def test_mapping_and_filters(pdir):  # noqa: F811
     job, board = hb.to_job(HIT_GH)
     assert board == ("greenhouse", "speechify") and job.platform.value == "greenhouse"
-    assert job.description.startswith("Visa sponsorship: offered") and job.posted_at.day == 17
+    assert job.description.startswith("Visa sponsorship: offered") and job.posted_at.date().isoformat() == _TODAY
     job2, board2 = hb.to_job(HIT_ICIMS)
     assert board2 is None and job2.platform.value == "other" and "Remote" in job2.location and job2.id == "hb-b2"
 
