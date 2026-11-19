@@ -392,6 +392,15 @@ class Tracker:
         conn.close()
         return dict(row) if row else None
 
+    def get_job_by_url(self, url: str) -> dict[str, Any] | None:
+        """The saved job that points at this posting, if any."""
+        conn = self._connect()
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM jobs WHERE url = ? OR url = ? LIMIT 1",
+                           (url, url.rstrip("/"))).fetchone()
+        conn.close()
+        return dict(row) if row else None
+
     def _scope(self, run_id: int | None) -> tuple[str, list[Any]]:
         """WHERE clause for a run scope. run_id=None means all saved jobs."""
         return ("WHERE run_id = ?", [run_id]) if run_id is not None else ("WHERE 1=1", [])

@@ -421,21 +421,41 @@ def serve(ctx: click.Context, port: int, host: str, no_auto: bool) -> None:
 
 
 @main.command()
-@click.option("--job-id", "-j", required=True, help="Job ID to generate resume for")
+@click.option("--job-id", "-j", default=None, help="A job the crawler found (see `jobpipe status`)")
+@click.option("--url", "-u", default=None, help="Any posting URL, found by the crawler or not")
+@click.option("--jd", type=click.Path(exists=True, dir_okay=False), default=None,
+              help="A file with the job description (when the page needs a login or you pasted it)")
+@click.option("--company", default="", help="Company name (default: from the posting)")
+@click.option("--title", default="", help="Role title (default: from the posting)")
 @click.option("--output-dir", "-o", default=None, help="Where to write it (default: the job's application folder)")
-@click.option("--ai/--no-ai", "use_ai", default=True, help="Let Claude arrange it (default: on with a key)")
+@click.option("--ai/--no-ai", "use_ai", default=True, help="Let Claude write it (default: on with a key)")
 @click.option("--reword/--no-reword", default=True, help="Reword bullets toward the job (fact-guarded)")
 @click.pass_context
-def resume(ctx: click.Context, job_id: str, output_dir: str | None, use_ai: bool, reword: bool) -> None:
-    """Build a resume arranged for one job (bullets, projects, languages).
-    Only reorders and selects what's in your resume — nothing is rewritten."""
+def resume(ctx: click.Context, job_id: str | None, url: str | None, jd: str | None, company: str,
+           title: str, output_dir: str | None, use_ai: bool, reword: bool) -> None:
+    """Write the resume for one job: --job-id for one the crawler found, or
+    --url for any posting. With a career profile it is written from the
+    profile for this job's needs; without one it is arranged from your resume."""
     import json as _json
     import re as _re
     from pipeline import applicant
+    from pipeline.ai.context import job_from_url
     from pipeline.resume.tailor import tailored_resume
-    job = Tracker().get_job(job_id)
-    if not job:
-        raise click.ClickException(f"Job {job_id} not found")
+    if not job_id and not url:
+        raise click.ClickException("give --job-id or --url")
+    if job_id:
+        job = Tracker().get_job(job_id)
+        if not job:
+            raise click.ClickException(f"Job {job_id} not found")
+        if jd:
+            job = {**job, "description": Path(jd).read_text(errors="replace")}
+    else:
+        job = job_from_url(url, company, title, Path(jd).read_text(errors="replace") if jd else "",
+                           tracker=Tracker())
+    if len((job.get("description") or "").split()) < 60:
+        console.print("[yellow]No job description could be read from the posting; pass one with --jd FILE "
+                      "for a resume written to the job.[/yellow]")
+    job_id = job["id"]
     folder = Path(output_dir) if output_dir else \
         applicant.PRIVATE_DIR / "applications" / _re.sub(r"[^A-Za-z0-9_.-]", "_", job_id)
     for stale in (folder / "tailor.json",):          # an explicit request always rebuilds
@@ -447,9 +467,19 @@ def resume(ctx: click.Context, job_id: str, output_dir: str | None, use_ai: bool
     if not pdf:
         raise click.ClickException(f"Resume not built: {note}")
     info = _json.loads((folder / "tailor.json").read_text())
-    console.print(f"[bold green]Built {pdf}[/bold green]  ({'Claude' if info['by'] == 'ai' else 'keyword rules'})")
+    how = {"profile": "written from your career profile", "ai": "arranged by Claude"}.get(info.get("by"), "keyword rules")
+    console.print(f"[bold green]Built {pdf}[/bold green]  ({how})")
     console.print(f"  {note}")
-    console.print(f"  [dim]projects: {', '.join(info['projects'])} · languages: {', '.join(info['languages'][:4])}…[/dim]")
+    if info.get("by") == "profile":
+        console.print(f"  [dim]steps: {' → '.join(info.get('steps') or [])}"
+                      f"{'' if info.get('had_description', True) else ' · no job description was available'}[/dim]")
+        if info.get("dropped"):
+            console.print(f"  [yellow]dropped (not in your profile):[/yellow] " + " | ".join(info["dropped"])[:600])
+        if info.get("trimmed"):
+            console.print(f"  [dim]trimmed to fit one page: {len(info['trimmed'])} lines[/dim]")
+    else:
+        console.print(f"  [dim]projects: {', '.join(info.get('projects', []))} · "
+                      f"languages: {', '.join(info.get('languages', [])[:4])}…[/dim]")
     for c in info.get("changes", []):
         if "error" in c:
             console.print(f"  [yellow]rewording skipped: {c['error']}[/yellow]")

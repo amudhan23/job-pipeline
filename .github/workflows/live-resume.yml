@@ -1,0 +1,141 @@
+# Write one resume with the real Claude API, from your real career profile,
+# for any posting — so the writer can be judged on real output, not fakes.
+#
+# Run it from the Actions tab ("live resume" → Run workflow) with a posting
+# URL. The PDF, the plan Claude made from the job, and the build log come
+# back as a run artifact. Because this repository is public, the bundle is
+# encrypted with ARTIFACT_PASSPHRASE before upload; nothing from your profile
+# is printed to the log.
+#
+# Repository secrets (Settings → Secrets and variables → Actions):
+#   ANTHROPIC_API_KEY      your Claude API key
+#   CAREER_PROFILE         the full text of data/private/career_profile.md
+#   ARTIFACT_PASSPHRASE    any phrase; used to encrypt the result bundle
+#   APPLICANT_JSON         optional: data/private/applicant.json (name, links, location)
+#   REFERENCE_RESUME_B64   optional: base64 of a resume whose style you like
+#
+# Decrypt a downloaded bundle with:
+#   openssl enc -d -aes-256-cbc -pbkdf2 -in resume.enc | tar xz
+
+name: live resume
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Posting URL"
+        required: true
+      company:
+        description: "Company (default: read from the posting)"
+        required: false
+        default: ""
+      title:
+        description: "Role title (default: read from the posting)"
+        required: false
+        default: ""
+      jd:
+        description: "Job description text, when the page can't be read"
+        required: false
+        default: ""
+      model:
+        description: "Resume model"
+        required: false
+        default: "opus"
+        type: choice
+        options: [opus, sonnet]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-resume
+  cancel-in-progress: false
+
+jobs:
+  write:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: LaTeX
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends texlive-latex-base texlive-latex-extra texlive-fonts-recommended poppler-utils
+      - name: Install
+        run: pip install -e '.[ai]'
+
+      - name: Private files from secrets
+        env:
+          CAREER_PROFILE: ${{ secrets.CAREER_PROFILE }}
+          APPLICANT_JSON: ${{ secrets.APPLICANT_JSON }}
+          REFERENCE_RESUME_B64: ${{ secrets.REFERENCE_RESUME_B64 }}
+          ARTIFACT_PASSPHRASE: ${{ secrets.ARTIFACT_PASSPHRASE }}
+          MODEL: ${{ inputs.model }}
+        run: |
+          set -e
+          if [ -z "$CAREER_PROFILE" ]; then echo "::error::CAREER_PROFILE secret is not set"; exit 1; fi
+          if [ -z "${{ secrets.ANTHROPIC_API_KEY }}" ]; then echo "::error::ANTHROPIC_API_KEY secret is not set"; exit 1; fi
+          if [ -z "$ARTIFACT_PASSPHRASE" ]; then echo "::error::ARTIFACT_PASSPHRASE secret is not set"; exit 1; fi
+          mkdir -p data/private
+          printf '%s\n' "$CAREER_PROFILE" > data/private/career_profile.md
+          if [ -n "$APPLICANT_JSON" ]; then printf '%s\n' "$APPLICANT_JSON" > data/private/applicant.json; fi
+          if [ -n "$REFERENCE_RESUME_B64" ]; then
+            echo "$REFERENCE_RESUME_B64" | base64 -d > /tmp/reference.pdf
+            jobpipe profile reference /tmp/reference.pdf > /dev/null
+          fi
+          printf '{"model": "sonnet", "resume_model": "%s", "monthly_budget": 10.0, "enabled": true}\n' "$MODEL" > data/private/ai_settings.json
+          echo "profile: $(wc -l < data/private/career_profile.md) lines; reference: $([ -n "$REFERENCE_RESUME_B64" ] && echo yes || echo no); model: $MODEL"
+
+      - name: Write the resume
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          URL: ${{ inputs.url }}
+          COMPANY: ${{ inputs.company }}
+          TITLE: ${{ inputs.title }}
+          JD: ${{ inputs.jd }}
+        run: |
+          mkdir -p out
+          args=(--url "$URL" -o out)
+          [ -n "$COMPANY" ] && args+=(--company "$COMPANY")
+          [ -n "$TITLE" ] && args+=(--title "$TITLE")
+          if [ -n "$JD" ]; then printf '%s\n' "$JD" > /tmp/jd.txt; args+=(--jd /tmp/jd.txt); fi
+          # Everything the writer says goes into the bundle, not the public log.
+          set +e
+          jobpipe resume "${args[@]}" > out/build.log 2>&1
+          rc=$?
+          set -e
+          echo "exit $rc" >> out/build.log
+          ls out
+          if ls out/*.pdf > /dev/null 2>&1; then
+            echo "built: $(ls out/*.pdf | head -1 | xargs basename) ($(pdfinfo out/*.pdf 2>/dev/null | awk '/^Pages/ {print $2}') page)"
+          else
+            echo "::error::no PDF was built — see build.log in the bundle"
+          fi
+          echo "$rc" > out/exit_code
+
+      - name: Encrypt
+        if: always()
+        env:
+          ARTIFACT_PASSPHRASE: ${{ secrets.ARTIFACT_PASSPHRASE }}
+        run: |
+          mkdir -p out
+          tar czf - -C out . | openssl enc -aes-256-cbc -pbkdf2 -pass env:ARTIFACT_PASSPHRASE -out resume.enc
+          ls -l resume.enc
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: resume-${{ github.run_number }}
+          path: resume.enc
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Result
+        if: always()
+        run: |
+          rc=$(cat out/exit_code 2>/dev/null || echo 1)
+          [ "$rc" = "0" ] || exit "$rc"

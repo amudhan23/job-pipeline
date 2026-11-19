@@ -58,6 +58,49 @@ def ensure_description(job: dict[str, Any]) -> dict[str, Any]:
     return job
 
 
+def job_from_url(url: str, company: str = "", title: str = "", description: str = "",
+                 tracker: Any = None) -> dict[str, Any]:
+    """A job record for a posting the crawler may never have seen: the saved
+    job when the URL is known, otherwise built from the page (its <title>
+    fills in company/title when they weren't given)."""
+    url = url.strip()
+    saved = tracker.get_job_by_url(url) if tracker is not None else None
+    job: dict[str, Any] = dict(saved) if saved else {
+        "id": "adhoc_" + re.sub(r"[^A-Za-z0-9]+", "_", re.sub(r"^https?://(www\.)?", "", url))[:60].strip("_"),
+        "url": url, "company": "", "title": "", "location": "", "description": "", "source": "adhoc"}
+    if company:
+        job["company"] = company
+    if title:
+        job["title"] = title
+    if description.strip():
+        job["description"] = description.strip()
+    job = ensure_description(job)
+    if not (job.get("company") and job.get("title")):
+        head = _page_title(url)
+        if head:
+            # Most boards title the page "Role - Company" or "Company - Role"; the
+            # writer only needs both names somewhere, so a guess is good enough.
+            parts = [p.strip() for p in re.split(r"\s[-|–—@]\s|\s+at\s+", head) if p.strip()]
+            if len(parts) >= 2:
+                job.setdefault("title", "")
+                job["title"] = job["title"] or parts[0]
+                job["company"] = job["company"] or parts[-1]
+            else:
+                job["title"] = job["title"] or head
+    return job
+
+
+def _page_title(url: str) -> str:
+    try:
+        import httpx
+        r = httpx.get(url, timeout=20, follow_redirects=True,
+                      headers={"User-Agent": "Mozilla/5.0 (jobpipe resume writer)"})
+        m = re.search(r"(?is)<title[^>]*>(.*?)</title>", r.text)
+        return " ".join(re.sub(r"<[^>]+>", " ", m.group(1)).split())[:150] if m else ""
+    except Exception:
+        return ""
+
+
 def load_resume_text(private_dir: Path | None = None) -> str:
     from pipeline import applicant
     from pipeline.ai.client import _pdir
