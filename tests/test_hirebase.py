@@ -14,11 +14,12 @@ CONFIG = {"profile": {"locations": ["New York, NY", "San Francisco, CA", "Remote
                       "exclude_keywords": ["senior", "staff"]}}
 
 HIT_GH = {"_id": "a1", "job_title": "Software Engineer, Payments", "company_name": "Speechify", "company_slug": "speechify",
-          "application_link": "https://job-boards.greenhouse.io/speechify/jobs/5975137004", "date_posted": "2026-11-17",
+          "application_link": "https://job-boards.greenhouse.io/speechify/jobs/5975137004", "date_posted": _TODAY,
           "location_type": "Hybrid", "location_raw": "New York, NY", "visa_sponsored": True, "job_board": "greenhouse",
           "description": "Build payment rails.", "requirements_summary": "3+ years Java."}
+_TODAY = __import__("datetime").date.today().isoformat()   # a role posted today is "new"
 HIT_ICIMS = {"_id": "b2", "job_title": "Backend Engineer", "company_name": "Globex", "company_slug": "globex",
-             "application_link": "https://careers-globex.icims.com/jobs/123/job", "date_posted": "2026-11-16",
+             "application_link": "https://careers-globex.icims.com/jobs/123/job", "date_posted": _TODAY,
              "location_type": "Remote", "locations": [{"city": "Austin", "region": "Texas", "country": "United States"}],
              "visa_sponsored": False, "job_board": "iCIMS", "description": "APIs."}
 HIT_SENIOR = {**HIT_ICIMS, "_id": "c3", "job_title": "Senior Backend Engineer"}
