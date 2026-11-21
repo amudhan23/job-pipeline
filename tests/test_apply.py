@@ -655,3 +655,14 @@ def test_place_search_text_box_takes_a_suggestion():
     loc = next(f for f in report.filled if f.label.startswith("Current location"))
     assert loc.value == "New York, NY, USA"
     assert not any(f.label.startswith("Current location") for f in report.needs_attention)
+
+
+@pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
+def test_bare_consent_box_is_named_by_its_sentence():
+    """Workable's privacy tick has no <label>; it used to be reported as
+    '(unlabelled field)' or, worse, take the nearest unrelated label."""
+    page = Path(__file__).parent / "fixtures" / "forms" / "bare_consent.html"
+    report, _, _ = _fill(page, {"first_name": "A", "last_name": "B"})
+    assert [f.label for f in report.filled] == ["Name*"]
+    box = next(f for f in report.needs_attention if f.kind == "checkbox")
+    assert box.label.startswith("I have read and agree") and "legal consent" in box.source

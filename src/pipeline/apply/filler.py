@@ -86,6 +86,16 @@ _HELPERS_JS = r"""
     if (wrap && txt(wrap.innerText)) return txt(wrap.innerText);
     const fs = el.closest('fieldset');
     if (fs && fs.querySelector('legend')) return txt(fs.querySelector('legend').innerText);
+    if (el.type === 'checkbox' || el.type === 'radio') {
+      // A bare box with its sentence beside it and no label element (Workable's
+      // privacy tick): the sentence is the label, as long as the container
+      // holds no other control
+      for (let c = el.parentElement, i = 0; c && i < 3; c = c.parentElement, i++) {
+        if (c.querySelectorAll('input, select, textarea').length > 1) break;
+        const t = txt(c.innerText);
+        if (t) return t.slice(0, 200);
+      }
+    }
     let c = el.parentElement;
     for (let i = 0; i < 5 && c; i++, c = c.parentElement) {
       const l = c.querySelector('label, legend, [class*="label" i], [class*="question" i]');
