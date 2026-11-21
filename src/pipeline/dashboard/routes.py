@@ -332,7 +332,27 @@ class ApiMixin:
         pending = applicant.load_pending(pdir)
         ready, why = ai_client.status(pdir)
         return {"items": items, "pending": pending, "ai_ready": ready, "ai_why": why,
-                "can_open_browser": can_open_browser()}
+                "can_open_browser": can_open_browser(), "outreach": self._outreach_queue()}
+
+    def _outreach_queue(self) -> dict:
+        """The human step after each application: a referral or a note to the
+        hiring manager turns a ~3% shot into a far better one. Lists applied
+        jobs from the last 14 days nobody has been contacted about, and
+        follow-ups that are due."""
+        from pipeline import outreach
+        pdir = self._pdir()
+        recs = outreach.load(pdir)
+        cutoff = (datetime.now() - timedelta(days=14)).isoformat()
+        waiting = []
+        for job in self._tracker().by_status(APPLIED):
+            if (job.get("applied_at") or "") < cutoff or job.get("closed_at"):
+                continue
+            rec = recs.get(job["id"]) or {}
+            if any(c.get("sent_at") for c in rec.get("contacts") or []):
+                continue
+            waiting.append({**job_card(job, pdir), "planned": bool(rec.get("plan")),
+                            "contacts": len(rec.get("contacts") or [])})
+        return {"waiting": waiting[:20], "due": outreach.due_followups(pdir)}
 
     def _applications(self) -> dict:
         pdir = self._pdir()

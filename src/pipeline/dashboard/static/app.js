@@ -310,15 +310,32 @@ async function pageAttention() {
         <button data-ai ${data.ai_ready ? "" : `disabled title="${esc(data.ai_why)}"`}>Fill with AI</button></div>
       ${Object.entries(data.pending[c]).map(([q, p]) => questionInput(c, q, p)).join("")}
     </div>`).join("");
+  const or = data.outreach || { waiting: [], due: [] };
+  const reach = (or.waiting.length || or.due.length) ? `<h2>Reach out</h2>
+    <p class="lede" style="margin-bottom:10px">A cold application gets an interview about 3% of the time; a note to the hiring
+      manager or a referral does far better. Do this for every application that matters.</p>
+    ${or.due.map(f => `<div class="job-block" data-or="${esc(f.job_id)}"><div class="top"><div>
+      <div class="name">${esc(f.company)}: ${esc(f.title)}</div>
+      <div class="sub">${esc(f.label)} to ${esc(f.contact)} was due ${esc((f.due || "").replace("T", " "))}.</div></div>
+      <div><button data-or-open class="primary">Open outreach</button></div></div></div>`).join("")}
+    ${or.waiting.map(j => `<div class="job-block" data-or="${esc(j.id)}"><div class="top"><div>
+      <div class="name">${esc(j.company)}: ${esc(j.title)}</div>
+      <div class="sub">Applied ${esc((j.applied_at || "").slice(0, 10))}. ${j.contacts ? `${j.contacts} contact${j.contacts > 1 ? "s" : ""} found, nothing sent yet.` :
+        j.planned ? "Whom to look for is planned; add the person you find." : "Nobody contacted yet."}</div></div>
+      <div>${j.planned || j.contacts ? `<button data-or-open class="primary">Open outreach</button>` :
+        `<button data-or-plan class="primary">Plan outreach</button>`}</div></div></div>`).join("")}` : "";
   $("#att").innerHTML = `
     ${data.items.length ? jobs : `<div class="panel empty"><strong>Nothing waiting on you.</strong>
       Use Fill form on a job, or turn on Auto-apply in prepare mode, and filled applications will wait here.</div>`}
+    ${reach}
     <h2>Questions to answer once</h2>
     ${companies.length ? `<p class="lede" style="margin-bottom:10px">Answers are saved for that company unless you tick
       “Use for every company”. Fill with AI suggests answers from your resume; nothing is saved until you press Save.</p>
       ${questions}<div class="bar"><button class="primary" id="saveAns">Save answers</button><span class="note" id="saveNote"></span></div>` :
       `<div class="panel empty"><strong>No open questions.</strong>Every question the bot has met so far has an answer.</div>`}`;
 
+  $$("[data-or-plan]").forEach(b => b.onclick = () => startOutreach(b.closest("[data-or]").dataset.or, b));
+  $$("[data-or-open]").forEach(b => b.onclick = () => { location.hash = "#/outreach"; });
   $$(".job-block button[data-act]").forEach(b => b.onclick = async () => {
     const id = b.closest(".job-block").dataset.id, it = data.items.find(i => i.job.id === id);
     const act = b.dataset.act;

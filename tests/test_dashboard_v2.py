@@ -89,7 +89,20 @@ def test_attention_lists_prepared_forms(server):
     assert len(att["items"]) == 1 and att["items"][0]["needs"][0]["label"] == "Why Acme?"
     assert att["ai_ready"] is False                         # no key in tests
     post(f"{base}/api/jobs/gh-acme-2/status", {"status": "applied"})
-    assert get(f"{base}/api/attention")["items"] == []     # applied → off the list
+    att = get(f"{base}/api/attention")
+    assert att["items"] == []                               # applied → off the list
+    # …and onto the outreach queue: nobody has been contacted about it yet
+    assert [j["id"] for j in att["outreach"]["waiting"]] == ["gh-acme-2"] and att["outreach"]["due"] == []
+    assert att["outreach"]["waiting"][0]["planned"] is False
+    from pipeline import outreach
+    job = t.get_job("gh-acme-2")
+    outreach.plan(job, pdir)                                 # no AI: generic manager titles
+    rec = outreach.add_contact(job, {"name": "Pat Lee", "title": "Engineering Manager"}, pdir)
+    cid = rec["contacts"][0]["id"]
+    w = get(f"{base}/api/attention")["outreach"]["waiting"]
+    assert w[0]["planned"] is True and w[0]["contacts"] == 1
+    outreach.update_contact(job, cid, "sent", pdir)
+    assert get(f"{base}/api/attention")["outreach"]["waiting"] == []   # a message went out
 
 
 def test_autoapply_settings_validated(server):
