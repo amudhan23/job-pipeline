@@ -110,6 +110,8 @@ def answer_for(label: str, details: dict[str, str], company: str = "",
         if field == "full_name":
             name = f"{details.get('first_name', '')} {details.get('last_name', '')}".strip()
             return Answer(name, "first_name + last_name") if name else None
+        if field in ("authorized_us", "sponsorship") and _other_country(text):
+            return None                      # asks about working somewhere else: not your US answer
         if field == "sponsorship":
             return _sponsorship(text, details)
         if field in ("current_employer", "past_employers"):
@@ -143,6 +145,18 @@ _STATES = dict(pair.split(":") for pair in (
     "VT:Vermont,VA:Virginia,WA:Washington,WV:West Virginia,WI:Wisconsin,WY:Wyoming"
 ).split(","))
 _US = {"united states", "united states of america", "usa", "us", "u.s.", "u.s.a."}
+
+
+_ELSEWHERE = re.compile(r"\b(canada|canadian|u\.?k\.?|united kingdom|britain|british|ireland|germany|german|france|"
+                        r"french|netherlands|dutch|spain|italy|sweden|switzerland|poland|portugal|"
+                        r"australia|new zealand|singapore|japan|india|israel|brazil|mexico|"
+                        r"\beu\b|european union|europe|emea|apac|latam)\b", re.I)
+_US_WORDS = re.compile(r"\b(united states|u\.?s\.?a?\b|usa)\b", re.I)
+
+
+def _other_country(text: str) -> bool:
+    """A work-authorization question about a country that isn't the US."""
+    return bool(_ELSEWHERE.search(text)) and not _US_WORDS.search(text)
 
 
 def _derived(field: str, details: dict[str, str], text: str = "") -> Answer | None:

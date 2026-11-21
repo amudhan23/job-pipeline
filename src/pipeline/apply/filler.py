@@ -574,9 +574,14 @@ def _apply(page, f: dict, value: str, resume_path: Path | None) -> str | None:
                 el.check(timeout=3000)
             except Exception:
                 # the input is hidden behind a styled wrapper: click what the person clicks
-                el.evaluate("el => (el.closest('[role=radio]') || el.closest('label') || el).click()")
-                page.wait_for_timeout(200)
-                if not el.is_checked():
+                wrapper = el.locator("xpath=ancestor::*[@role='radio'][1] | ancestor::label[1]").first
+                if wrapper.count():
+                    wrapper.click(timeout=3000)
+                else:
+                    el.evaluate("el => el.click()")
+                page.wait_for_timeout(250)
+                ok = el.is_checked() or (wrapper.count() and wrapper.get_attribute("aria-checked") == "true")
+                if not ok:
                     raise FillProblem(f"couldn't select '{choice}'")
         else:
             loc(opt["id"]).click()
@@ -634,7 +639,8 @@ def _pick_suggestion(page, box, value: str) -> str | None:
     remote service), then move on and confirm the box kept a value."""
     city = value.split(",")[0].strip()
     try:
-        box.fill(city)
+        box.fill("")
+        box.press_sequentially(city, delay=40)   # real keystrokes: some pickers listen for keyup, not input
         items = page.locator(_SUGGESTIONS)
         for _ in range(10):                     # up to ~3 s for suggestions to arrive
             page.wait_for_timeout(300)

@@ -678,3 +678,14 @@ def test_styled_radio_group_is_seen_and_clicked():
     auth = next(f for f in report.filled if f.label.startswith("Are you legally authorized"))
     assert auth.value == "YES" and auth.kind == "radio"
     assert not report.needs_attention
+
+
+def test_work_authorization_for_another_country_is_not_the_us_answer():
+    """Live Workable form (a Canadian employer): 'Are you legally authorized
+    to work in Canada?' must not get the saved US answer."""
+    from pipeline.apply.answers import answer_for
+    d = {"authorized_us": "Yes", "sponsorship_now": "No", "sponsorship_future": "Yes"}
+    assert answer_for("Êtes-vous légalement autorisé à travailler au Canada ? ━━ Are you legally authorized to work in Canada?", d) is None
+    assert answer_for("Do you require visa sponsorship to work in the UK?", d) is None
+    assert answer_for("Are you legally authorized to work in the United States?", d).value == "Yes"
+    assert answer_for("Will you now or in the future require sponsorship for employment visa status in the US?", d).value == "Yes"
