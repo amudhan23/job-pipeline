@@ -225,11 +225,13 @@ questions, and **Rules** ("3.5 years total", "no em dashes",
 in the repo. Resumes, form answers, fit checks and outreach are all written
 from it.
 
-For every application (and on demand: **Resume** on any job, or
-`jobpipe resume -j <id>`), Claude reads the job and the profile and writes
-the whole resume: which roles and projects, the bullets, the skill lines led
-by the job's stack. Then **every line is checked against the profile** before
-pdflatex prints it:
+For every application (and on demand: **Resume** on any job,
+`jobpipe resume -j <id>`, or `jobpipe resume --url <any posting>` for a job
+the crawler never saw), Claude works like a coach: it first reads the job and
+writes a plan (what the hiring manager must see, what to lead with, what to
+leave out), writes the resume from that plan, then reviews it as the hiring
+manager. Then **every line is checked against the profile** before pdflatex
+prints it:
 
 - a bullet under a job may only use numbers and technologies that appear in
   *that job's* section (so Go from an internship can't move into IBM);
@@ -240,8 +242,21 @@ pdflatex prints it:
 - text inside `[confirm …]` notes never counts as proof.
 
 Lines that fail are left out and listed in the Resume dialog with the reason.
-The page is trimmed bullet by bullet until it fits on one page.
-`jobpipe profile check resume.json` runs the same check on any draft.
+The page is set at 11pt when the content fits, else 10pt, then trimmed
+bullet by bullet (extras, a fourth skills line, project bullets… the main job
+never below three bullets) until it fits on one page. The PDF uses real
+Type 1 fonts, no tables and no hyphenation, and after every build its text
+is read back the way a screening system parses it; the dialog says whether
+every line came back whole. `jobpipe profile check resume.json` runs the
+fact check on any draft; `jobpipe profile reference my_cv.pdf` saves a resume
+whose look you like (style only, never facts).
+
+**Checking it with the real API.** The `live resume` workflow (Actions →
+Run workflow, posting URL) writes a resume on GitHub's runner with your
+profile and key held as repository secrets (`ANTHROPIC_API_KEY`,
+`CAREER_PROFILE`, `ARTIFACT_PASSPHRASE`; optional `APPLICANT_JSON`,
+`REFERENCE_RESUME_B64`), and returns the PDF, the plan and the build log as
+an encrypted bundle. Nothing from the profile reaches the public log.
 
 With no profile saved, the older path runs: Claude picks and rewords bullets
 from `config/profile.yaml`, with a guard that discards any rewrite adding a
@@ -289,7 +304,11 @@ direct note). `jobpipe leads fetch` runs a pass now.
 
 ## Outreach
 
-From **Applied** (Reach out) or the **Outreach** page:
+A cold application converts to an interview around 3% of the time; a
+referral or a note to the hiring manager does far better. So every job you
+applied to in the last two weeks with nobody contacted yet, and every
+follow-up that is due, waits under **Needs you** → *Reach out* until it's
+done. From there, **Applied** (Reach out) or the **Outreach** page:
 
 1. **Who to contact.** Claude reads the posting and names the team and the
    likely hiring-manager titles (usually one level above the role). Cold notes
@@ -374,8 +393,9 @@ your Gmail, and collecting hiring posts. When it passes, deploy.
 
 `jobpipe doctor` checks every part of the setup (`--online` also contacts the
 AI, Telegram, Gmail and the job sites). `jobpipe selftest` fetches a live
-Greenhouse posting and fills its real form with your details in a headless
-browser, without pressing Submit (`--fake` uses a made-up applicant).
+posting (`--platform greenhouse|lever|ashby|workable`) and fills its real form
+with your details in a headless browser, without pressing Submit (`--fake`
+uses a made-up applicant).
 
 ## Run it in the cloud
 
@@ -404,8 +424,9 @@ or run the published image `ghcr.io/amudhan23/job-pipeline:latest`. Reach it
 through an SSH tunnel or the Caddy service in `docker-compose.yml`.
 
 **CI** (`.github/workflows/ci.yml`) runs the tests on every push, builds this
-image, starts it, and runs `jobpipe selftest --fake` inside it against a live
-Greenhouse form, so the cloud image is tested end to end before you deploy it.
+image, starts it, and runs `jobpipe selftest --fake` inside it against live
+Greenhouse, Lever, Ashby and Workable forms, so the cloud image is tested end
+to end before you deploy it.
 
 ## ATS coverage
 
