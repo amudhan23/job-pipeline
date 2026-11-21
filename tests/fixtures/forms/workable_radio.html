@@ -1,0 +1,21 @@
+<!doctype html><html><head><style>
+  input[type=radio].hidden { position:absolute; opacity:0; width:0; height:0; }
+  [role=radio] { display:inline-block; padding:6px 12px; border:1px solid #888; margin:4px; cursor:pointer }
+  [role=radio][aria-checked=true] { background:#cde }
+</style></head><body><form>
+  <label for="n">Full name*</label><input id="n" required>
+  <div><span id="q1_label">Are you legally authorized to work in the United States?</span>
+  <fieldset role="radiogroup" aria-labelledby="q1_label">
+    <div role="radio" aria-labelledby="q1_label r_yes" aria-checked="false" aria-required="true" tabindex="0"><label>
+      <input class="hidden" aria-required="true" required id="y1" tabindex="-1" aria-hidden="true" type="radio" name="QA_1" value="true"><span id="r_yes">YES</span></label></div>
+    <div role="radio" aria-labelledby="q1_label r_no" aria-checked="false" aria-required="true" tabindex="-1"><label>
+      <input class="hidden" aria-required="true" required id="n1" tabindex="-1" aria-hidden="true" type="radio" name="QA_1" value="false"><span id="r_no">NO</span></label></div>
+  </fieldset></div>
+  <button type="submit">Submit application</button>
+</form>
+<script>
+  document.querySelectorAll('[role=radio]').forEach(w => w.addEventListener('click', () => {
+    document.querySelectorAll('[role=radio]').forEach(o => o.setAttribute('aria-checked', 'false'));
+    w.setAttribute('aria-checked', 'true'); w.querySelector('input').checked = true;
+  }));
+</script></body></html>

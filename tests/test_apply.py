@@ -666,3 +666,15 @@ def test_bare_consent_box_is_named_by_its_sentence():
     assert [f.label for f in report.filled] == ["Name*"]
     box = next(f for f in report.needs_attention if f.kind == "checkbox")
     assert box.label.startswith("I have read and agree") and "legal consent" in box.source
+
+
+@pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
+def test_styled_radio_group_is_seen_and_clicked():
+    """Workable draws YES/NO as [role=radio] wrappers over hidden inputs, the
+    question named only by the group's aria-labelledby (seen live in CI as
+    '(unlabelled field) — nothing ticked')."""
+    page = Path(__file__).parent / "fixtures" / "forms" / "workable_radio.html"
+    report, _, _ = _fill(page, {"first_name": "A", "last_name": "B", "authorized_us": "Yes"}, company="Acme")
+    auth = next(f for f in report.filled if f.label.startswith("Are you legally authorized"))
+    assert auth.value == "YES" and auth.kind == "radio"
+    assert not report.needs_attention

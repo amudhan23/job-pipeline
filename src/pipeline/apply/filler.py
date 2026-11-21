@@ -120,9 +120,15 @@ _HELPERS_JS = r"""
   // Group label for a set of controls: fieldset legend, else the nearest
   // container holding all of them that has a label-like element
   const groupLabel = group => {
-    const fs = group[0].closest('fieldset');
-    if (fs && group.every(g => fs.contains(g)) && fs.querySelector('legend'))
-      return txt(fs.querySelector('legend').innerText);
+    const fs = group[0].closest('fieldset, [role="radiogroup"], [role="group"]');
+    if (fs && group.every(g => fs.contains(g))) {
+      if (fs.querySelector('legend')) return txt(fs.querySelector('legend').innerText);
+      if (fs.getAttribute('aria-labelledby')) {
+        const t = txt(fs.getAttribute('aria-labelledby').split(/\s+/)
+          .map(id => document.getElementById(id)?.innerText || '').join(' '));
+        if (t) return t;
+      }
+    }
     let c = group[0].parentElement;
     for (let i = 0; i < 6 && c; i++, c = c.parentElement) {
       if (group.every(g => c.contains(g))) {
@@ -158,15 +164,21 @@ _ENUMERATE_JS = "() => {\n" + _HELPERS_JS + r"""
   for (const el of document.querySelectorAll('input, textarea, select')) {
     const type = (el.type || el.tagName).toLowerCase();
     if (['hidden', 'submit', 'button', 'reset', 'image', 'search'].includes(type)) continue;
-    if (!visible(el) || el.disabled) continue;
+    // A radio drawn as a styled [role=radio] wrapper keeps its real input hidden (Workable)
+    const styledRadio = type === 'radio' && el.closest('[role="radio"]') && visible(el.closest('[role="radio"]'));
+    if ((!visible(el) && !styledRadio) || el.disabled) continue;
     if (ignored(el)) continue;
 
     if (type === 'radio') {
       if (!el.name || seenRadio.has(el.name)) continue;
       seenRadio.add(el.name);
       const group = [...document.querySelectorAll(`input[type=radio][name="${CSS.escape(el.name)}"]`)];
-      const fs = el.closest('fieldset');
+      const fs = el.closest('fieldset, [role="radiogroup"]');
       let label = fs && fs.querySelector('legend') ? txt(fs.querySelector('legend').innerText) : '';
+      if (!label && fs && fs.getAttribute('aria-labelledby')) {
+        label = txt(fs.getAttribute('aria-labelledby').split(/\s+/)
+          .map(id => document.getElementById(id)?.innerText || '').join(' '));
+      }
       if (!label) {
         let c = el.parentElement;
         for (let i = 0; i < 6 && c && !label; i++, c = c.parentElement) {
@@ -176,8 +188,13 @@ _ENUMERATE_JS = "() => {\n" + _HELPERS_JS + r"""
           }
         }
       }
-      out.push({kind: 'radio', label, required: group.some(r => r.required) || /\*\s*$/.test(label),
-                options: group.map(r => ({id: tag(r), text: labelOf(r)}))});
+      const optText = r => {
+        const w = r.closest('[role="radio"]');
+        return w && txt(w.innerText) ? txt(w.innerText) : labelOf(r);
+      };
+      out.push({kind: 'radio', label, required: group.some(r => r.required || r.getAttribute('aria-required') === 'true')
+                                              || /\*\s*$/.test(label),
+                options: group.map(r => ({id: tag(r), text: optText(r)}))});
       continue;
     }
     const label = labelOf(el);
@@ -551,7 +568,18 @@ def _apply(page, f: dict, value: str, resume_path: Path | None) -> str | None:
         if not choice:
             return None
         opt = next(o for o in f["options"] if o["text"] == choice)
-        loc(opt["id"]).check() if kind == "radio" else loc(opt["id"]).click()
+        if kind == "radio":
+            el = loc(opt["id"])
+            try:
+                el.check(timeout=3000)
+            except Exception:
+                # the input is hidden behind a styled wrapper: click what the person clicks
+                el.evaluate("el => (el.closest('[role=radio]') || el.closest('label') || el).click()")
+                page.wait_for_timeout(200)
+                if not el.is_checked():
+                    raise FillProblem(f"couldn't select '{choice}'")
+        else:
+            loc(opt["id"]).click()
         return choice
     if kind == "combobox":
         return _fill_combobox(page, loc(f["id"]), value, f.get("label", ""))
@@ -595,7 +623,7 @@ def _menu_options(page, box, wait_ms: int) -> tuple[Any, list[str], bool]:
 
 _SUGGESTIONS = (".pac-container .pac-item, [role=listbox] [role=option], [role=option], "
                 "ul[class*=suggest] li, div[class*=suggest] li, [class*=autocomplete] li, "
-                "[class*=dropdown-results] li, [class*=typeahead] li")
+                "[class*=dropdown-results] > *, [class*=typeahead] li")
 
 
 def _pick_suggestion(page, box, value: str) -> str | None:
