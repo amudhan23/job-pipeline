@@ -609,6 +609,9 @@ def _pick_suggestion(page, box, value: str) -> str | None:
         except Exception:
             pass
     return None
+
+
+def _fill_combobox(page, box, value: str, label: str) -> str:
     """Searchable or click-only dropdown (react-select and friends).
 
     1. Click it open and look for the option in its own list — click-only
