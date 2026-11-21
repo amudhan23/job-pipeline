@@ -617,7 +617,9 @@ async function showResume(jobId, title) {
           ${(r.dropped || []).length ? `<h2>Left out by the fact check</h2>${r.dropped.map(d => `<div class="change">
             <div class="before">${esc(d.where)}: ${esc(d.line)}</div><div class="kept-no">${esc(d.why)}</div></div>`).join("")}` :
             `<p class="note">Every line passed the check.</p>`}
-          ${(r.trimmed || []).length ? `<p class="note">Trimmed to fit one page: ${r.trimmed.length} line${r.trimmed.length > 1 ? "s" : ""}.</p>` : ""}` : ""}
+          ${(r.trimmed || []).length ? `<p class="note">Trimmed to fit one page: ${r.trimmed.length} line${r.trimmed.length > 1 ? "s" : ""}.</p>` : ""}
+          ${(r.parse_problems || []).length ? `<p class="note warn">A screening system may misread this PDF: ${r.parse_problems.map(esc).join("; ")}</p>` :
+            r.steps && r.steps.includes("parses as text") ? `<p class="note">Reads back cleanly as text, the way screening systems parse it.</p>` : ""}` : ""}
         ${r.projects ? `<p class="note">Projects: ${r.projects.map(esc).join(", ")}. Languages lead with ${(r.languages || []).slice(0, 3).map(esc).join(", ")}.</p>` : ""}
         ${err ? `<p class="note warn">Rewording was skipped: ${esc(err.error)}</p>` : ""}
         ${changes.length ? `<h2>What changed</h2>${changes.map(c => `<div class="change">

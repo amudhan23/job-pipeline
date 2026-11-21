@@ -326,7 +326,7 @@ WHAT TO PICK.
   room after the projects. Never drop the main full-time job.
 - 3-5 projects, the ones closest to this job's stack and problems first;
   1-2 bullets each.
-- About 15-17 bullets in total, which fills one page at 10pt. Don't write
+- About 18-20 bullets in total, which fills one page. Don't write many
   more expecting them to be cut: overflow is trimmed from the end, not by
   quality.
 - Skills: 3-4 lines led by the job's stack, only skills the profile has, at
@@ -405,7 +405,7 @@ great coach does in a long conversation with the applicant.
    the profile has. Leave out unrelated ones (blockchain tooling for a
    non-blockchain role, say) unless the job asks for them.
 6. Extras (publications, awards): only if they help for this job.
-About 15-17 bullets in total fills one page. Use only the career profile;
+About 18-20 bullets in total fills one page. Use only the career profile;
 follow its Rules section."""
 
 _REVIEW_SYSTEM = """You are the hiring manager for this job. You have 30 seconds with this
@@ -421,7 +421,7 @@ Check, and fix what fails:
 - Terms from the plan's keyword list that the applicant honestly has are
   present.
 - Bullets are 120-200 characters, specific, with the profile's numbers, the
-  2-3 scan terms bolded, no filler, no em dashes. About 15-17 in total.
+  2-3 scan terms bolded, no filler, no em dashes. About 18-20 in total.
 
 Facts: only from the career profile, each under its own role or project;
 follow its Rules. Return the full improved resume. In "note", say in one or
@@ -576,29 +576,31 @@ def tex_escape(s: str) -> str:
     return "".join(out)
 
 
-_PREAMBLE = r"""\documentclass[letterpaper,10pt]{article}
-\usepackage[utf8]{inputenc}
+_PREAMBLE = r"""\documentclass[letterpaper,SIZEpt]{article}
+% Parsers (ATS) read this PDF as text: real Type 1 fonts (lmodern), ligatures
+% mapped back to letters (cmap, so "profiling" never extracts as "proling"),
+% one column, no tables — every line is plain text with a right-aligned tail.
+\usepackage{cmap}
 \usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
 \usepackage[letterpaper,top=0.45in,bottom=0.4in,left=0.5in,right=0.5in]{geometry}
 \usepackage{titlesec}
 \usepackage{enumitem}
 \usepackage[hidelinks]{hyperref}
-\usepackage{tabularx}
 \urlstyle{same}
 \pagestyle{empty}
 \raggedbottom
 \raggedright
-\setlength{\tabcolsep}{0in}
+\hyphenpenalty=10000          % no words split across lines: parsers read them whole
 \setlength{\parindent}{0pt}
-\titleformat{\section}{\scshape\raggedright\large}{}{0em}{}[\vspace{-4pt}\titlerule]
-\titlespacing*{\section}{0pt}{6pt}{4pt}
-% Title (bold) and dates on one line; employer and place (italic) below
-\newcommand{\role}[4]{\begin{tabular*}{\textwidth}[t]{@{}l@{\extracolsep{\fill}}r@{}}
-  \textbf{#1} & #2 \\ \textit{#3} & \textit{#4} \\ \end{tabular*}\vspace{-4pt}}
-% Project: name | stack on the left (wraps if long), links and context on the right
-\newcommand{\proj}[2]{\begin{tabularx}{\textwidth}{@{}X@{\hspace{8pt}}r@{}}
-  #1 & #2 \\ \end{tabularx}\vspace{-4pt}}
-\setlist[itemize]{leftmargin=0.32in, label=\textbullet, itemsep=0.5pt, topsep=1pt, parsep=0pt, partopsep=0pt}
+\titleformat{\section}{\scshape\raggedright\large}{}{0em}{}[\vspace{-3pt}\titlerule]
+\titlespacing*{\section}{0pt}{7pt}{3pt}
+% Title (bold) with dates at the right; employer and place (italic) below
+\newcommand{\role}[4]{\par\vspace{3pt}{\textbf{#1}\hfill #2\par\textit{#3}\hfill\textit{#4}\par}\vspace{-1pt}}
+% Project: name | stack, with the link at the right
+\newcommand{\proj}[2]{\par\vspace{3pt}{#1\hfill #2\par}\vspace{-1pt}}
+\setlist[itemize]{leftmargin=0.22in, label=\textbullet, itemsep=0.5pt, topsep=1pt, parsep=0pt, partopsep=0pt}
 \begin{document}
 """
 
@@ -609,7 +611,7 @@ def _href(url: str, label: str = "") -> str:
     return "\\href{" + full.replace("%", "\\%").replace("#", "\\#") + "}{" + tex_escape(shown) + "}"
 
 
-def render(resume: dict[str, Any], details: dict[str, str]) -> str:
+def render(resume: dict[str, Any], details: dict[str, str], pt: int = 10) -> str:
     e = tex_escape
     name = f"{details.get('first_name', '')} {details.get('last_name', '')}".strip() or "Your Name"
     where = details.get("resume_location") or details.get("city", "")
@@ -623,7 +625,7 @@ def render(resume: dict[str, Any], details: dict[str, str]) -> str:
                             [r"\underline{" + _href(u) + "}" for u, _ in links if u])
     plain = len(" . ".join([c for c in contact if c] + [u for u, _ in links if u]))
     size = r"\small" if plain <= 125 else r"\footnotesize"     # keep contact details on one line
-    out = [_PREAMBLE, rf"\begin{{center}}{{\huge \textbf{{{e(name)}}}}}\\[2pt]{size} {head}\end{{center}}",
+    out = [_PREAMBLE.replace("SIZEpt", f"{pt}pt"), rf"\begin{{center}}{{\huge \textbf{{{e(name)}}}}}\\[2pt]{size} {head}\end{{center}}",
            r"\vspace{-10pt}"]
 
     def bullets(items: list[str]) -> str:
@@ -646,11 +648,16 @@ def render(resume: dict[str, Any], details: dict[str, str]) -> str:
         out.append(r"\section{Projects}")
         for p in resume["projects"]:
             stack = ", ".join([t.strip() for t in (p.get("stack") or "").split(",") if t.strip()][:5])
-            left = rf"\textbf{{{e(p.get('name', ''))}}}" + (rf" $|$ \emph{{{e(stack)}}}" if stack else "")
+            context = (p.get("context") or "").strip().rstrip(".")
             link = p.get("link", "")
-            context = _short(p.get("context", ""), 34)
-            right = r" $\cdot$ ".join(x for x in ("[" + _href(link, "repo" if "github" in link else "link") + "]"
-                                                 if link else "", e(context)) if x)
+            # One line: name | stack — context, link at the right. The context is
+            # dropped (never cut mid-phrase) when the line would wrap.
+            if context and len(p.get("name", "")) + len(stack) + len(context) > 88:
+                context = ""
+            left = rf"\textbf{{{e(p.get('name', ''))}}}" + (rf" $|$ \emph{{{e(stack)}}}" if stack else "") \
+                + (rf" --- {e(context)}" if context else "")
+            right = _href(link, "github.com" in link and re.sub(r"^https?://(www\.)?", "", link).rstrip("/") or "link") \
+                if link else ""
             out.append(rf"\proj{{{left}}}{{{right}}}")
             out.append(bullets(p["bullets"]))
     if resume.get("skills"):
@@ -678,10 +685,10 @@ def _pages(pdf: Path) -> int:
         return 1
 
 
-def build_pdf(resume: dict[str, Any], details: dict[str, str], out: Path) -> Path | None:
+def build_pdf(resume: dict[str, Any], details: dict[str, str], out: Path, pt: int = 10) -> Path | None:
     with tempfile.TemporaryDirectory() as tmp:
         tex = Path(tmp) / "resume.tex"
-        tex.write_text(render(resume, details))
+        tex.write_text(render(resume, details, pt))
         r = subprocess.run(["pdflatex", "-interaction=nonstopmode", "-halt-on-error", "resume.tex"],
                            cwd=tmp, capture_output=True, text=True, timeout=60)
         pdf = Path(tmp) / "resume.pdf"
@@ -706,6 +713,9 @@ def fit_one_page(resume: dict[str, Any], details: dict[str, str], out: Path) -> 
     the main job never below three. Returns (pdf, what was trimmed)."""
     trimmed: list[str] = []
     main = _main_role(resume)
+    pdf = build_pdf(resume, details, out, pt=11)      # roomy type when the content allows it
+    if pdf and _pages(pdf) <= 1:
+        return pdf, trimmed
     for _ in range(30):
         pdf = build_pdf(resume, details, out)
         if not pdf or _pages(pdf) <= 1:
@@ -766,5 +776,48 @@ def write_resume(job: dict[str, Any], details: dict[str, str], folder: Path, fil
     if not clean["experience"]:
         return None, {"error": "nothing in the draft passed the profile check", "dropped": dropped}
     pdf, trimmed = fit_one_page(clean, details, folder / filename)
+    parse_problems = ats_check(pdf, clean, details) if pdf else []
+    if pdf and not parse_problems:
+        steps.append("parses as text")
     return pdf, {"note": clean.get("note", ""), "dropped": dropped, "trimmed": trimmed, "resume": clean,
-                 "plan": the_plan, "steps": steps, "had_description": bool((job.get("description") or "").strip())}
+                 "plan": the_plan, "steps": steps, "had_description": bool((job.get("description") or "").strip()),
+                 "parse_problems": parse_problems}
+
+
+def pdf_text(pdf: Path) -> str:
+    """The PDF as a screening system reads it: plain extracted text."""
+    try:
+        from pdfminer.high_level import extract_text
+        return extract_text(str(pdf))
+    except Exception:
+        pass
+    try:
+        from pypdf import PdfReader
+        return "\n".join((pg.extract_text() or "") for pg in PdfReader(str(pdf)).pages)
+    except Exception:
+        return ""
+
+
+def ats_check(pdf: Path, resume: dict[str, Any], details: dict[str, str]) -> list[str]:
+    """What an applicant-tracking parser would get wrong with this PDF: a
+    bullet, the name or the email that doesn't come back out as text, or
+    ligature glyphs (ﬁ ﬂ) in place of letters. Empty means it reads cleanly."""
+    text = pdf_text(pdf)
+    if not text.strip():
+        return ["no text could be extracted from the PDF"]
+    flat = re.sub(r"\s+", "", text).lower()        # extractors differ on spaces, not on letters
+    problems: list[str] = []
+    for bad in ("\ufb01", "\ufb02", "\ufb00", "\ufb03", "\ufb04"):
+        if bad in text:
+            problems.append("ligature glyphs instead of letters (fi/fl)")
+            break
+    for key in ("first_name", "email"):
+        if details.get(key) and re.sub(r"\s+", "", details[key]).lower() not in flat:
+            problems.append(f"{key.replace('_', ' ')} not found in the text")
+    lines = [b for x in (resume.get("experience") or []) + (resume.get("projects") or []) for b in x["bullets"]]
+    for b in lines:
+        words = re.sub(r"\*\*", "", b).split()
+        probe = "".join(words[:6]).lower()
+        if probe and probe not in flat:
+            problems.append(f"bullet doesn't extract whole: {b[:60]}")
+    return problems

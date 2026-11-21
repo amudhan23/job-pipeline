@@ -15,7 +15,7 @@ ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 \
 RUN apt-get update \
  && apt-get install -y --no-install-recommends tzdata ca-certificates poppler-utils \
  && if [ "$WITH_LATEX" = "1" ]; then \
-      apt-get install -y --no-install-recommends texlive-latex-base texlive-latex-extra texlive-fonts-recommended; \
+      apt-get install -y --no-install-recommends texlive-latex-base texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended lmodern; \
     fi \
  && rm -rf /var/lib/apt/lists/*
 

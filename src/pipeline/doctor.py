@@ -4,6 +4,7 @@ whole chain work on a real, live job (without sending anything)?"""
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -59,13 +60,18 @@ def checks(online: bool = False, private_dir: Path | None = None) -> list[dict[s
         if not shutil.which("pdflatex"):
             return WARN, "pdflatex missing: resumes can't be tailored (your uploaded resume is used)"
         with tempfile.TemporaryDirectory() as tmp:
-            (Path(tmp) / "t.tex").write_text(r"\documentclass{article}\usepackage{enumitem,titlesec,tabularx}"
+            (Path(tmp) / "t.tex").write_text(r"\documentclass{article}\usepackage{cmap}\usepackage[T1]{fontenc}"
+                                             r"\usepackage{lmodern,enumitem,titlesec}"
                                              r"\usepackage[hidelinks]{hyperref}\begin{document}ok\end{document}")
             r = subprocess.run(["pdflatex", "-interaction=nonstopmode", "t.tex"], cwd=tmp,
                                capture_output=True, timeout=60)
             if r.returncode != 0:
-                return FAIL, "pdflatex is installed but the resume packages are missing (texlive-latex-extra)"
-        return OK, "pdflatex builds resumes"
+                log = r.stdout.decode(errors="replace")
+                missing = re.findall(r"File `([^']+\.sty)' not found", log)
+                return FAIL, (f"pdflatex is missing {', '.join(missing)}" if missing else
+                              "pdflatex can't build the resume preamble") + \
+                    " (sudo apt install texlive-latex-recommended texlive-latex-extra lmodern)"
+        return OK, "pdflatex builds resumes with real fonts (text extracts cleanly for screening systems)"
     out.append(_check("Resume builder", latex))
 
     def details() -> tuple[str, str]:

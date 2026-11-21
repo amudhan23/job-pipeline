@@ -105,7 +105,7 @@ The generator analyzes each JD and detects role signals (backend, security, infr
 - **Selects 3 of 4 projects** — req-guard for Rust/security, AccessMint for TypeScript/blockchain
 - **Leads with the right language** — Rust first for Rust jobs, TypeScript for frontend, etc.
 
-Requires `pdflatex` (install via `apt install texlive-latex-base` or `brew install --cask mactex`).
+Requires `pdflatex` with real fonts (`sudo apt install texlive-latex-recommended texlive-latex-extra lmodern`, or `brew install --cask mactex`).
 
 ## Architecture
 
@@ -525,7 +525,7 @@ bullets lead, which 3 projects, which languages first — choosing only from
 `config/profile.yaml → resume` and never rewriting a bullet. The PDF is built
 with pdflatex as `<First>_<Last>_Resume.pdf` and uploaded instead of your
 saved resume (`--no-tailor` to skip). Needs `sudo apt install
-texlive-latex-extra texlive-fonts-recommended`.
+texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended lmodern`.
 
 Every call is logged with its tokens and cost (`data/private/ai_usage.jsonl`);
 spend is on My details and in `jobpipe ai status`. A Sonnet answer costs about

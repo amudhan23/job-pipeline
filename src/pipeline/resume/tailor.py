@@ -17,6 +17,7 @@ import json
 import logging
 import re
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -102,7 +103,16 @@ def can_build() -> tuple[bool, str]:
     if not TEMPLATE.exists():
         return False, f"no resume template at {TEMPLATE}"
     if not shutil.which("pdflatex"):
-        return False, "pdflatex isn't installed (sudo apt install texlive-latex-extra)"
+        return False, "pdflatex isn't installed (sudo apt install texlive-latex-recommended texlive-latex-extra lmodern)"
+    if shutil.which("kpsewhich"):
+        r = subprocess.run(["kpsewhich", "lmodern.sty", "cmap.sty", "titlesec.sty", "enumitem.sty"],
+                           capture_output=True, text=True)
+        found = r.stdout.split()
+        missing = [n for n in ("lmodern.sty", "cmap.sty", "titlesec.sty", "enumitem.sty")
+                   if not any(f.endswith(n) for f in found)]
+        if missing:
+            return False, (f"LaTeX is missing {', '.join(missing)} "
+                           "(sudo apt install texlive-latex-recommended texlive-latex-extra lmodern)")
     return True, ""
 
 
@@ -256,6 +266,7 @@ def tailored_resume(job: dict[str, Any], config: dict[str, Any], details: dict[s
                                         "dropped": meta.get("dropped", []), "trimmed": meta.get("trimmed", []),
                                         "resume": meta.get("resume"), "plan": meta.get("plan"),
                                         "steps": meta.get("steps", []),
+                                        "parse_problems": meta.get("parse_problems", []),
                                         "had_description": meta.get("had_description", True),
                                         "built_at": __import__("datetime").datetime.now()
                                         .isoformat(timespec="seconds")}, indent=2))

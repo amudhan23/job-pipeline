@@ -21,6 +21,7 @@ dependencies = [
     "PyYAML>=6.0",
     "cryptography>=42",
     "pypdf>=4.0",
+    "pdfminer.six>=20231228",   # reads PDFs back the way screening systems do
 ]
 
 [project.optional-dependencies]

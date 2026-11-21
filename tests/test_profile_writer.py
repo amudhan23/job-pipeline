@@ -143,6 +143,7 @@ def test_write_resume_builds_one_page(tmp_path):
     tex = pdf.with_suffix(".tex").read_text()
     assert "Kubernetes" not in tex and "Moon Lander" not in tex and r"\textbf{50,000-line}" in tex
     assert info["dropped"]
+    assert info["parse_problems"] == [] and "parses as text" in info["steps"]
     assert "<career_profile>" in fake.calls[0]["system"][0]["text"]       # first, so it's cached across calls
     assert fake.calls[0]["system"][0].get("cache_control")
 
@@ -304,7 +305,7 @@ def test_plan_then_write_then_review(tmp_path):
     fake = Scripted([json.dumps(the_plan), json.dumps(GOOD_AND_BAD), json.dumps(reviewed)])
     job = {"company": "Acme", "title": "Backend Engineer", "description": "Java, Spring Boot, Redis. " * 30}
     pdf, info = w.write_resume(job, {"first_name": "T"}, tmp_path / "out", "Resume.pdf", tmp_path, fake)
-    assert pdf and info["steps"] == ["planned", "written", "reviewed"]
+    assert pdf and info["steps"] == ["planned", "written", "reviewed", "parses as text"]
     assert info["note"] == "REVIEWED" and info["plan"]["requirements"][0]["strength"] == "strong"
     assert "Backend for payments" in fake.calls[1]["messages"][0]["content"]          # the plan reached the writer
     assert "<draft>" in fake.calls[2]["messages"][0]["content"]                      # the reviewer saw the draft
@@ -356,3 +357,29 @@ def test_job_from_url_builds_a_job_for_any_posting(monkeypatch, tmp_path):
     job = context.job_from_url("https://x.example/2", tracker=FakeTracker())
     assert job["id"] == "gh_1" and job["company"] == "Saved"
     assert t.get_job_by_url("https://nowhere") is None
+
+
+@pytest.mark.skipif(not shutil.which("pdflatex"), reason="needs pdflatex")
+def test_pdf_reads_back_as_clean_text(tmp_path):
+    """What a screening system extracts: real fonts, no tables, no ligature
+    glyphs, no words split by hyphenation — every bullet comes back whole."""
+    resume = {"experience": [{"title": "Software Engineer", "company": "IBM", "location": "Bengaluru", "dates": "2021 -- 2024",
+                              "bullets": ["Cut cloud spend 28% by **profiling** hot paths; shipped behind a feature flag with zero incidents " * 2,
+                                          "Mentored two new hires through their first production changes, offline and office-wide"]}],
+              "projects": [{"name": "Sahara", "stack": "Go, Postgres, Redis, Docker, Kubernetes, AWS", "link": "https://github.com/x/sahara",
+                            "context": "Multi-tenant payments ledger with idempotent transfers",
+                            "bullets": ["Implemented a double-entry ledger with idempotency keys and optimistic locking"]}],
+              "skills": [{"label": "Languages", "items": "Java, Python, Go"}]}
+    details = {"first_name": "Amudhan", "last_name": "M", "email": "a@example.com", "phone": "+1 646 555 0100"}
+    pdf, trimmed = w.fit_one_page(resume, details, tmp_path / "r.pdf")
+    assert pdf and not trimmed
+    text = w.pdf_text(pdf)
+    assert "profiling" in text and "feature flag" in text and "first production" in text and "\ufb01" not in text
+    assert w.ats_check(pdf, resume, details) == []
+    tex = pdf.with_suffix(".tex").read_text()
+    assert "tabular" not in tex and "lmodern" in tex and "cmap" in tex and "11pt" in tex   # short resume: roomier type
+    assert "github.com/x/sahara" in tex and "Multi-tenant payments ledger" not in tex     # context dropped, not cut
+    # a resume that overflows at 11pt is set at 10pt before anything is trimmed
+    resume["experience"][0]["bullets"] = ["Did a thing that mattered to the team and to the customers " * 3] * 18
+    pdf, trimmed = w.fit_one_page(resume, details, tmp_path / "r2.pdf")
+    assert pdf and w._pages(pdf) == 1 and "10pt" in pdf.with_suffix(".tex").read_text()
