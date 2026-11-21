@@ -1,0 +1,25 @@
+<!doctype html><html><body>
+<form>
+  <label for="name">Full name*</label><input id="name" name="name" required>
+  <label for="email">Email*</label><input id="email" type="email" name="email" required>
+  <label for="location-input">Current location*</label>
+  <input id="location-input" name="location" type="text" autocomplete="off" required>
+  <div class="pac-container" style="display:none;position:absolute">
+    <div class="pac-item">New York, NY, USA</div>
+    <div class="pac-item">New York Mills, MN, USA</div>
+  </div>
+  <label for="resume">Resume*</label><input id="resume" type="file" name="resume" required>
+  <button type="submit">Submit application</button>
+</form>
+<script>
+  // Like Google Places on Lever: typing shows suggestions; the value only
+  // "sticks" when a suggestion is clicked, otherwise blur clears it.
+  const box = document.getElementById('location-input'), pac = document.querySelector('.pac-container');
+  let chosen = false;
+  box.addEventListener('input', () => { chosen = false; pac.style.display = box.value ? 'block' : 'none'; });
+  box.addEventListener('blur', () => { setTimeout(() => { if (!chosen) box.value = ''; }, 50); });
+  document.querySelectorAll('.pac-item').forEach(it => it.addEventListener('mousedown', () => {
+    chosen = true; box.value = it.textContent; pac.style.display = 'none';
+  }));
+</script>
+</body></html>

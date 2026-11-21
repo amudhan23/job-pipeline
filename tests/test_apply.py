@@ -643,3 +643,15 @@ def test_screening_questions_seen_on_live_lever_and_ashby_forms():
     assert ask("Current company") == "N/A"
     d["salary"] = ""
     assert ask("Salary expectations") is None
+
+
+@pytest.mark.skipif(not _browser_available(), reason="playwright + Chrome needed")
+def test_place_search_text_box_takes_a_suggestion():
+    """Lever's "Current location" is a plain text box backed by Google Places:
+    typed text is dropped unless a suggestion is clicked (seen live in CI)."""
+    page = Path(__file__).parent / "fixtures" / "forms" / "lever_location.html"
+    report, _, _ = _fill(page, {"first_name": "A", "last_name": "B", "email": "a@x.com", "city": "New York, NY"},
+                         company="Lever")
+    loc = next(f for f in report.filled if f.label.startswith("Current location"))
+    assert loc.value == "New York, NY, USA"
+    assert not any(f.label.startswith("Current location") for f in report.needs_attention)
