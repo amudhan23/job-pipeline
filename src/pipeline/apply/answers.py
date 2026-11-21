@@ -46,12 +46,18 @@ _RULES: list[tuple[str, str]] = [
     # Sponsorship before authorization: "authorized ... without sponsorship" is a sponsorship question
     (r"sponsor", "sponsorship"),
     (r"(legally )?authori[sz]ed to work|eligib\w* to (work|begin employment)|right to work|"
-     r"work authori[sz]ation|legally eligible", "authorized_us"),
+     r"work authori[sz]ation|legally eligible|(legally )?(entitled|permitted|allowed) to work", "authorized_us"),
     (r"citizenship|citizen of|export (licens|control)", "citizenship"),
     (r"visa|immigration status|work status", "visa_status"),
     (r"non-?compet|restrictive covenant|agreement that would (prevent|restrict|limit)", "noncompete"),
     (r"(future|other) (opportunit|roles?|positions?|openings)|considered for (other|future)", "future_roles"),
     (r"\b(current(ly)?|presently)\b.*\b(employee|employed)\b", "current_employer"),
+    (r"^(current|present) (company|employer)\b|^(company|employer) \(current\)|current (company|employer) name",
+     "current_company"),
+    (r"current (job )?title|current (role|position)\b|^job title\b|most recent (job )?title", "current_title"),
+    (r"background check|background screening", "background_check"),
+    (r"\b(hybrid|on-?site|in-?office|in person)\b.*\b(comfortable|willing|able|open|ok)\b|"
+     r"\b(comfortable|willing|able|open)\b.*\b(hybrid|on-?site|in-?office|in person)\b", "onsite_ok"),
     (r"\b(previously|ever|formerly|in the past)\b.*\b(employed|worked)\b", "past_employers"),
     (r"^country\b|country of residence|country you live|\bcountry\b(?!.*citizen)", "country"),
     (r"veteran", "veteran"),
@@ -108,8 +114,8 @@ def answer_for(label: str, details: dict[str, str], company: str = "",
             return _sponsorship(text, details)
         if field in ("current_employer", "past_employers"):
             return _employer(text, field, details, company)
-        if field in ("us_person", "clearance", "in_us", "state"):
-            return _derived(field, details)
+        if field in ("us_person", "clearance", "in_us", "state", "current_company", "salary"):
+            return _derived(field, details, text)
         value = details.get(field, "")
         if not value:
             return None
@@ -121,7 +127,7 @@ def answer_for(label: str, details: dict[str, str], company: str = "",
             # Forms list their own sources. Jobs here come from the company's
             # own job board, so "careers page / website" is the true fallback.
             return Answer(value, field, alternates=[
-                "Company careers page", "Company website", "Careers page", "Job board", "Online"])
+                "Company careers page", "Company website", "Careers page", "Job board", "Online", "Other"])
         return Answer(value, field)
     return None
 
@@ -139,10 +145,31 @@ _STATES = dict(pair.split(":") for pair in (
 _US = {"united states", "united states of america", "usa", "us", "u.s.", "u.s.a."}
 
 
-def _derived(field: str, details: dict[str, str]) -> Answer | None:
+def _derived(field: str, details: dict[str, str], text: str = "") -> Answer | None:
     """Answers that follow from what you already saved."""
     citizenship = details.get("citizenship", "").strip().lower()
     country = details.get("country", "").strip().lower()
+    if field == "current_company":
+        raw = details.get("current_employer", "").strip()
+        if not raw:
+            return None
+        if raw.lower() in ("none", "n/a", "no", "unemployed"):
+            return Answer("N/A", "current_employer (none)", alternates=["None", "Not currently employed", "Student"])
+        return Answer(raw.split(",")[0].strip(), "current_employer")
+    if field == "salary":
+        raw = details.get("salary", "").strip()
+        if not raw:
+            return None
+        if re.search(r"\bote\b|on target earnings|commission|bonus", text):
+            return None                  # pay beyond base is yours to decide
+        nums = [int(n.replace(",", "")) for n in re.findall(r"\d[\d,]{3,}", raw)]
+        if len(nums) >= 2 and re.search(r"\b(begin|beginning|start|from|minimum|min|low(er|est)?|bottom)\b", text):
+            return Answer(f"${nums[0]}" if "no commas" in text else f"${nums[0]:,}", "salary (low end)")
+        if len(nums) >= 2 and re.search(r"\b(end|to|maximum|max|high(er|est)?|top|upper)\b", text):
+            return Answer(f"${nums[-1]}" if "no commas" in text else f"${nums[-1]:,}", "salary (high end)")
+        if nums and re.search(r"no commas|number(s)? only|numeric|digits", text):
+            return Answer(f"${nums[0]}", "salary")
+        return Answer(raw, "salary")
     if field == "in_us":
         if not country:
             return None

@@ -243,6 +243,8 @@ TEST_APPLICANT = {
     "authorized_us": "Yes", "sponsorship_now": "No", "sponsorship_future": "Yes", "visa_status": "F-1 OPT",
     "school": "Example University", "degree": "Master's", "major": "Computer Science",
     "graduation": "May 2026", "start_date": "Immediately", "relocate": "Yes",
+    "current_employer": "Example University", "current_title": "Graduate Research Assistant",
+    "background_check": "Yes", "onsite_ok": "Yes", "salary": "$110,000 - $130,000",
     "referral_source": "Company website", "pronouns": "Decline to self-identify",
     "gender": "Decline to self-identify", "race": "Decline to self-identify",
     "veteran": "Decline to self-identify", "disability": "Decline to self-identify",

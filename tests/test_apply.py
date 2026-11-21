@@ -620,3 +620,26 @@ def test_round4_answers():
     # a lone statement isn't a Yes
     assert pick_option("Yes", ["I have not previously been employed at Affirm"]) is None
     assert answer_for("Where are you located?", d).value == "New York, NY"     # still the city rule
+
+
+def test_screening_questions_seen_on_live_lever_and_ashby_forms():
+    """Questions the live self-tests left for a human; now answered from My details."""
+    from pipeline.apply.answers import answer_for
+    d = {"current_employer": "IBM", "current_title": "Software Engineer", "salary": "$120,000 - $140,000",
+         "authorized_us": "Yes", "background_check": "Yes", "onsite_ok": "Yes", "city": "New York, NY"}
+    ask = lambda q: (lambda a: a and a.value)(answer_for(q, d, "Acme"))
+    assert ask("Current company ✱") == "IBM"
+    assert ask("Current job title?") == "Software Engineer"
+    assert ask("Title") is None                                         # could be Mr/Ms: not guessed
+    assert ask("Are you legally entitled to work in the country you are applying for? ✱") == "Yes"
+    assert ask("Are you willing to go through a background check at the time an offer is extended? ✱") == "Yes"
+    assert ask("Are you comfortable working in a hybrid work arrangement 2-3 days a week? ✱") == "Yes"
+    assert ask("Please provide your salary range requirements: ✱") == "$120,000 - $140,000"
+    assert ask("What is the beginning of your desired annual base salary range? (please format with no commas)") == "$120000"
+    assert ask("What is the end of your desired annual base salary range? (please format with no commas)") == "$140000"
+    assert ask("What is the beginning of your desired annual On Target Earnings (OTE)?") is None
+    assert ask("Why Acme?") is None
+    d["current_employer"] = "None"
+    assert ask("Current company") == "N/A"
+    d["salary"] = ""
+    assert ask("Salary expectations") is None

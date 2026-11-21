@@ -59,7 +59,13 @@ FIELDS: list[dict[str, Any]] = [
 
     {"section": "Common screening questions"},
     {"key": "current_employer", "label": "Current employer", "kind": "text",
-     "help": "Write None if you're not employed — answers \"Are you a current <company> employee?\""},
+     "help": "Write None if you're not employed — answers \"Are you a current <company> employee?\" and \"Current company\""},
+    {"key": "current_title", "label": "Current job title", "kind": "text",
+     "help": "e.g. Software Engineer, or Graduate Student — answers \"Current job title?\""},
+    {"key": "background_check", "label": "Willing to go through a background check at offer time?",
+     "kind": "choice", "options": YES_NO, "default": "Yes"},
+    {"key": "onsite_ok", "label": "Comfortable with hybrid or in-office work?",
+     "kind": "choice", "options": YES_NO, "default": "Yes"},
     {"key": "past_employers", "label": "Past employers (comma-separated)", "kind": "text",
      "help": "e.g. IBM, Sahara AI — answers \"Have you previously worked for <company>?\""},
     {"key": "noncompete", "label": "Are you bound by a non-compete or similar agreement?",
@@ -78,7 +84,8 @@ FIELDS: list[dict[str, Any]] = [
     {"key": "start_date", "label": "Earliest start date", "kind": "text", "help": "e.g. Immediately, or 2026-12-01"},
     {"key": "relocate", "label": "Willing to relocate?", "kind": "choice", "options": YES_NO},
     {"key": "salary", "label": "Salary expectation (optional)", "kind": "text",
-     "help": "Leave blank and forms that require it will be sent to you to answer"},
+     "help": "e.g. $120,000 - $140,000: forms asking for a range get both numbers, a single "
+             "question gets the whole answer. Leave blank and such forms are sent to you"},
     {"key": "referral_source", "label": "How did you hear about us? (default answer)", "kind": "text",
      "default": "Online job board"},
 
