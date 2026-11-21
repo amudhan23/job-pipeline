@@ -105,16 +105,17 @@ def _minutes_since(dt: datetime) -> float:
 
 
 def _age(job: dict) -> tuple[float | None, str | None]:
-    """Minutes since the posting opened: since we first saw it when we caught
-    it going live, else since the company says it was posted."""
+    """Minutes since the posting opened. Never flattering: when the company
+    dates the posting earlier than our first sighting, the company's date
+    counts (we didn't catch it opening); our sighting counts only when it is
+    the earlier of the two or the only one."""
     seen = _parse(job.get("first_seen_at"))
     posted = _parse(job.get("posted_at"))
     if seen and not job.get("baseline"):
         if posted is not None:
             p = _minutes_since(posted)
             s = _minutes_since(seen)
-            if p > s + 24 * 60:             # posted a day+ before we saw it: we didn't catch it opening
-                # (show the company's date, not ours)
+            if p > s:
                 return round(p, 1), "posted"
         return round(_minutes_since(seen), 1), "seen"
     if posted:
