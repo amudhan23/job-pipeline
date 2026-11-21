@@ -269,8 +269,10 @@ class ApiMixin:
         hour = (now - timedelta(hours=1)).isoformat(timespec="seconds")
         day = (now - timedelta(hours=24)).isoformat(timespec="seconds")
         new = [e for e in t.events(since=day, limit=2000) if e["kind"] == "new"]
+        reach = self._outreach_queue()
         return {"new_last_hour": sum(1 for e in new if e["at"] >= hour), "new_today": len(new),
-                "attention": len(self._attention_jobs()), "applied": len(t.by_status(APPLIED)),
+                "attention": len(self._attention_jobs()) + len(reach["waiting"]) + len(reach["due"]),
+                "applied": len(t.by_status(APPLIED)),
                 "crawler_running": self._crawler_status().get("running", False)}
 
     def _feed(self, q: dict) -> dict:
