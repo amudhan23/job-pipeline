@@ -187,7 +187,46 @@ def checks(online: bool = False, private_dir: Path | None = None) -> list[dict[s
 
 # ── Self-test: the whole chain on a live posting, nothing sent ─────────
 
-TEST_BOARDS = ["discord", "figma", "airbnb", "robinhood", "dropbox", "coinbase", "stripe", "gitlab"]
+TEST_BOARDS = {
+    "greenhouse": ["discord", "figma", "airbnb", "robinhood", "dropbox", "coinbase", "stripe", "gitlab"],
+    "lever": ["aircall", "achievers", "acceldata", "3pillarglobal", "aledade", "aifund", "actian", "aeva"],
+    "ashby": ["1password", "acorns", "abridge", "9fin", "8vc", "abound", "1x", "adaptivesecurity"],
+}
+
+
+def _live_job(platform: str, slug: str, c: Any) -> dict[str, Any] | None:
+    """One open engineering posting from a public board, shaped like a tracker job."""
+    try:
+        if platform == "greenhouse":
+            r = c.get(f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs", params={"content": "true"})
+            items = r.json().get("jobs", []) if r.status_code == 200 else []
+            pick = lambda i: (i.get("title", ""), i.get("absolute_url") or f"https://boards.greenhouse.io/{slug}/jobs/{i['id']}",
+                              (i.get("location") or {}).get("name", ""), i.get("content", "") or "",
+                              f"gh-{slug}-{i['id']}", i.get("company_name") or slug)
+        elif platform == "lever":
+            r = c.get(f"https://api.lever.co/v0/postings/{slug}", params={"mode": "json"})
+            items = r.json() if r.status_code == 200 else []
+            items = items if isinstance(items, list) else []
+            pick = lambda i: (i.get("text", ""), i.get("hostedUrl", ""), (i.get("categories") or {}).get("location", ""),
+                              i.get("descriptionPlain", "") or "", f"lever-{slug}-{i.get('id', '')}", slug)
+        elif platform == "ashby":
+            r = c.get(f"https://api.ashbyhq.com/posting-api/job-board/{slug}")
+            items = (r.json().get("jobs", []) if r.status_code == 200 else [])
+            items = [i for i in items if i.get("isListed", True) and i.get("jobUrl")]
+            pick = lambda i: (i.get("title", ""), i.get("jobUrl", ""), i.get("location", ""),
+                              i.get("descriptionPlain", "") or "", f"ashby-{slug}-{i.get('id', '')}", slug)
+        else:
+            return None
+    except Exception:
+        return None
+    if not items:
+        return None
+    item = next((i for i in items if "engineer" in pick(i)[0].lower()), items[0])
+    title, url, location, description, job_id, company = pick(item)
+    if not url:
+        return None
+    return {"id": job_id, "title": title, "company": company, "company_slug": slug, "location": location,
+            "url": url, "platform": platform, "description": description, "fit_score": 0, "status": "new"}
 
 TEST_APPLICANT = {
     "first_name": "Jordan", "last_name": "Tester", "email": "jordan.tester@example.com",
@@ -212,9 +251,10 @@ def _blank_pdf(path: Path) -> Path:
 
 
 def selftest(out_dir: Path, fake: bool = False, board: str | None = None, url: str | None = None,
-             say: Callable[[str], None] = print) -> dict[str, Any]:
-    """Fetch a live Greenhouse job, then fill its real form in headless
-    Chromium without submitting. Returns a summary; ok=False on failure."""
+             say: Callable[[str], None] = print, platform: str = "greenhouse") -> dict[str, Any]:
+    """Fetch a live job from a public board (Greenhouse, Lever or Ashby), then
+    fill its real form in headless Chromium without submitting. Returns a
+    summary; ok=False on failure."""
     import httpx
     from pipeline import applicant
     from pipeline.apply.filler import practice_apply
@@ -228,29 +268,18 @@ def selftest(out_dir: Path, fake: bool = False, board: str | None = None, url: s
     t0 = time.monotonic()
     job = None
     with httpx.Client(timeout=30, follow_redirects=True, headers={"User-Agent": "jobpipe-selftest"}) as c:
-        for slug in ([board] if board else TEST_BOARDS):
-            try:
-                r = c.get(f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs", params={"content": "true"})
-                items = r.json().get("jobs", []) if r.status_code == 200 else []
-            except (httpx.HTTPError, ValueError):
-                items = []
-            if items:
-                item = next((i for i in items if "engineer" in i.get("title", "").lower()), items[0])
-                job = {"id": f"gh-{slug}-{item['id']}", "title": item.get("title", ""),
-                       "company": item.get("company_name") or slug, "company_slug": slug,
-                       "location": (item.get("location") or {}).get("name", ""),
-                       "url": item.get("absolute_url") or f"https://boards.greenhouse.io/{slug}/jobs/{item['id']}",
-                       "platform": "greenhouse", "description": item.get("content", "") or "",
-                       "fit_score": 0, "status": "new"}
+        for slug in ([board] if board else TEST_BOARDS.get(platform, [])):
+            job = _live_job(platform, slug, c)
+            if job:
                 break
     if url and job:
         job["url"] = url
     if not job:
-        step("Fetch a live job", False, "no Greenhouse board answered")
+        step("Fetch a live job", False, f"no {platform} board answered")
         return result
     job.setdefault("id", f"selftest-{int(time.time())}")
     job.setdefault("fit_score", 0)
-    step("Fetch a live job", True, f"{job.get('company')}: {job.get('title')} ({time.monotonic() - t0:.1f}s)")
+    step("Fetch a live job", True, f"{platform} · {job.get('company')}: {job.get('title')} ({time.monotonic() - t0:.1f}s)")
 
     if fake:
         details, saved = dict(TEST_APPLICANT), {"all": {}, "companies": {}}

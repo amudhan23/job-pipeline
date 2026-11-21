@@ -1269,15 +1269,17 @@ def doctor(online: bool, as_json: bool) -> None:
 
 @main.command()
 @click.option("--fake", is_flag=True, help="Use a made-up applicant and a blank resume (no private data needed)")
-@click.option("--board", default=None, help="Greenhouse board to test against (default: a few well-known ones)")
+@click.option("--platform", default="greenhouse", type=click.Choice(["greenhouse", "lever", "ashby"]),
+              help="Which kind of board to test against")
+@click.option("--board", default=None, help="Board slug to test against (default: a few well-known ones)")
 @click.option("--out", "out_dir", default=None, help="Where to keep the screenshot and report")
-def selftest(fake: bool, board: str | None, out_dir: str | None) -> None:
+def selftest(fake: bool, platform: str, board: str | None, out_dir: str | None) -> None:
     """Fill a real, live job application end to end without sending it.
     Proves the browser, the form filler and your details work together."""
     from pipeline import doctor as doc
     folder = Path(out_dir) if out_dir else Path(tempfile.mkdtemp(prefix="jobpipe-selftest-"))
     console.print(f"[bold]Self-test[/bold] ({'made-up applicant' if fake else 'your details'}). Nothing is submitted.\n")
-    result = doc.selftest(folder, fake=fake, board=board, say=lambda m: console.print("  " + m))
+    result = doc.selftest(folder, fake=fake, board=board, say=lambda m: console.print("  " + m), platform=platform)
     (folder / "selftest.json").write_text(json.dumps(result, indent=1))
     if result.get("screenshot"):
         console.print(f"\n  screenshot: {result['screenshot']}")
