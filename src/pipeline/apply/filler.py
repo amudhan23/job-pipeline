@@ -377,6 +377,9 @@ def application_url(job: dict[str, Any]) -> str | None:
         return url if url.endswith("/apply") else f"{url}/apply"
     if platform == "ashby":
         return url if url.endswith("/application") else f"{url}/application"
+    if platform == "workable":
+        # apply.workable.com/{account}/j/{shortcode}/ → the same with /apply/
+        return url if url.endswith("/apply") else f"{url}/apply/"
     return None
 
 

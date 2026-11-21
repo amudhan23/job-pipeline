@@ -191,6 +191,7 @@ TEST_BOARDS = {
     "greenhouse": ["discord", "figma", "airbnb", "robinhood", "dropbox", "coinbase", "stripe", "gitlab"],
     "lever": ["aircall", "achievers", "acceldata", "3pillarglobal", "aledade", "aifund", "actian", "aeva"],
     "ashby": ["1password", "acorns", "abridge", "9fin", "8vc", "abound", "1x", "adaptivesecurity"],
+    "workable": ["botpress", "cloudfactory", "blacklinesafety", "bmlltech", "arondite", "coldquanta", "cogna", "civica-uk-ltd-1"],
 }
 
 
@@ -215,6 +216,13 @@ def _live_job(platform: str, slug: str, c: Any) -> dict[str, Any] | None:
             items = [i for i in items if i.get("isListed", True) and i.get("jobUrl")]
             pick = lambda i: (i.get("title", ""), i.get("jobUrl", ""), i.get("location", ""),
                               i.get("descriptionPlain", "") or "", f"ashby-{slug}-{i.get('id', '')}", slug)
+        elif platform == "workable":
+            r = c.get(f"https://apply.workable.com/api/v1/widget/accounts/{slug}", params={"details": "true"})
+            items = (r.json().get("jobs", []) if r.status_code == 200 else [])
+            pick = lambda i: (i.get("title", ""),
+                              i.get("url") or f"https://apply.workable.com/{slug}/j/{i.get('shortcode', '')}/",
+                              (i.get("location") or {}).get("city", "") if isinstance(i.get("location"), dict) else str(i.get("location") or ""),
+                              re.sub(r"<[^>]+>", " ", i.get("description", "") or ""), f"wk-{slug}-{i.get('shortcode', '')}", slug)
         else:
             return None
     except Exception:

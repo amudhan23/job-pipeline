@@ -29,6 +29,9 @@ def test_live_job_from_each_platform():
         "ashbyhq.com/posting-api/job-board/gamma": {"jobs": [{"id": "u1", "title": "Designer", "jobUrl": "https://jobs.ashbyhq.com/gamma/u1", "isListed": True},
                                                              {"id": "u2", "title": "Founding Engineer", "jobUrl": "https://jobs.ashbyhq.com/gamma/u2",
                                                               "location": "SF", "descriptionPlain": "Agents.", "isListed": True}]},
+        "workable.com/api/v1/widget/accounts/delta": {"jobs": [{"shortcode": "AB12", "title": "Platform Engineer",
+                                                               "url": "https://apply.workable.com/delta/j/AB12/",
+                                                               "location": {"city": "London"}, "description": "<p>Kubernetes.</p>"}]},
     })
     gh = doctor._live_job("greenhouse", "acme", c)
     assert gh["id"] == "gh-acme-7" and gh["platform"] == "greenhouse" and gh["company"] == "Acme"
@@ -43,3 +46,6 @@ def test_live_job_from_each_platform():
     assert application_url(gh) == "https://job-boards.greenhouse.io/acme/jobs/7"
     assert application_url(lv) == "https://jobs.lever.co/beta/abc/apply"
     assert application_url(ab) == "https://jobs.ashbyhq.com/gamma/u2/application"
+    wk = doctor._live_job("workable", "delta", c)
+    assert wk["id"] == "wk-delta-AB12" and wk["location"] == "London" and "Kubernetes" in wk["description"]
+    assert application_url(wk) == "https://apply.workable.com/delta/j/AB12/apply/"

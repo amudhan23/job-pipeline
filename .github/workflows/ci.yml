@@ -2,8 +2,8 @@
 #
 #   test   the unit tests (with Chromium and LaTeX, so nothing is skipped)
 #   image  builds the Docker image Fly.io runs, starts it, checks /healthz,
-#          then runs `jobpipe selftest --fake` INSIDE it for Greenhouse, Lever
-#          and Ashby: a real posting is fetched and its real form filled by a
+#          then runs `jobpipe selftest --fake` INSIDE it for Greenhouse, Lever,
+#          Ashby and Workable: a real posting is fetched and its real form filled by a
 #          made-up applicant.
 #          Nothing is submitted. Pushes to main publish the image to
 #          ghcr.io/<owner>/job-pipeline.
@@ -80,6 +80,10 @@ jobs:
           docker exec jp jobpipe selftest --fake --platform greenhouse --out /app/data/selftest/greenhouse
           docker exec jp jobpipe selftest --fake --platform lever --out /app/data/selftest/lever
           docker exec jp jobpipe selftest --fake --platform ashby --out /app/data/selftest/ashby
+          docker exec jp jobpipe selftest --fake --platform workable --out /app/data/selftest/workable
+          for p in greenhouse lever ashby workable; do
+            docker exec jp python -c "import json; d=json.load(open('/app/data/selftest/$p/selftest.json')); print('$p needs you:', d.get('needs'))"
+          done
       - name: Hiring posts from Hacker News and Bluesky (live, no AI)
         run: |
           sleep 30   # the server collects on its own after its first crawler pass

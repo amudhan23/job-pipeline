@@ -16,6 +16,8 @@
 #
 # Decrypt a downloaded bundle with:
 #   openssl enc -d -aes-256-cbc -pbkdf2 -in resume.enc | tar xz
+# or, from the log: copy the lines between BEGIN/END BUNDLE into a file, then
+#   base64 -d bundle.b64 > resume.enc
 
 name: live resume
 
@@ -125,6 +127,11 @@ jobs:
           mkdir -p out
           tar czf - -C out . | openssl enc -aes-256-cbc -pbkdf2 -pass env:ARTIFACT_PASSPHRASE -out resume.enc
           ls -l resume.enc
+          # The same encrypted bundle, base64 in the log: readable from places
+          # that can reach api.github.com but not the artifact store.
+          echo "::group::bundle (base64, encrypted)"
+          echo "-----BEGIN BUNDLE-----"; base64 -w76 resume.enc; echo "-----END BUNDLE-----"
+          echo "::endgroup::"
 
       - uses: actions/upload-artifact@v4
         if: always()

@@ -1269,7 +1269,7 @@ def doctor(online: bool, as_json: bool) -> None:
 
 @main.command()
 @click.option("--fake", is_flag=True, help="Use a made-up applicant and a blank resume (no private data needed)")
-@click.option("--platform", default="greenhouse", type=click.Choice(["greenhouse", "lever", "ashby"]),
+@click.option("--platform", default="greenhouse", type=click.Choice(["greenhouse", "lever", "ashby", "workable"]),
               help="Which kind of board to test against")
 @click.option("--board", default=None, help="Board slug to test against (default: a few well-known ones)")
 @click.option("--out", "out_dir", default=None, help="Where to keep the screenshot and report")
