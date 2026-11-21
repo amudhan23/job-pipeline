@@ -594,13 +594,18 @@ def _pick_suggestion(page, box, value: str) -> str | None:
     """A plain text box that turns out to be a place search (Lever's
     "Current location" uses Google Places): typing alone leaves it empty
     until a suggestion is chosen. Type the city, take the first suggestion
-    that starts with it, and confirm the box kept a value."""
+    that starts with it (waiting up to 3 s for the list, which comes from a
+    remote service), then move on and confirm the box kept a value."""
     city = value.split(",")[0].strip()
     try:
         box.fill(city)
-        page.wait_for_timeout(900)
         items = page.locator(_SUGGESTIONS)
+        for _ in range(10):                     # up to ~3 s for suggestions to arrive
+            page.wait_for_timeout(300)
+            if any(items.nth(i).is_visible() for i in range(min(items.count(), 8))):
+                break
         n = min(items.count(), 8)
+        clicked = False
         for i in range(n):
             it = items.nth(i)
             if not it.is_visible():
@@ -608,11 +613,18 @@ def _pick_suggestion(page, box, value: str) -> str | None:
             text = " ".join((it.inner_text() or "").split())
             if text.lower().startswith(city.lower()):
                 it.click()
-                page.wait_for_timeout(300)
-                shown = box.input_value() if box.count() else ""
-                return shown or text
-        if n == 0:
-            box.fill(value)                      # no suggestions: a plain field after all
+                clicked = True
+                break
+        if not clicked:
+            box.fill(value)                     # no usable suggestion: a plain field, or one to check
+            return None                         # (never Enter here: that submits the form)
+        page.wait_for_timeout(300)
+        box.press("Tab")                        # leave the field, as a person would
+        page.wait_for_timeout(300)
+        shown = box.input_value() if box.count() else ""
+        if shown:
+            return shown
+        box.fill(value)
     except Exception:
         try:
             box.fill(value)
