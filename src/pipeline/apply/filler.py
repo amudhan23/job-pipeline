@@ -275,10 +275,15 @@ _COMBO_VALUE_JS = r"""
 _CHECK_JS = "(ids) => {\n" + _HELPERS_JS + r"""
   const comboValue = """ + _COMBO_VALUE_JS + r""";
   const out = [], seen = new Set();
+  const around = el => {
+    let c = el;
+    for (let i = 0; i < 3 && c.parentElement && c.parentElement.tagName !== 'FORM'; i++) c = c.parentElement;
+    return (c.outerHTML || '').replace(/\s+/g, ' ').slice(0, 1500);
+  };
   const add = (el, why) => {
     const label = labelOf(el);
     if (seen.has(label)) return;
-    seen.add(label); out.push({label, why});
+    seen.add(label); out.push({label, why, html: around(el)});
   };
   for (const id of ids) {
     const el = document.querySelector(`[data-jp="${id}"]`);
@@ -300,7 +305,7 @@ _CHECK_JS = "(ids) => {\n" + _HELPERS_JS + r"""
       if (g.length >= 2) {
         if (g.some(x => x.checked)) continue;
         const label = groupLabel(g);
-        if (!seen.has(label)) { seen.add(label); out.push({label, why: 'nothing ticked'}); }
+        if (!seen.has(label)) { seen.add(label); out.push({label, why: 'nothing ticked', html: around(el)}); }
         continue;
       }
     }
@@ -356,6 +361,7 @@ class FillReport:
     submit_note: str = ""        # what happened when submitting (or why it didn't)
     ai_written: list[str] = field(default_factory=list)   # questions answered with an AI draft
     captured: dict[str, str] = field(default_factory=dict)  # handoff: what you typed for open questions
+    markup: dict[str, str] = field(default_factory=dict)    # the HTML around questions the final check flagged
 
     @property
     def resume_attached(self) -> bool:
@@ -501,6 +507,8 @@ def _final_check(page, fields: list[dict], report: FillReport) -> None:
         if key in flagged:
             continue
         flagged.add(key)
+        if p.get("html"):
+            report.markup[p.get("label", "") or "(unlabelled field)"] = p["html"]
         was = next((f for f in report.filled if _norm_label(f.label) == key), None)
         if was:
             report.filled.remove(was)

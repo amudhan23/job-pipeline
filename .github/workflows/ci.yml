@@ -82,7 +82,7 @@ jobs:
           docker exec jp jobpipe selftest --fake --platform ashby --out /app/data/selftest/ashby
           docker exec jp jobpipe selftest --fake --platform workable --out /app/data/selftest/workable
           for p in greenhouse lever ashby workable; do
-            docker exec jp python -c "import json; d=json.load(open('/app/data/selftest/$p/report.json')); [print('$p needs you:', f['kind'], '|', f['label'][:90], '|', f['source']) for f in d.get('needs_attention') or []]"
+            docker exec jp python -c "import json; d=json.load(open('/app/data/selftest/$p/report.json')); [print('$p needs you:', f['kind'], '|', f['label'][:90], '|', f['source']) for f in d.get('needs_attention') or []]; [print('$p markup:', k[:60], '::', v) for k, v in (d.get('markup') or {}).items()]"
           done
       - name: Hiring posts from Hacker News and Bluesky (live, no AI)
         run: |
