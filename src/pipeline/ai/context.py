@@ -68,6 +68,38 @@ def _rendered_text(url: str) -> str:
         return ""
 
 
+def _api_description(url: str) -> tuple[str, dict[str, str]]:
+    """The posting straight from the board's public API (Ashby, Lever,
+    Greenhouse): clean text, no JavaScript, no bot wall. Returns the
+    description and whatever else the API knows (title, location)."""
+    import httpx
+    m = re.match(r"https?://jobs\.ashbyhq\.com/([^/?#]+)/([0-9a-f-]{36})", url, re.I)
+    if m:
+        r = httpx.get(f"https://api.ashbyhq.com/posting-api/job-board/{m.group(1)}", timeout=20)
+        for j in (r.json().get("jobs", []) if r.status_code == 200 else []):
+            if j.get("id", "").lower() == m.group(2).lower():
+                return j.get("descriptionPlain") or _page_text(j.get("descriptionHtml") or ""), \
+                    {"title": j.get("title", ""), "location": j.get("location", "")}
+        return "", {}
+    m = re.match(r"https?://jobs\.lever\.co/([^/?#]+)/([0-9a-f-]{36})", url, re.I)
+    if m:
+        r = httpx.get(f"https://api.lever.co/v0/postings/{m.group(1)}/{m.group(2)}", timeout=20)
+        if r.status_code == 200:
+            j = r.json()
+            return j.get("descriptionPlain") or _page_text(j.get("description") or ""), \
+                {"title": j.get("text", ""), "location": (j.get("categories") or {}).get("location", "")}
+        return "", {}
+    m = re.match(r"https?://(?:boards|job-boards)\.greenhouse\.io/([^/?#]+)/jobs/(\d+)", url, re.I)
+    if m:
+        r = httpx.get(f"https://boards-api.greenhouse.io/v1/boards/{m.group(1)}/jobs/{m.group(2)}", timeout=20)
+        if r.status_code == 200:
+            j = r.json()
+            import html as _html
+            return _page_text(_html.unescape(j.get("content") or "")), \
+                {"title": j.get("title", ""), "location": (j.get("location") or {}).get("name", "")}
+    return "", {}
+
+
 def ensure_description(job: dict[str, Any]) -> dict[str, Any]:
     """The job with its description; fetches the posting page when the feed
     that found it didn't carry one (SimplifyJobs listings have none). Plain
@@ -75,7 +107,14 @@ def ensure_description(job: dict[str, Any]) -> dict[str, Any]:
     draws the posting with JavaScript."""
     if len(re.sub(r"<[^>]+>", " ", job.get("description") or "").split()) >= 60 or not job.get("url"):
         return job
-    text = ""
+    text, known = "", {}
+    try:
+        text, known = _api_description(job["url"])
+    except Exception:
+        pass
+    if len(text.split()) >= 60:
+        return {**job, "description": text[:15000],
+                **{k: v for k, v in known.items() if v and not job.get(k)}}
     try:
         import httpx
         r = httpx.get(job["url"], timeout=20, follow_redirects=True, headers=_BROWSER_HEADERS)

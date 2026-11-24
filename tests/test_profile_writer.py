@@ -411,3 +411,36 @@ def test_description_falls_back_to_a_rendered_page(monkeypatch):
     assert job["description"].startswith("Build the orchestration engine")
     monkeypatch.setattr(context, "_rendered_text", lambda url: "")
     assert context.ensure_description({"url": "https://startup.jobs/x", "description": ""})["description"] == ""
+
+
+def test_board_api_is_asked_first_for_ashby_lever_greenhouse_postings(monkeypatch):
+    """Ashby pages are drawn with JavaScript and a plain request sees nothing;
+    the board's public API has the posting as clean text."""
+    import httpx
+    from pipeline.ai import context
+    calls = []
+
+    class R:
+        def __init__(self, data):
+            self.status_code, self._d, self.headers, self.text = 200, data, {"content-type": "application/json"}, ""
+
+        def json(self):
+            return self._d
+    def fake_get(url, **k):
+        calls.append(url)
+        if "api.ashbyhq.com" in url:
+            return R({"jobs": [{"id": "1D4AEB39-2A3D-4B5A-B8C4-F9E3963004F9", "title": "Founding Engineer, Agents",
+                                "location": "New York", "descriptionPlain": "Own the agent layer. " * 40}]})
+        if "api.lever.co" in url:
+            return R({"text": "Backend Engineer", "categories": {"location": "Remote"}, "descriptionPlain": "Go services. " * 40})
+        if "boards-api.greenhouse.io" in url:
+            return R({"title": "SWE", "location": {"name": "SF"}, "content": "&lt;p&gt;Build things.&lt;/p&gt; " * 40})
+        raise AssertionError(url)
+    monkeypatch.setattr(httpx, "get", fake_get)
+    j = context.ensure_description({"url": "https://jobs.ashbyhq.com/Clera/1d4aeb39-2a3d-4b5a-b8c4-f9e3963004f9", "title": ""})
+    assert j["description"].startswith("Own the agent layer") and j["title"] == "Founding Engineer, Agents" and j["location"] == "New York"
+    j = context.ensure_description({"url": "https://jobs.lever.co/acme/5f3c2a10-1234-4abc-9def-000000000001"})
+    assert j["description"].startswith("Go services") and j["title"] == "Backend Engineer"
+    j = context.ensure_description({"url": "https://job-boards.greenhouse.io/acme/jobs/4012345"})
+    assert "Build things." in j["description"] and "<p>" not in j["description"]
+    assert all("api" in c for c in calls)        # never fell through to the page
