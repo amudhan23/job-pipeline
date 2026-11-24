@@ -68,7 +68,9 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends texlive-latex-base texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended lmodern poppler-utils
       - name: Install
-        run: pip install -e '.[ai]'
+        run: |
+          pip install -e '.[ai,apply]'
+          python -m playwright install --with-deps chromium > /dev/null   # renders postings that refuse plain requests
 
       - name: Private files from secrets
         env:

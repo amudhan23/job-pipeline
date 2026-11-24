@@ -38,23 +38,55 @@ def job_block(job: dict[str, Any], limit: int = 8000) -> str:
             f"Location: {job.get('location', '')}\nDescription: {jd or '(not available)'}\n</job>")
 
 
+_BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                  "Chrome/131.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
+def _page_text(html: str) -> str:
+    html = re.sub(r"(?is)<(script|style|noscript|svg|header|footer|nav)[^>]*>.*?</\1>", " ", html)
+    return " ".join(re.sub(r"<[^>]+>", " ", html).split())
+
+
+def _rendered_text(url: str) -> str:
+    """The page as a browser shows it, for sites that refuse plain requests
+    or draw the posting with JavaScript (Ashby, Lever's newer pages)."""
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page(user_agent=_BROWSER_HEADERS["User-Agent"])
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(2500)
+            text = page.evaluate("() => (document.querySelector('main') || document.body).innerText")
+            browser.close()
+        return " ".join((text or "").split())
+    except Exception:
+        return ""
+
+
 def ensure_description(job: dict[str, Any]) -> dict[str, Any]:
     """The job with its description; fetches the posting page when the feed
-    that found it didn't carry one (SimplifyJobs listings have none)."""
+    that found it didn't carry one (SimplifyJobs listings have none). Plain
+    request first; a rendered browser page when the site refuses it or
+    draws the posting with JavaScript."""
     if len(re.sub(r"<[^>]+>", " ", job.get("description") or "").split()) >= 60 or not job.get("url"):
         return job
+    text = ""
     try:
         import httpx
-        r = httpx.get(job["url"], timeout=20, follow_redirects=True,
-                      headers={"User-Agent": "Mozilla/5.0 (jobpipe resume writer)"})
-        if r.status_code != 200 or "html" not in r.headers.get("content-type", "html"):
-            return job
-        html = re.sub(r"(?is)<(script|style|noscript|svg|header|footer|nav)[^>]*>.*?</\1>", " ", r.text)
-        text = " ".join(re.sub(r"<[^>]+>", " ", html).split())
-        if len(text.split()) >= 60:
-            return {**job, "description": text[:15000]}
+        r = httpx.get(job["url"], timeout=20, follow_redirects=True, headers=_BROWSER_HEADERS)
+        if r.status_code == 200 and "html" in r.headers.get("content-type", "html"):
+            text = _page_text(r.text)
     except Exception:
         pass
+    if len(text.split()) < 60:
+        text = _rendered_text(job["url"])
+    if len(text.split()) >= 60:
+        return {**job, "description": text[:15000]}
     return job
 
 
@@ -93,8 +125,7 @@ def job_from_url(url: str, company: str = "", title: str = "", description: str 
 def _page_title(url: str) -> str:
     try:
         import httpx
-        r = httpx.get(url, timeout=20, follow_redirects=True,
-                      headers={"User-Agent": "Mozilla/5.0 (jobpipe resume writer)"})
+        r = httpx.get(url, timeout=20, follow_redirects=True, headers=_BROWSER_HEADERS)
         m = re.search(r"(?is)<title[^>]*>(.*?)</title>", r.text)
         return " ".join(re.sub(r"<[^>]+>", " ", m.group(1)).split())[:150] if m else ""
     except Exception:

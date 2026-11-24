@@ -38,7 +38,9 @@ _GENERIC = {"http", "https", "api", "apis", "json", "url", "urls", "cli", "ui", 
             # people and process, not technology claims
             "pm", "pms", "qa", "qas", "tl", "tls", "em", "ems", "eng", "swe", "swes", "sde", "sdes", "tpm", "tpms",
             "cto", "ceo", "vp", "vps", "poc", "mvp", "okr", "okrs", "kpi", "kpis", "rfc", "rfcs", "prd", "prds",
-            "pr", "prs", "oss", "saas", "b2b", "b2c"}
+            "pr", "prs", "oss", "saas", "b2b", "b2c",
+            # umbrella terms for things the profile names specifically (Claude API, Gemini)
+            "llm", "llms", "genai", "ai"}
 # Short names for institutions, both ways
 _ALIASES = {"nyu": "new york university", "iit": "indian institute of technology",
             "mit": "massachusetts institute of technology", "cmu": "carnegie mellon university"}
@@ -196,6 +198,7 @@ def _norm_num(s: str) -> str:
 
 
 _BOLD = re.compile(r"\*\*(.+?)\*\*")
+_IDIOM = re.compile(r"\b(0|zero)[\s-]*(to|→|-)[\s-]*(1|one)\b|\b24/7\b|\b(first|1st)[\s-]+(pass|time|class)\b", re.I)
 
 
 def _cap_bold(line: str, keep: int = 2) -> str:
@@ -214,6 +217,7 @@ def supported(line: str, source: str) -> tuple[bool, str]:
     """Every number and technology in `line` appears in `source`."""
     src_nums = {_norm_num(n) for n in _NUM.findall(source)}
     src_flat = _norm_num(source)
+    line = _IDIOM.sub(" ", line)          # "0-to-1", "24/7": figures of speech, not claims
     for n in _NUM.findall(line):
         k = _norm_num(n)
         if k not in src_nums and k not in src_flat:

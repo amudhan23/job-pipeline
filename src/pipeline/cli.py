@@ -430,9 +430,10 @@ def serve(ctx: click.Context, port: int, host: str, no_auto: bool) -> None:
 @click.option("--output-dir", "-o", default=None, help="Where to write it (default: the job's application folder)")
 @click.option("--ai/--no-ai", "use_ai", default=True, help="Let Claude write it (default: on with a key)")
 @click.option("--reword/--no-reword", default=True, help="Reword bullets toward the job (fact-guarded)")
+@click.option("--generic", is_flag=True, help="Build even when no job description can be read")
 @click.pass_context
 def resume(ctx: click.Context, job_id: str | None, url: str | None, jd: str | None, company: str,
-           title: str, output_dir: str | None, use_ai: bool, reword: bool) -> None:
+           title: str, output_dir: str | None, use_ai: bool, reword: bool, generic: bool) -> None:
     """Write the resume for one job: --job-id for one the crawler found, or
     --url for any posting. With a career profile it is written from the
     profile for this job's needs; without one it is arranged from your resume."""
@@ -453,8 +454,12 @@ def resume(ctx: click.Context, job_id: str | None, url: str | None, jd: str | No
         job = job_from_url(url, company, title, Path(jd).read_text(errors="replace") if jd else "",
                            tracker=Tracker())
     if len((job.get("description") or "").split()) < 60:
-        console.print("[yellow]No job description could be read from the posting; pass one with --jd FILE "
-                      "for a resume written to the job.[/yellow]")
+        if not generic:
+            raise click.ClickException("no job description could be read from the posting, so the resume "
+                                       "couldn't be written to the job. Pass the description with --jd FILE, "
+                                       "or --generic for a resume aimed at the title alone.")
+        console.print("[yellow]No job description could be read from the posting: this resume is aimed at "
+                      "the title alone.[/yellow]")
     job_id = job["id"]
     folder = Path(output_dir) if output_dir else \
         applicant.PRIVATE_DIR / "applications" / _re.sub(r"[^A-Za-z0-9_.-]", "_", job_id)

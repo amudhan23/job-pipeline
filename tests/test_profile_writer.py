@@ -393,3 +393,21 @@ def test_first_real_build_lessons():
     assert w._cap_bold("Cut **API** times **40%** in **Java** with **Redis**") == "Cut **API** times **40%** in Java with Redis"
     # LaTeX's curly apostrophe doesn't fail the parse check
     assert w._plain("Built the team’s stack – fast") == "built the team's stack - fast"
+
+
+def test_description_falls_back_to_a_rendered_page(monkeypatch):
+    """startup.jobs answered 403 to a plain request in the live run; sites
+    that refuse or draw the posting with JavaScript get a browser render."""
+    import httpx
+    from pipeline.ai import context
+
+    class R:
+        status_code = 403
+        headers = {"content-type": "text/html"}
+        text = "<html>Forbidden</html>"
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: R())
+    monkeypatch.setattr(context, "_rendered_text", lambda url: "Build the orchestration engine " * 30)
+    job = context.ensure_description({"url": "https://startup.jobs/x", "description": ""})
+    assert job["description"].startswith("Build the orchestration engine")
+    monkeypatch.setattr(context, "_rendered_text", lambda url: "")
+    assert context.ensure_description({"url": "https://startup.jobs/x", "description": ""})["description"] == ""
