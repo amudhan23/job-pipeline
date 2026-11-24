@@ -474,7 +474,9 @@ def resume(ctx: click.Context, job_id: str | None, url: str | None, jd: str | No
         console.print(f"  [dim]steps: {' → '.join(info.get('steps') or [])}"
                       f"{'' if info.get('had_description', True) else ' · no job description was available'}[/dim]")
         if info.get("dropped"):
-            console.print(f"  [yellow]dropped (not in your profile):[/yellow] " + " | ".join(info["dropped"])[:600])
+            for d in info["dropped"]:
+                d = d if isinstance(d, dict) else {"line": str(d)}
+                console.print(f"  [yellow]dropped:[/yellow] {d.get('line', '')[:110]} [dim]({d.get('why', '')})[/dim]")
         if info.get("trimmed"):
             console.print(f"  [dim]trimmed to fit one page: {len(info['trimmed'])} lines[/dim]")
     else:

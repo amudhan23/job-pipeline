@@ -34,7 +34,11 @@ _CASE_SENSITIVE = {"go", "c", "rest", "r"}     # only tech when written "Go", "C
 # Plain words of the trade, not claims of a skill: "HTTP proxy", "REST APIs", "on-call"
 _GENERIC = {"http", "https", "api", "apis", "json", "url", "urls", "cli", "ui", "ux", "io", "cpu", "cpus", "gpu",
             "gpus", "os", "ci", "cd", "id", "ids", "ai", "ml", "sdk", "sdks", "ssd", "ram", "csv", "pdf", "tcp",
-            "ip", "dns", "e2e", "p95", "p99", "qps", "rps", "kb", "mb", "gb", "tb", "ms"}
+            "ip", "dns", "e2e", "p95", "p99", "qps", "rps", "kb", "mb", "gb", "tb", "ms",
+            # people and process, not technology claims
+            "pm", "pms", "qa", "qas", "tl", "tls", "em", "ems", "eng", "swe", "swes", "sde", "sdes", "tpm", "tpms",
+            "cto", "ceo", "vp", "vps", "poc", "mvp", "okr", "okrs", "kpi", "kpis", "rfc", "rfcs", "prd", "prds",
+            "pr", "prs", "oss", "saas", "b2b", "b2c"}
 # Short names for institutions, both ways
 _ALIASES = {"nyu": "new york university", "iit": "indian institute of technology",
             "mit": "massachusetts institute of technology", "cmu": "carnegie mellon university"}
@@ -191,6 +195,21 @@ def _norm_num(s: str) -> str:
     return re.sub(r"[\s,]", "", s.lower()).rstrip(".")
 
 
+_BOLD = re.compile(r"\*\*(.+?)\*\*")
+
+
+def _cap_bold(line: str, keep: int = 2) -> str:
+    """At most `keep` bold terms per bullet: bold is for the two words a
+    recruiter scans for, and a line that is half bold has none."""
+    n = 0
+
+    def sub(m):
+        nonlocal n
+        n += 1
+        return m.group(0) if n <= keep else m.group(1)
+    return _BOLD.sub(sub, line)
+
+
 def supported(line: str, source: str) -> tuple[bool, str]:
     """Every number and technology in `line` appears in `source`."""
     src_nums = {_norm_num(n) for n in _NUM.findall(source)}
@@ -255,7 +274,7 @@ def check(resume: dict[str, Any], profile: str) -> tuple[dict[str, Any], list[di
             t = bad_term(b)
             if t:
                 ok, why = False, f"your Rules say never claim {t}"
-            (bullets.append(b) if ok else dropped.append({"where": e["company"], "line": b, "why": why}))
+            (bullets.append(_cap_bold(b)) if ok else dropped.append({"where": e["company"], "line": b, "why": why}))
         if bullets:
             clean["experience"].append({**e, "bullets": bullets})
     for p in resume.get("projects") or []:
@@ -273,7 +292,7 @@ def check(resume: dict[str, Any], profile: str) -> tuple[dict[str, Any], list[di
             t = bad_term(b, src)
             if t:
                 ok, why = False, f"your Rules say never claim {t}"
-            (bullets.append(b) if ok else dropped.append({"where": p["name"], "line": b, "why": why}))
+            (bullets.append(_cap_bold(b)) if ok else dropped.append({"where": p["name"], "line": b, "why": why}))
         if bullets:
             clean["projects"].append({**p, "bullets": bullets})
     for s in resume.get("skills") or []:
@@ -348,8 +367,9 @@ HOW TO WRITE A BULLET.
 - A project's "stack" shows only the 2-4 technologies this job cares about,
   never every tool used. Skills list only what's relevant to this job.
 - One to two lines each: 120-200 characters, never more. Cut the why-story;
-  keep what, how and the result. Bold the 2-3 terms a
-  recruiter scans for (**Java Spring Boot**, **10K+ daily requests**, **40%**).
+  keep what, how and the result. Bold at most 2 short terms per bullet, the
+  ones a recruiter scans for (**Spring Boot**, **40%**); a line that is half
+  bold reads as no bold at all.
 - No em dashes. No summary section unless the Rules allow one.
 
 Reply with JSON only:
@@ -421,7 +441,7 @@ Check, and fix what fails:
 - Terms from the plan's keyword list that the applicant honestly has are
   present.
 - Bullets are 120-200 characters, specific, with the profile's numbers, the
-  2-3 scan terms bolded, no filler, no em dashes. About 18-20 in total.
+  at most 2 scan terms bolded (never a whole phrase), no filler, no em dashes. About 18-20 in total.
 
 Facts: only from the career profile, each under its own role or project;
 follow its Rules. Return the full improved resume. In "note", say in one or
@@ -656,8 +676,8 @@ def render(resume: dict[str, Any], details: dict[str, str], pt: int = 10) -> str
                 context = ""
             left = rf"\textbf{{{e(p.get('name', ''))}}}" + (rf" $|$ \emph{{{e(stack)}}}" if stack else "") \
                 + (rf" --- {e(context)}" if context else "")
-            right = _href(link, "github.com" in link and re.sub(r"^https?://(www\.)?", "", link).rstrip("/") or "link") \
-                if link else ""
+            right = _href(link, re.sub(r"^https?://(www\.)?", "", link).rstrip("/") if "github.com" in link
+                          else re.sub(r"^https?://(www\.)?([^/]+).*$", r"\2", link)) if link else ""
             out.append(rf"\proj{{{left}}}{{{right}}}")
             out.append(bullets(p["bullets"]))
     if resume.get("skills"):
@@ -708,7 +728,7 @@ def _main_role(resume: dict[str, Any]) -> dict | None:
 
 def fit_one_page(resume: dict[str, Any], details: dict[str, str], out: Path) -> tuple[Path | None, list[str]]:
     """Build; while it runs past one page, cut the least important thing first:
-    extra sections, a fourth skills line, project bullets past the first, the
+    project bullets past the second, a fourth skills line, extra sections, the
     last project (keeping two), other roles down to two bullets then one, and
     the main job never below three. Returns (pdf, what was trimmed)."""
     trimmed: list[str] = []
@@ -722,13 +742,15 @@ def fit_one_page(resume: dict[str, Any], details: dict[str, str], out: Path) -> 
             return pdf, trimmed
         projects = resume.get("projects") or []
         others = [x for x in resume.get("experience") or [] if x is not main]
-        if resume.get("extras"):
-            trimmed.append(f"section {resume['extras'].pop()['label']}")
-        elif len(resume.get("skills") or []) > 3:
-            trimmed.append(f"skills line {resume['skills'].pop()['label']}")
-        elif [p for p in projects if len(p["bullets"]) > 2]:
+        # A third project bullet goes before a patent, award or publication:
+        # those are one line each and carry weight the bullet doesn't.
+        if [p for p in projects if len(p["bullets"]) > 2]:
             target = max(projects, key=lambda x: len(x["bullets"]))
             trimmed.append(target["bullets"].pop())
+        elif len(resume.get("skills") or []) > 3:
+            trimmed.append(f"skills line {resume['skills'].pop()['label']}")
+        elif resume.get("extras"):
+            trimmed.append(f"section {resume['extras'].pop()['label']}")
         elif len(projects) > 3:
             trimmed.append(f"project {projects.pop()['name']}")
         elif [x for x in others if len(x["bullets"]) > 2]:
@@ -798,6 +820,13 @@ def pdf_text(pdf: Path) -> str:
         return ""
 
 
+def _plain(text: str) -> str:
+    """Lower-case, with the typographic quotes and dashes LaTeX sets folded
+    back to the keys that were typed."""
+    return (text.lower().replace("\u2019", "'").replace("\u2018", "'").replace("\u201c", '"')
+            .replace("\u201d", '"').replace("\u2013", "-").replace("\u2014", "-").replace("--", "-"))
+
+
 def ats_check(pdf: Path, resume: dict[str, Any], details: dict[str, str]) -> list[str]:
     """What an applicant-tracking parser would get wrong with this PDF: a
     bullet, the name or the email that doesn't come back out as text, or
@@ -805,7 +834,7 @@ def ats_check(pdf: Path, resume: dict[str, Any], details: dict[str, str]) -> lis
     text = pdf_text(pdf)
     if not text.strip():
         return ["no text could be extracted from the PDF"]
-    flat = re.sub(r"\s+", "", text).lower()        # extractors differ on spaces, not on letters
+    flat = _plain(re.sub(r"\s+", "", text))        # extractors differ on spaces, not on letters
     problems: list[str] = []
     for bad in ("\ufb01", "\ufb02", "\ufb00", "\ufb03", "\ufb04"):
         if bad in text:
@@ -817,7 +846,7 @@ def ats_check(pdf: Path, resume: dict[str, Any], details: dict[str, str]) -> lis
     lines = [b for x in (resume.get("experience") or []) + (resume.get("projects") or []) for b in x["bullets"]]
     for b in lines:
         words = re.sub(r"\*\*", "", b).split()
-        probe = "".join(words[:6]).lower()
+        probe = _plain("".join(words[:6]))
         if probe and probe not in flat:
             problems.append(f"bullet doesn't extract whole: {b[:60]}")
     return problems

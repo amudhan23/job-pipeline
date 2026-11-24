@@ -383,3 +383,13 @@ def test_pdf_reads_back_as_clean_text(tmp_path):
     resume["experience"][0]["bullets"] = ["Did a thing that mattered to the team and to the customers " * 3] * 18
     pdf, trimmed = w.fit_one_page(resume, details, tmp_path / "r2.pdf")
     assert pdf and w._pages(pdf) == 1 and "10pt" in pdf.with_suffix(".tex").read_text()
+
+
+def test_first_real_build_lessons():
+    """From the first resume written with the real API (Nov 24)."""
+    # 'PMs' is people, not a technology claim: the lead IBM bullet must not be dropped for it
+    assert w.supported("Owned **3 backend services** with PMs and designers", "Owned 3 backend services with product managers")[0]
+    # bold is capped at two terms per bullet
+    assert w._cap_bold("Cut **API** times **40%** in **Java** with **Redis**") == "Cut **API** times **40%** in Java with Redis"
+    # LaTeX's curly apostrophe doesn't fail the parse check
+    assert w._plain("Built the team’s stack – fast") == "built the team's stack - fast"
