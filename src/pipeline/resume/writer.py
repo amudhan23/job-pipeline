@@ -653,6 +653,7 @@ def render(resume: dict[str, Any], details: dict[str, str], pt: int = 10) -> str
            r"\vspace{-10pt}"]
 
     def bullets(items: list[str]) -> str:
+        items = [re.sub(r"[.;,]\s*$", "", i.strip()) for i in items]     # one style: no trailing period
         return r"\begin{itemize}" + "".join(rf"\item {e(b)}" + "\n" for b in items) + r"\end{itemize}"
 
     if resume.get("experience"):
@@ -676,12 +677,18 @@ def render(resume: dict[str, Any], details: dict[str, str], pt: int = 10) -> str
             link = p.get("link", "")
             # One line: name | stack — context, link at the right. The context is
             # dropped (never cut mid-phrase) when the line would wrap.
-            if context and len(p.get("name", "")) + len(stack) + len(context) > 88:
+            label = (re.sub(r"^https?://(www\.)?", "", link).rstrip("/") if "github.com" in link
+                     else re.sub(r"^https?://(www\.)?([^/]+).*$", r"\2", link)) if link else ""
+            # One line only (about 95 characters at this size): the context goes
+            # first, then the link shrinks to its host, rather than wrapping
+            budget = 95 - len(p.get("name", "")) - len(stack) - 6
+            if context and len(context) + len(label) > budget:
                 context = ""
+            if label and len(label) > budget:
+                label = re.sub(r"^([^/]+).*$", r"\1", label)
             left = rf"\textbf{{{e(p.get('name', ''))}}}" + (rf" $|$ \emph{{{e(stack)}}}" if stack else "") \
                 + (rf" --- {e(context)}" if context else "")
-            right = _href(link, re.sub(r"^https?://(www\.)?", "", link).rstrip("/") if "github.com" in link
-                          else re.sub(r"^https?://(www\.)?([^/]+).*$", r"\2", link)) if link else ""
+            right = _href(link, label) if link else ""
             out.append(rf"\proj{{{left}}}{{{right}}}")
             out.append(bullets(p["bullets"]))
     if resume.get("skills"):
@@ -760,6 +767,10 @@ def fit_one_page(resume: dict[str, Any], details: dict[str, str], out: Path) -> 
         elif [x for x in others if len(x["bullets"]) > 2]:
             target = max(others, key=lambda x: len(x["bullets"]))
             trimmed.append(target["bullets"].pop())
+        # The main job's fifth and sixth bullets go before any project loses its
+        # second: the lead projects are often the closest match to the posting
+        elif main and len(main["bullets"]) > 4:
+            trimmed.append(main["bullets"].pop())
         elif [p for p in projects if len(p["bullets"]) > 1]:
             target = [p for p in projects if len(p["bullets"]) > 1][-1]
             trimmed.append(target["bullets"].pop())
@@ -849,7 +860,7 @@ def ats_check(pdf: Path, resume: dict[str, Any], details: dict[str, str]) -> lis
             problems.append(f"{key.replace('_', ' ')} not found in the text")
     lines = [b for x in (resume.get("experience") or []) + (resume.get("projects") or []) for b in x["bullets"]]
     for b in lines:
-        words = re.sub(r"\*\*", "", b).split()
+        words = re.sub(r"[.;,]\s*$", "", re.sub(r"\*\*", "", b).strip()).split()
         probe = _plain("".join(words[:6]))
         if probe and probe not in flat:
             problems.append(f"bullet doesn't extract whole: {b[:60]}")

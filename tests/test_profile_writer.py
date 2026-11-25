@@ -447,3 +447,19 @@ def test_board_api_is_asked_first_for_ashby_lever_greenhouse_postings(monkeypatc
     j = context.ensure_description({"url": "https://job-boards.greenhouse.io/acme/jobs/4012345"})
     assert "Build things." in j["description"] and "<p>" not in j["description"]
     assert all("api" in c for c in calls)        # never fell through to the page
+
+
+def test_trim_takes_the_main_jobs_fifth_bullet_before_a_projects_second(monkeypatch):
+    from pathlib import Path
+    """Third real build: the two lead projects were cut to one bullet each
+    while the main job kept six."""
+    resume = {"experience": [{"title": "SE", "company": "IBM", "dates": "2021", "bullets": [f"IBM {i}" for i in range(6)]},
+                             {"title": "Intern", "company": "S", "dates": "2025", "bullets": ["S 0", "S 1"]}],
+              "projects": [{"name": "P1", "bullets": ["P1 0", "P1 1"]}, {"name": "P2", "bullets": ["P2 0", "P2 1"]}],
+              "skills": [], "extras": []}
+    pages = iter([2, 2, 2, 2, 1])        # 11pt, 10pt, then three trims until it fits
+    monkeypatch.setattr(w, "build_pdf", lambda *a, **k: Path("/tmp/x.pdf"))
+    monkeypatch.setattr(w, "_pages", lambda p: next(pages))
+    _, trimmed = w.fit_one_page(resume, {}, Path("/tmp/x.pdf"))
+    assert trimmed == ["IBM 5", "IBM 4", "P2 1"]
+    assert all(len(p["bullets"]) >= 1 for p in resume["projects"]) and len(resume["experience"][0]["bullets"]) == 4
