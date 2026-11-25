@@ -677,6 +677,9 @@ def render(resume: dict[str, Any], details: dict[str, str], pt: int = 10) -> str
             link = p.get("link", "")
             # One line: name | stack — context, link at the right. The context is
             # dropped (never cut mid-phrase) when the line would wrap.
+            # The writer sometimes gives two links ("live | repo"): keep the first
+            links = [x for x in re.split(r"\s*[|,]\s*|\s+", link.strip()) if x]
+            link = links[0] if links else ""
             label = (re.sub(r"^https?://(www\.)?", "", link).rstrip("/") if "github.com" in link
                      else re.sub(r"^https?://(www\.)?([^/]+).*$", r"\2", link)) if link else ""
             # One line only (about 95 characters at this size): the context goes
