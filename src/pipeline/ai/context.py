@@ -68,18 +68,23 @@ def _rendered_text(url: str) -> str:
         return ""
 
 
-def _api_description(url: str) -> tuple[str, dict[str, str]]:
+def _api_description(url: str, title_hint: str = "") -> tuple[str, dict[str, str]]:
     """The posting straight from the board's public API (Ashby, Lever,
     Greenhouse): clean text, no JavaScript, no bot wall. Returns the
-    description and whatever else the API knows (title, location)."""
+    description and whatever else the API knows (title, location, url). An
+    Ashby board URL with a title hint picks the live posting with that title."""
     import httpx
-    m = re.match(r"https?://jobs\.ashbyhq\.com/([^/?#]+)/([0-9a-f-]{36})", url, re.I)
+    m = re.match(r"https?://jobs\.ashbyhq\.com/([^/?#]+)(?:/([0-9a-f-]{36}))?/?$", url, re.I)
     if m:
         r = httpx.get(f"https://api.ashbyhq.com/posting-api/job-board/{m.group(1)}", timeout=20)
-        for j in (r.json().get("jobs", []) if r.status_code == 200 else []):
-            if j.get("id", "").lower() == m.group(2).lower():
+        jobs = r.json().get("jobs", []) if r.status_code == 200 else []
+        want = (m.group(2) or "").lower()
+        hint = title_hint.strip().lower()
+        for j in jobs:
+            if (want and j.get("id", "").lower() == want) or \
+                    (not want and hint and hint in (j.get("title") or "").lower()):
                 return j.get("descriptionPlain") or _page_text(j.get("descriptionHtml") or ""), \
-                    {"title": j.get("title", ""), "location": j.get("location", "")}
+                    {"title": j.get("title", ""), "location": j.get("location", ""), "url": j.get("jobUrl", "")}
         return "", {}
     m = re.match(r"https?://jobs\.lever\.co/([^/?#]+)/([0-9a-f-]{36})", url, re.I)
     if m:
@@ -109,12 +114,12 @@ def ensure_description(job: dict[str, Any]) -> dict[str, Any]:
         return job
     text, known = "", {}
     try:
-        text, known = _api_description(job["url"])
+        text, known = _api_description(job["url"], job.get("title") or "")
     except Exception:
         pass
     if len(text.split()) >= 60:
         return {**job, "description": text[:15000],
-                **{k: v for k, v in known.items() if v and not job.get(k)}}
+                **{k: v for k, v in known.items() if v and (not job.get(k) or k in ("url", "title"))}}
     try:
         import httpx
         r = httpx.get(job["url"], timeout=20, follow_redirects=True, headers=_BROWSER_HEADERS)

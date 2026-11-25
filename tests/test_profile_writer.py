@@ -430,7 +430,7 @@ def test_board_api_is_asked_first_for_ashby_lever_greenhouse_postings(monkeypatc
         calls.append(url)
         if "api.ashbyhq.com" in url:
             return R({"jobs": [{"id": "1D4AEB39-2A3D-4B5A-B8C4-F9E3963004F9", "title": "Founding Engineer, Agents",
-                                "location": "New York", "descriptionPlain": "Own the agent layer. " * 40}]})
+                                "location": "New York", "jobUrl": "https://jobs.ashbyhq.com/clera/1d4aeb39", "descriptionPlain": "Own the agent layer. " * 40}]})
         if "api.lever.co" in url:
             return R({"text": "Backend Engineer", "categories": {"location": "Remote"}, "descriptionPlain": "Go services. " * 40})
         if "boards-api.greenhouse.io" in url:
@@ -439,6 +439,9 @@ def test_board_api_is_asked_first_for_ashby_lever_greenhouse_postings(monkeypatc
     monkeypatch.setattr(httpx, "get", fake_get)
     j = context.ensure_description({"url": "https://jobs.ashbyhq.com/Clera/1d4aeb39-2a3d-4b5a-b8c4-f9e3963004f9", "title": ""})
     assert j["description"].startswith("Own the agent layer") and j["title"] == "Founding Engineer, Agents" and j["location"] == "New York"
+    # a board URL plus a title picks the live posting (search engines index postings long gone)
+    j = context.ensure_description({"url": "https://jobs.ashbyhq.com/clera", "title": "founding engineer"})
+    assert j["title"] == "Founding Engineer, Agents" and j["description"].startswith("Own the agent layer")
     j = context.ensure_description({"url": "https://jobs.lever.co/acme/5f3c2a10-1234-4abc-9def-000000000001"})
     assert j["description"].startswith("Go services") and j["title"] == "Backend Engineer"
     j = context.ensure_description({"url": "https://job-boards.greenhouse.io/acme/jobs/4012345"})
