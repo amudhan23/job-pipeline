@@ -307,3 +307,8 @@ textarea { width: 100%; font: inherit; padding: 8px 10px; border: 1px solid var(
 .who.cand .sub { font-size: 13px; color: var(--muted); margin-top: 3px; font-weight: 400; }
 .pill { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px; background: var(--line); color: var(--ink); margin-left: 4px; font-weight: 500; }
 .pill.high { background: #d7f0dc; } .pill.medium { background: #fff1c9; } .pill.low { background: #f3d9d9; }
+
+/* Interview prep pack */
+.prep-q { padding: 8px 10px; margin: 6px 0; background: var(--ground); border-radius: var(--radius); }
+.prep-q .sub { margin-top: 4px; font-size: 14px; }
+#modal h3 { margin: 16px 0 6px; font-size: 15px; }

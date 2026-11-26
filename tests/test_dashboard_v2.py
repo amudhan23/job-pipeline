@@ -276,3 +276,15 @@ def test_scorecard_counts_status_changes_by_source(server):
     assert sc["week"]["applied"] == 2 and sc["week"]["interview"] == 1 and sc["month"]["applied"] == 2
     assert sum(v["applied"] for v in sc["week"]["by_source"].values()) == 2
     assert sc["week"]["outreach"] == {"sent": 0, "replied": 0}
+
+
+def test_prep_endpoints_without_a_key(server):
+    base, t, pdir = server
+    d = get(f"{base}/api/prep/gh-acme-1")
+    assert d["exists"] is False and d["building"] is False and d["ai_ready"] is False
+    import urllib.error
+    with pytest.raises(urllib.error.HTTPError) as e:
+        post(f"{base}/api/prep/gh-acme-1/build", {})
+    assert e.value.code == 400 and "Anthropic key" in json.load(e.value)["error"]
+    # marking a job interviewed without a key just records the status
+    assert post(f"{base}/api/jobs/gh-acme-1/status", {"status": "interview"}) == {"ok": True, "prep_started": False}

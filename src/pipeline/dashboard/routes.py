@@ -7,12 +7,15 @@ DashboardHandler (app.py), which already handles auth and the profile API.
 from __future__ import annotations
 
 import json
+import logging
 import mimetypes
 import os
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+from pipeline.ai import client as ai_client
 
 TERMINAL = ("applied", "interview", "offer", "rejected", "skipped")
 APPLIED = ("applied", "interview", "offer", "rejected")
@@ -198,6 +201,16 @@ class ApiMixin:
         m = re.fullmatch(r"/api/resume/([A-Za-z0-9_.:-]+)", path)
         if m:
             return self._resume_info(m.group(1)), 200
+        m = re.fullmatch(r"/api/prep/([A-Za-z0-9_.:-]+)", path)
+        if m:
+            from pipeline import interview
+            folder = _folder(self._pdir(), m.group(1))
+            data = interview.load(folder)
+            busy = (folder / "prep_building").exists()
+            err = folder / "prep_error.txt"
+            return {"exists": bool(data), "building": busy, "prep": data,
+                    "last_error": err.read_text()[:600] if err.exists() and not data else "",
+                    "ai_ready": ai_client.status(self._pdir())[0]}, 200
         m = re.fullmatch(r"/api/runs/(\d{8}-\d{6})/log", path)
         if m:
             from pipeline.autoapply import Runner
@@ -455,7 +468,11 @@ class ApiMixin:
             if not t.get_job(m.group(1)):
                 return {"error": "no such job"}, 404
             t.update_status(m.group(1), ApplicationStatus(status), notes=str(data.get("notes", ""))[:500])
-            return {"ok": True}, 200
+            started = False
+            if status == "interview" and ai_client.status(self._pdir())[0]:
+                # An interview is the moment the prep pack earns its cost: build it now
+                started = self._prep_start(m.group(1))
+            return {"ok": True, "prep_started": started}, 200
         if path == "/api/apply/run":
             ids = [str(i) for i in data.get("job_ids") or []][:25]
             mode = data.get("mode", "practice")
@@ -510,7 +527,51 @@ class ApiMixin:
         if m:
             return self._resume_build(m.group(1), bool(data.get("reword", True)),
                                       str(data.get("description") or "")[:30000])
+        m = re.fullmatch(r"/api/prep/([A-Za-z0-9_.:-]+)/(build|thanks)", path)
+        if m:
+            if not ai_client.status(self._pdir())[0]:
+                return {"error": "Interview prep needs your Anthropic key (My details, AI)."}, 400
+            if not self._tracker().get_job(m.group(1)):
+                return {"error": "no such job"}, 404
+            if m.group(2) == "build":
+                if not self._prep_start(m.group(1), str(data.get("notes") or "")[:3000]):
+                    return {"error": "A pack is already being written for this job."}, 409
+                return {"started": True}, 200
+            from pipeline import interview
+            try:
+                note = interview.thank_you(self._tracker().get_job(m.group(1)), _folder(self._pdir(), m.group(1)),
+                                           str(data.get("interviewer") or "")[:80], str(data.get("notes") or "")[:2000],
+                                           self._pdir())
+            except (ai_client.AIUnavailable, ValueError, RuntimeError) as e:
+                return {"error": str(e)}, 400
+            return note, 200
         return None
+
+    def _prep_start(self, job_id: str, notes: str = "") -> bool:
+        """Write the interview pack in the background (research + pack take a
+        few minutes). False when one is already being written."""
+        import threading
+        from pipeline import interview
+        pdir = self._pdir()
+        folder = _folder(pdir, job_id)
+        flag = folder / "prep_building"
+        if flag.exists() and (datetime.now().timestamp() - flag.stat().st_mtime) < 900:
+            return False
+        folder.mkdir(parents=True, exist_ok=True)
+        flag.write_text(datetime.now().isoformat())
+        job = self._tracker().get_job(job_id)
+
+        def run():
+            try:
+                interview.prep(job, folder, pdir, notes=notes)
+                (folder / "prep_error.txt").unlink(missing_ok=True)
+            except Exception as e:
+                logging.getLogger(__name__).warning("interview prep failed for %s: %s", job_id, e)
+                (folder / "prep_error.txt").write_text(f"{type(e).__name__}: {e}"[:600])
+            finally:
+                flag.unlink(missing_ok=True)
+        threading.Thread(target=run, daemon=True, name=f"prep-{job_id}").start()
+        return True
 
     # ── Search ─────────────────────────────────────────────────────────
 

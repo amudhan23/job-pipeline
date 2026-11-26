@@ -475,9 +475,14 @@ async function pageApplied() {
         `<option ${s === i.status ? "selected" : ""}>${s}</option>`).join("")}</select></td>
       <td class="hide-sm">${i.resume_file ? `<a href="${esc(i.resume_file)}" target="_blank">Tailored PDF</a>` : '<span class="note">Your saved resume</span>'}</td>
       <td class="hide-sm">${i.screenshot ? `<a href="${esc(i.screenshot)}" target="_blank">Screenshot</a>` : ""}</td>
-      <td class="actions"><button class="quiet" data-sent>What was sent</button> <button data-reach>Reach out</button></td>
+      <td class="actions"><button class="quiet" data-sent>What was sent</button> <button data-reach>Reach out</button>
+        ${i.status === "interview" || i.status === "offer" ? `<button class="primary" data-prep>Prep</button>` : ""}</td>
     </tr>`).join("")}</tbody></table></div>`;
-  $$("select[data-status]").forEach(s => s.onchange = () => setStatus(s.closest("tr").dataset.id, s.value));
+  $$("select[data-status]").forEach(s => s.onchange = async () => {
+    const ok = await setStatus(s.closest("tr").dataset.id, s.value);
+    if (ok && s.value === "interview") { toast("Interview! Writing your prep pack (a few minutes)."); pageApplied(); }
+  });
+  $$("button[data-prep]").forEach(b => b.onclick = () => showPrep(b.closest("tr").dataset.id));
   $$("button[data-reach]").forEach(b => b.onclick = () => startOutreach(b.closest("tr").dataset.id, b));
   $$("button[data-sent]").forEach(b => b.onclick = () => showSent(b.closest("tr").dataset.id, false));
 }
@@ -1227,6 +1232,74 @@ async function runDoctor() {
 }
 
 /* ── Every answer on one application ─────────────────────── */
+
+/* ── Interview prep pack ─────────────────────────────────── */
+
+async function showPrep(jobId) {
+  const dlg = $("#modal"), body = $("#modal-body");
+  body.innerHTML = `<p>Loading…</p>`;
+  if (!dlg.open) dlg.showModal();
+  let d;
+  try { d = await api(`/api/prep/${encodeURIComponent(jobId)}`); } catch (e) { body.innerHTML = `<p>${esc(e.message)}</p>`; return; }
+  const p = d.prep || {}, pack = p.pack || {}, r = p.research || {};
+  const head = `<div class="modal-head"><h2>Interview prep: ${esc(p.company || "")} ${p.title ? "· " + esc(p.title) : ""}</h2>
+      <button class="quiet" id="mClose" aria-label="Close">Close</button></div>`;
+  if (!d.exists) {
+    body.innerHTML = `${head}
+      <p class="note">${d.building ? "Being written now: research on the company and its interview loop, then a pack from your career profile. Two to four minutes." :
+        d.last_error ? `The last attempt failed: ${esc(d.last_error)}` :
+        "No pack yet. It researches the company and its reported interview loop, then writes the questions to expect, your best stories for each (checked against your profile), the gaps they will probe, and a two-day plan."}</p>
+      ${d.building ? "" : `<div class="field"><label for="prep-notes">Anything you know about this loop (recruiter's description, the rounds, who you meet)</label>
+        <textarea id="prep-notes" rows="3" style="width:100%"></textarea></div>
+        <div class="bar"><button class="primary" id="prep-build" ${d.ai_ready ? "" : "disabled"}>Write the prep pack</button>
+        ${d.ai_ready ? `<span class="note">About 50¢ with Opus.</span>` : `<span class="note warn">Needs your Anthropic key (My details).</span>`}</div>`}`;
+    $("#mClose").onclick = () => dlg.close();
+    if ($("#prep-build")) $("#prep-build").onclick = async () => {
+      $("#prep-build").disabled = true;
+      try { await api(`/api/prep/${encodeURIComponent(jobId)}/build`, { notes: $("#prep-notes").value }); }
+      catch (e) { toast(e.message, true); }
+      showPrep(jobId);
+    };
+    if (d.building) setTimeout(() => dlg.open && showPrep(jobId), 15000);
+    return;
+  }
+  const q = x => `<div class="prep-q"><b>${esc(x.q)}</b> <span class="pill">${esc(x.kind)}</span>
+      <div class="sub">${esc(x.answer)}</div>
+      ${x.unsupported ? `<div class="note warn">Not in your profile, don't use: ${x.unsupported.map(esc).join("; ")}</div>` : ""}</div>`;
+  body.innerHTML = `${head}
+    ${pack.headline ? `<p class="lede">${esc(pack.headline)}</p>` : ""}
+    ${r.company ? `<h3>The company</h3><p>${esc(r.company)}</p>
+      ${r.recent?.length ? `<ul>${r.recent.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+      ${r.stack?.length ? `<p class="note">Stack seen: ${r.stack.map(esc).join(", ")}</p>` : ""}` : ""}
+    ${r.unknown ? `<p class="note">${esc(r.unknown)}</p>` : ""}
+    ${(pack.rounds || []).map(rd => `<h3>${esc(rd.round)}</h3><p class="note">${esc(rd.format || "")}</p>${(rd.questions || []).map(q).join("")}`).join("")}
+    ${(pack.stories || []).length ? `<h3>Your stories</h3>${pack.stories.map(st => `<div class="prep-q"><b>${esc(st.name)}</b> <span class="note">${esc(st.from)}</span>
+      <div class="sub"><b>Situation.</b> ${esc(st.situation)} <b>Action.</b> ${esc(st.action)} <b>Result.</b> ${esc(st.result)}</div>
+      <div class="note">Use for: ${(st.use_for || []).map(esc).join(", ")}</div>
+      ${st.unsupported ? `<div class="note warn">Check this one: ${esc(st.unsupported)}</div>` : ""}</div>`).join("")}` : ""}
+    ${(pack.gaps || []).length ? `<h3>What they will probe</h3>${pack.gaps.map(g => `<div class="prep-q"><b>${esc(g.probe)}</b><div class="sub">${esc(g.answer)}</div></div>`).join("")}` : ""}
+    ${(pack.ask_them || []).length ? `<h3>Ask them</h3><ul>${pack.ask_them.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+    ${(pack.plan || []).length ? `<h3>Plan</h3><ul>${pack.plan.map(x => `<li><b>${esc(x.when)}</b> ${esc(x.do)}</li>`).join("")}</ul>` : ""}
+    ${(r.sources || []).length ? `<p class="note">Sources: ${r.sources.map(u => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u.replace(/^https?:\/\/(www\.)?/, "").slice(0, 40))}</a>`).join(" · ")}</p>` : ""}
+    <h3>After a round: thank-you note</h3>
+    <div class="grid2"><div class="field"><label for="ty-who">Interviewer</label><input id="ty-who" type="text" style="width:100%"></div>
+      <div class="field"><label for="ty-notes">What you discussed (a few lines)</label><textarea id="ty-notes" rows="2" style="width:100%"></textarea></div></div>
+    <div class="bar"><button id="ty-go">Draft the note</button> <button class="quiet" id="prep-again">Write the pack again</button>
+      <span class="note">Written ${esc((p.built_at || "").replace("T", " "))}${p.cost ? `, $${p.cost}` : ""}</span></div>
+    <div id="ty-out">${(p.thank_you || []).map(t => `<div class="draft"><div class="draft-head"><b>To ${esc(t.interviewer || "the interviewer")}: ${esc(t.subject)}</b> ${copyBtn(`Subject: ${t.subject}\n\n${t.body}`)}</div><pre>${esc(t.body)}</pre></div>`).join("")}</div>`;
+  $("#mClose").onclick = () => dlg.close();
+  $("#ty-go").onclick = async () => {
+    $("#ty-go").disabled = true; $("#ty-go").textContent = "Writing…";
+    try { await api(`/api/prep/${encodeURIComponent(jobId)}/thanks`, { interviewer: $("#ty-who").value, notes: $("#ty-notes").value }); showPrep(jobId); }
+    catch (e) { toast(e.message, true); $("#ty-go").disabled = false; $("#ty-go").textContent = "Draft the note"; }
+  };
+  $("#prep-again").onclick = async () => {
+    try { await api(`/api/prep/${encodeURIComponent(jobId)}/build`, {}); showPrep(jobId); } catch (e) { toast(e.message, true); }
+  };
+  $$("[data-copy]", body).forEach(b => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copy); toast("Copied."); } catch { toast("Couldn't copy; select the text instead.", true); }
+  });
+}
 
 async function showSent(jobId, finishing) {
   const dlg = $("#modal"), body = $("#modal-body");

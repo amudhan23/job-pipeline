@@ -421,6 +421,51 @@ def serve(ctx: click.Context, port: int, host: str, no_auto: bool) -> None:
 
 
 @main.command()
+@click.option("--job-id", "-j", default=None, help="A job you're interviewing with (see `jobpipe status`)")
+@click.option("--url", "-u", default=None, help="Any posting URL instead of a job id")
+@click.option("--company", default="", help="Company name (with --url)")
+@click.option("--title", default="", help="Role title (with --url)")
+@click.option("--jd", type=click.Path(exists=True, dir_okay=False), default=None, help="A file with the job description")
+@click.option("--notes", default="", help="What you know about the loop (rounds, who you meet)")
+@click.option("--output-dir", "-o", default=None, help="Where to write prep.json (default: the job's folder)")
+def prep(job_id: str | None, url: str | None, company: str, title: str, jd: str | None, notes: str,
+         output_dir: str | None) -> None:
+    """Write the interview prep pack for one job: research on the company and
+    its loop, the questions to expect with your stories for each (checked
+    against your profile), the gaps they'll probe, questions to ask, a plan."""
+    import re as _re
+    from pipeline import applicant, interview
+    from pipeline.ai.context import job_from_url
+    if not job_id and not url:
+        raise click.ClickException("give --job-id or --url")
+    if job_id:
+        job = Tracker().get_job(job_id)
+        if not job:
+            raise click.ClickException(f"Job {job_id} not found")
+        if jd:
+            job = {**job, "description": Path(jd).read_text(errors="replace")}
+    else:
+        job = job_from_url(url, company, title, Path(jd).read_text(errors="replace") if jd else "", tracker=Tracker())
+    folder = Path(output_dir) if output_dir else \
+        applicant.PRIVATE_DIR / "applications" / _re.sub(r"[^A-Za-z0-9_.-]", "_", job["id"])
+    console.print(f"Preparing for {job.get('company')}: {job.get('title')} (research, then the pack: a few minutes)…")
+    try:
+        data = interview.prep(job, folder, notes=notes)
+    except Exception as e:
+        raise click.ClickException(f"the prep pack couldn't be written: {e}")
+    pack, r = data["pack"], data["research"]
+    console.print(f"[bold green]Written {folder / interview.PREP_FILE}[/bold green]  (${data['cost']})")
+    console.print(f"  {pack.get('headline', '')}")
+    for rd in pack.get("rounds") or []:
+        console.print(f"  [bold]{rd.get('round')}[/bold]: {rd.get('format', '')[:100]} · {len(rd.get('questions') or [])} questions")
+    console.print(f"  stories: {len(pack.get('stories') or [])} · gaps: {len(pack.get('gaps') or [])} · "
+                  f"sources: {len(r.get('sources') or [])}" + (f" · {r['unknown'][:80]}" if r.get("unknown") else ""))
+    if data["flagged"]:
+        console.print("  [yellow]not in your profile (don't use):[/yellow] " +
+                      " | ".join(f"{f['where']}: {f['facts'][:60]}" for f in data["flagged"])[:400])
+
+
+@main.command()
 @click.option("--job-id", "-j", default=None, help="A job the crawler found (see `jobpipe status`)")
 @click.option("--url", "-u", default=None, help="Any posting URL, found by the crawler or not")
 @click.option("--jd", type=click.Path(exists=True, dir_okay=False), default=None,

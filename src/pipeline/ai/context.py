@@ -94,14 +94,22 @@ def _api_description(url: str, title_hint: str = "") -> tuple[str, dict[str, str
             return j.get("descriptionPlain") or _page_text(j.get("description") or ""), \
                 {"title": j.get("text", ""), "location": (j.get("categories") or {}).get("location", "")}
         return "", {}
-    m = re.match(r"https?://(?:boards|job-boards)\.greenhouse\.io/([^/?#]+)/jobs/(\d+)", url, re.I)
+    m = re.match(r"https?://(?:boards|job-boards)\.greenhouse\.io/([^/?#]+)(?:/jobs/(\d+))?/?$", url, re.I)
     if m:
-        r = httpx.get(f"https://boards-api.greenhouse.io/v1/boards/{m.group(1)}/jobs/{m.group(2)}", timeout=20)
-        if r.status_code == 200:
-            j = r.json()
-            import html as _html
-            return _page_text(_html.unescape(j.get("content") or "")), \
-                {"title": j.get("title", ""), "location": (j.get("location") or {}).get("name", "")}
+        import html as _html
+        if m.group(2):
+            r = httpx.get(f"https://boards-api.greenhouse.io/v1/boards/{m.group(1)}/jobs/{m.group(2)}", timeout=20)
+            jobs = [r.json()] if r.status_code == 200 else []
+        else:                                   # a board URL: pick the live posting by title
+            r = httpx.get(f"https://boards-api.greenhouse.io/v1/boards/{m.group(1)}/jobs",
+                          params={"content": "true"}, timeout=20)
+            jobs = r.json().get("jobs", []) if r.status_code == 200 else []
+        hint = title_hint.strip().lower()
+        for j in jobs:
+            if m.group(2) or (hint and hint in (j.get("title") or "").lower()):
+                return _page_text(_html.unescape(j.get("content") or "")), \
+                    {"title": j.get("title", ""), "location": (j.get("location") or {}).get("name", ""),
+                     "url": j.get("absolute_url", "")}
     return "", {}
 
 
