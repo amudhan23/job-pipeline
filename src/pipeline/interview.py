@@ -62,7 +62,9 @@ Rules:
   product; for behavioural, the values the posting states.
 - Gaps: what the interviewer will probe (requirements the profile only
   partly meets) and a truthful answer for each.
-- Plain language, no em dashes, no filler.
+- Size: 2-4 rounds, at most 5 questions each; 4-6 stories; 3-5 gaps; 5
+  questions to ask; a plan of 6-8 items. Plain language, no em dashes, no
+  filler.
 Reply with JSON only:
 {"headline": "<one sentence: what this loop is really testing>",
  "rounds": [{"round": "<name>", "format": "<what to expect>",
@@ -179,7 +181,8 @@ def prep(job: dict[str, Any], folder: Path, private_dir: Path | None = None, cli
         {k: found[k] for k in ("company", "recent", "stack", "process", "unknown")}, indent=1) + "\n</research>"
     if notes.strip():
         prompt += f"\n\n<candidate_notes>\n{notes.strip()[:3000]}\n</candidate_notes>"
-    reply = ai.complete(system, prompt, purpose=f"interview pack: {job.get('company')}", max_tokens=7000,
+    # max_tokens covers the thinking too, so leave room for a pack of this size
+    reply = ai.complete(system, prompt, purpose=f"interview pack: {job.get('company')}", max_tokens=16000,
                         private_dir=private_dir, client=client, model=writer._resume_model(private_dir),
                         thinking=3000, schema=PACK_SCHEMA)
     if reply.stop_reason == "max_tokens":
