@@ -431,6 +431,32 @@ async function saveAnswers() {
   } catch (e) { toast(e.message, true); }
 }
 
+/* ── LinkedIn profile text ───────────────────────────────── */
+
+async function linkedinPanel() {
+  const box = $("#cp-li-body"); if (!box) return;
+  let d;
+  try { d = await api("/api/linkedin"); } catch (e) { box.textContent = e.message; return; }
+  const p = d.profile;
+  const block = (title, text) => `<div class="draft"><div class="draft-head"><b>${title}</b> ${copyBtn(text)}</div><pre>${esc(text)}</pre></div>`;
+  box.innerHTML = `${p ? `${block("Headline (" + p.headline.length + " characters)", p.headline)}
+      ${block("About", p.about)}
+      ${block("Skills, most important first", p.skills.join(", "))}
+      ${block("Open to Work: job titles", p.open_to.join(", "))}
+      ${p.flagged.length ? `<p class="note warn">Not in your profile, check before pasting: ${p.flagged.map(f => esc(f.line)).join(" · ")}</p>` : ""}
+      <p class="note">Written ${esc((p.written_at || "").replace("T", " "))} for: ${(p.roles || []).map(esc).join(", ") || "your roles"}.</p>` : ""}
+    <div class="bar"><button class="${p ? "quiet" : "primary"}" id="cp-li-go" ${d.ai_ready ? "" : "disabled"}>${p ? "Write it again" : "Write my LinkedIn text"}</button>
+      ${d.ai_ready ? `<span class="note">About 20¢.</span>` : `<span class="note warn">Needs your Anthropic key (My details).</span>`}</div>`;
+  $("#cp-li-go").onclick = async () => {
+    $("#cp-li-go").disabled = true; $("#cp-li-go").textContent = "Writing…";
+    try { await api("/api/linkedin", {}); } catch (e) { toast(e.message, true); }
+    linkedinPanel();
+  };
+  $$("[data-copy]", box).forEach(b => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copy); toast("Copied."); } catch { toast("Couldn't copy; select the text instead.", true); }
+  });
+}
+
 /* ── Scorecard: which channel converts for you ───────────── */
 
 async function scorecard() {
@@ -974,7 +1000,12 @@ async function pageCareer() {
       <p class="note" id="cp-ref-note"></p>
       <div class="bar"><label class="btn file-btn">Upload a reference resume (PDF)<input type="file" id="cp-ref" accept="application/pdf" hidden></label></div>
       <p class="note">A resume whose look and writing you like. New resumes copy its style: bullets per role, length, tone,
-      what it bolds. Never its facts; those only come from your profile.</p></div>`;
+      what it bolds. Never its facts; those only come from your profile.</p></div>
+    <div class="panel" id="cp-li"><h2>LinkedIn profile text</h2>
+      <p class="note">Recruiter sourcing is the second biggest way interviews start, and recruiters search titles and skills.
+      This writes your headline, About and skills list from the profile, aimed at your target roles, every sentence checked.
+      You paste them in; nothing here touches your account.</p><div id="cp-li-body">Loading…</div></div>`;
+  linkedinPanel();
   const ta = $("#cp-text");
   const stats = d => {
     $("#cp-stats").innerHTML = d.ready ? `<span><b>${d.roles.length}</b> sections found</span>

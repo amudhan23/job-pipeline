@@ -93,3 +93,17 @@ def test_thank_you_note_is_saved_with_the_pack(pdir, tmp_path):
     assert note["subject"] == "Thank you, Priya" and "—" not in note["body"]
     assert "idempotency" in fake.calls[0]["messages"][0]["content"]
     assert interview.load(folder)["thank_you"][0]["interviewer"] == "Priya"
+
+
+def test_linkedin_text_is_written_from_the_profile_and_checked(pdir):
+    from pipeline import linkedin
+    fake = Scripted([json.dumps({
+        "headline": "Software Engineer | Java, Spring Boot, PostgreSQL | 3.5 years at IBM",
+        "about": "I build backend services in Java and Spring Boot. At IBM I added Redis caching that cut API response times 40%. "
+                 "I once led a Kubernetes migration of 200 services. I am looking for backend roles in New York.",
+        "skills": ["Java", "Spring Boot", "PostgreSQL", "Redis"], "open_to": ["Software Engineer", "Backend Engineer"]})])
+    d = linkedin.write(pdir, client=fake, roles=["Software Engineer", "Backend Engineer"])
+    assert d["headline"].startswith("Software Engineer |") and d["skills"][0] == "Java" and d["open_to"][1] == "Backend Engineer"
+    assert len(d["flagged"]) == 1 and "Kubernetes" in d["flagged"][0]["line"]       # the invented sentence
+    assert "Target roles: Software Engineer, Backend Engineer" in fake.calls[0]["messages"][0]["content"]
+    assert linkedin.load(pdir)["about"] == d["about"]

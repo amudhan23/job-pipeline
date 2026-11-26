@@ -172,6 +172,9 @@ class ApiMixin:
             return self._telegram_info(), 200
         if path == "/api/career-profile":
             return self._career_profile(), 200
+        if path == "/api/linkedin":
+            from pipeline import linkedin
+            return {"profile": linkedin.load(self._pdir()), "ai_ready": ai_client.status(self._pdir())[0]}, 200
         if path == "/api/outreach":
             from pipeline import outreach
             return {"records": outreach.overview(self._pdir()), "hunter": bool(outreach.hunter_key(self._pdir())),
