@@ -354,8 +354,26 @@ class ApiMixin:
         items.sort(key=lambda i: (not i["ready"], -(i["job"]["fit_score"] or 0)))
         pending = applicant.load_pending(pdir)
         ready, why = ai_client.status(pdir)
+        reach = self._outreach_queue()
         return {"items": items, "pending": pending, "ai_ready": ready, "ai_why": why,
-                "can_open_browser": can_open_browser(), "outreach": self._outreach_queue()}
+                "can_open_browser": can_open_browser(), "outreach": reach, "today": self._today(items, reach)}
+
+    def _today(self, items: list, reach: dict) -> dict:
+        """The day's plan against the targets that produce interviews: ten
+        direct applications and three reach-outs a day, follow-ups on time,
+        and a prep pack read before every interview."""
+        from pipeline import interview, outreach
+        pdir = self._pdir()
+        t = self._tracker()
+        day = t.scorecard(1)
+        sent = outreach.stats(pdir, 1)
+        interviews = [j for j in t.by_status(("interview",)) if not j.get("closed_at")]
+        unread = [{"id": j["id"], "company": j["company"], "title": j["title"], "has_pack": bool(interview.load(_folder(pdir, j["id"])))}
+                  for j in interviews]
+        return {"applied": day["applied"], "applied_target": 10,
+                "reach_outs": sent["sent"], "reach_target": 3,
+                "to_approve": len(items), "followups_due": len(reach["due"]), "to_contact": len(reach["waiting"]),
+                "interviews": unread, "window": outreach.send_window()}
 
     def _outreach_queue(self) -> dict:
         """The human step after each application: a referral or a note to the
