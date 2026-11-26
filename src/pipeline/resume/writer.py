@@ -569,7 +569,7 @@ def parse_json(text: str, private_dir: Path | None = None, client: Any = None) -
         pass
     m = re.search(r"\{.*\}", text, re.S)
     if not m:
-        raise ValueError("the reply had no resume in it" + (" (it was cut off)" if text else ""))
+        raise ValueError("the reply had no JSON in it" + (" (it was cut off)" if text else ""))
     try:
         return json.loads(m.group(0))
     except ValueError as first:

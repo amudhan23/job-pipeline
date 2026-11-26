@@ -132,8 +132,9 @@ def _json(text: str) -> dict[str, Any]:
 def research(job: dict[str, Any], private_dir: Path | None = None, client: Any = None,
              searches: int = 6) -> dict[str, Any]:
     """Company, stack and reported interview loop, from public pages."""
+    # The model's notes between searches count as output, so the cap is generous
     reply = ai.complete(_RESEARCH_SYSTEM, job_block(job, 6000), purpose=f"interview research: {job.get('company')}",
-                        max_tokens=1500, private_dir=private_dir, client=client, model="sonnet",
+                        max_tokens=6000, private_dir=private_dir, client=client, model="sonnet",
                         web_search=searches)
     data = writer.parse_json(reply.text, private_dir, client)
     return {"company": str(data.get("company", ""))[:1200], "recent": [str(x)[:200] for x in data.get("recent") or []][:6],

@@ -168,7 +168,7 @@ def find_people(job: dict[str, Any], private_dir: Path | None = None, client: An
               f"Titles to look for: {', '.join(the_plan.get('titles') or _FALLBACK_TITLES)}\n"
               f"Company website domain, if known: {rec.get('domain') or 'unknown'}\n\n"
               f"Posting excerpt:\n{(job.get('description') or '')[:2500]}")
-    reply = ai.complete(_FIND_SYSTEM, prompt, purpose=f"find people: {job.get('company')}", max_tokens=1200,
+    reply = ai.complete(_FIND_SYSTEM, prompt, purpose=f"find people: {job.get('company')}", max_tokens=5000,
                         private_dir=private_dir, client=client, model="sonnet", web_search=searches)
     m = re.search(r"\{.*\}", reply.text, re.S)
     try:
