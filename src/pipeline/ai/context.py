@@ -79,12 +79,13 @@ def _api_description(url: str, title_hint: str = "") -> tuple[str, dict[str, str
         r = httpx.get(f"https://api.ashbyhq.com/posting-api/job-board/{m.group(1)}", timeout=20)
         jobs = r.json().get("jobs", []) if r.status_code == 200 else []
         want = (m.group(2) or "").lower()
-        hint = title_hint.strip().lower()
-        for j in jobs:
-            if (want and j.get("id", "").lower() == want) or \
-                    (not want and hint and hint in (j.get("title") or "").lower()):
-                return j.get("descriptionPlain") or _page_text(j.get("descriptionHtml") or ""), \
-                    {"title": j.get("title", ""), "location": j.get("location", ""), "url": j.get("jobUrl", "")}
+        if want:
+            jobs = [j for j in jobs if j.get("id", "").lower() == want]
+        else:
+            jobs = _by_title(jobs, title_hint, "title")
+        for j in jobs[:1]:
+            return j.get("descriptionPlain") or _page_text(j.get("descriptionHtml") or ""), \
+                {"title": j.get("title", ""), "location": j.get("location", ""), "url": j.get("jobUrl", "")}
         return "", {}
     m = re.match(r"https?://jobs\.lever\.co/([^/?#]+)/([0-9a-f-]{36})", url, re.I)
     if m:
@@ -104,13 +105,27 @@ def _api_description(url: str, title_hint: str = "") -> tuple[str, dict[str, str
             r = httpx.get(f"https://boards-api.greenhouse.io/v1/boards/{m.group(1)}/jobs",
                           params={"content": "true"}, timeout=20)
             jobs = r.json().get("jobs", []) if r.status_code == 200 else []
-        hint = title_hint.strip().lower()
-        for j in jobs:
-            if m.group(2) or (hint and hint in (j.get("title") or "").lower()):
-                return _page_text(_html.unescape(j.get("content") or "")), \
-                    {"title": j.get("title", ""), "location": (j.get("location") or {}).get("name", ""),
-                     "url": j.get("absolute_url", "")}
+        if not m.group(2):
+            jobs = _by_title(jobs, title_hint, "title")
+        for j in jobs[:1]:
+            return _page_text(_html.unescape(j.get("content") or "")), \
+                {"title": j.get("title", ""), "location": (j.get("location") or {}).get("name", ""),
+                 "url": j.get("absolute_url", "")}
     return "", {}
+
+
+_SENIOR = re.compile(r"\b(senior|sr\.?|staff|principal|lead|manager|director|head|vp|intern)\b", re.I)
+
+
+def _by_title(jobs: list, hint: str, key: str) -> list:
+    """Postings whose title contains the hint, the closest first: an exact
+    title, then plain ones over Senior/Staff/Lead, then the shortest."""
+    hint = " ".join(hint.lower().split())
+    if not hint:
+        return []
+    found = [j for j in jobs if hint in " ".join(str(j.get(key) or "").lower().split())]
+    return sorted(found, key=lambda j: (" ".join(str(j.get(key) or "").lower().split()) != hint,
+                                        bool(_SENIOR.search(str(j.get(key) or ""))), len(str(j.get(key) or ""))))
 
 
 def ensure_description(job: dict[str, Any]) -> dict[str, Any]:

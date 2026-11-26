@@ -82,6 +82,30 @@ reason the candidate is a fit, drawn only from the career profile. Reply
 with JSON only: {"subject": "...", "body": "..."}"""
 
 
+_S = {"type": "string"}
+_SL = {"type": "array", "items": _S}
+_O = writer._obj
+PACK_SCHEMA = _O({
+    "headline": _S,
+    "rounds": {"type": "array", "items": _O({
+        "round": _S, "format": _S,
+        "questions": {"type": "array", "items": _O(
+            {"q": _S, "kind": {"type": "string", "enum": ["technical", "design", "behavioural", "other"]},
+             "answer": _S, "facts": _SL}, ["q", "kind", "answer", "facts"])}}, ["round", "format", "questions"])},
+    "stories": {"type": "array", "items": _O(
+        {"name": _S, "from": _S, "situation": _S, "action": _S, "result": _S, "use_for": _SL},
+        ["name", "from", "situation", "action", "result", "use_for"])},
+    "gaps": {"type": "array", "items": _O({"probe": _S, "answer": _S}, ["probe", "answer"])},
+    "ask_them": _SL,
+    "plan": {"type": "array", "items": _O({"when": _S, "do": _S}, ["when", "do"])},
+}, ["headline", "rounds", "stories", "gaps", "ask_them", "plan"])
+RESEARCH_SCHEMA = _O({
+    "company": _S, "recent": _SL, "stack": _SL,
+    "process": {"type": "array", "items": _O({"round": _S, "format": _S, "themes": _SL}, ["round", "format", "themes"])},
+    "sources": _SL, "unknown": _S,
+}, ["company", "recent", "stack", "process", "sources", "unknown"])
+
+
 def _path(folder: Path) -> Path:
     return folder / PREP_FILE
 
@@ -109,7 +133,7 @@ def research(job: dict[str, Any], private_dir: Path | None = None, client: Any =
     reply = ai.complete(_RESEARCH_SYSTEM, job_block(job, 6000), purpose=f"interview research: {job.get('company')}",
                         max_tokens=1500, private_dir=private_dir, client=client, model="sonnet",
                         web_search=searches)
-    data = _json(reply.text)
+    data = writer.parse_json(reply.text, private_dir, client)
     return {"company": str(data.get("company", ""))[:1200], "recent": [str(x)[:200] for x in data.get("recent") or []][:6],
             "stack": [str(x)[:60] for x in data.get("stack") or []][:20],
             "process": [{"round": str(r.get("round", ""))[:80], "format": str(r.get("format", ""))[:300],
@@ -157,8 +181,10 @@ def prep(job: dict[str, Any], folder: Path, private_dir: Path | None = None, cli
         prompt += f"\n\n<candidate_notes>\n{notes.strip()[:3000]}\n</candidate_notes>"
     reply = ai.complete(system, prompt, purpose=f"interview pack: {job.get('company')}", max_tokens=7000,
                         private_dir=private_dir, client=client, model=writer._resume_model(private_dir),
-                        thinking=3000)
-    pack = _json(reply.text)
+                        thinking=3000, schema=PACK_SCHEMA)
+    if reply.stop_reason == "max_tokens":
+        raise RuntimeError("the pack was cut off (too long); try again")
+    pack = writer.parse_json(reply.text, private_dir, client)
     flagged = _check_stories(pack, profile)
     data = {"job_id": job.get("id"), "company": job.get("company"), "title": job.get("title"),
             "research": found, "pack": pack, "flagged": flagged,
