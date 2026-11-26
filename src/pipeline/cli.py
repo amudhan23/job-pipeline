@@ -420,6 +420,45 @@ def serve(ctx: click.Context, port: int, host: str, no_auto: bool) -> None:
         t.join(timeout=15)
 
 
+@main.command("find-people")
+@click.option("--job-id", "-j", default=None, help="A job you applied to")
+@click.option("--url", "-u", default=None, help="Any posting URL instead of a job id")
+@click.option("--company", default="", help="Company name (with --url)")
+@click.option("--title", default="", help="Role title (with --url)")
+@click.option("--output-dir", "-o", default=None, help="Also write the result as people.json here")
+def find_people_cmd(job_id: str | None, url: str | None, company: str, title: str, output_dir: str | None) -> None:
+    """Who to contact about one job: the hiring manager and team, found on
+    public pages by web search (never your LinkedIn login), with evidence
+    and a confidence for each."""
+    import json as _json
+    from pipeline import outreach
+    from pipeline.ai.context import job_from_url
+    if not job_id and not url:
+        raise click.ClickException("give --job-id or --url")
+    job = Tracker().get_job(job_id) if job_id else job_from_url(url, company, title, tracker=Tracker())
+    if not job:
+        raise click.ClickException(f"Job {job_id} not found")
+    console.print(f"Looking for people at {job.get('company')} for {job.get('title')} (about a minute)…")
+    try:
+        rec = outreach.find_people(job)
+    except Exception as e:
+        raise click.ClickException(f"couldn't search: {e}")
+    cand = rec.get("candidates") or {}
+    plan = rec.get("plan") or {}
+    console.print(f"  team: {plan.get('team') or '?'} · looked for: {', '.join(plan.get('titles') or [])}")
+    for i, x in enumerate(cand.get("people") or []):
+        console.print(f"  {i + 1}. [bold]{x['name']}[/bold] · {x['title']} · {x['confidence']} · {x['kind']}\n     {x['evidence'][:140]}\n     {x['url']}")
+    if not cand.get("people"):
+        console.print("  nobody found on public pages")
+    if cand.get("note"):
+        console.print(f"  [dim]{cand['note']}[/dim]")
+    console.print(f"  [dim]cost ${cand.get('cost', 0)}[/dim]")
+    if output_dir:
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "people.json").write_text(_json.dumps({"plan": plan, "candidates": cand}, indent=1))
+
+
 @main.command()
 @click.option("--job-id", "-j", default=None, help="A job you're interviewing with (see `jobpipe status`)")
 @click.option("--url", "-u", default=None, help="Any posting URL instead of a job id")
