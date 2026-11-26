@@ -12,6 +12,7 @@ a bug or a big batch can't run up your credits.
 from __future__ import annotations
 
 import json
+import re
 import os
 from dataclasses import dataclass
 from datetime import datetime
@@ -240,4 +241,15 @@ def complete(system: list[dict] | str, prompt: str | list[dict], purpose: str, m
     _record(private_dir, {"at": datetime.now().isoformat(timespec="seconds"), "purpose": purpose,
                           "model": model, **usage, "web_searches": searches, "cost": round(cost, 6)})
     text = "".join(getattr(b, "text", "") for b in msg.content).strip()
+    if searches or web_search:
+        text = strip_cites(text)
     return Reply(text=text, model=model, cost=cost, stop_reason=str(getattr(msg, "stop_reason", "") or ""))
+
+
+_CITE = re.compile(r"</?cite[^>]*>")
+
+
+def strip_cites(text: str) -> str:
+    """Web-search answers carry <cite index=…>…</cite> markup around the
+    sentences they took from pages; the words stay, the tags go."""
+    return _CITE.sub("", text)

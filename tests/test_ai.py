@@ -419,3 +419,17 @@ def test_apply_skips_dealbreaker_and_moves_on(tmp_path, monkeypatch):
     assert "skipped by fit check" in result.output and "Active Secret clearance" in result.output
     assert "Ande" in result.output and "filled" in result.output        # moved on to fill 1 job
     assert trackerdb.Tracker().get_job("gh-xai-1")["status"] == "skipped"
+
+
+def test_web_search_replies_lose_their_cite_tags(pdir):
+    from types import SimpleNamespace
+    ai.save_key(KEY, pdir)
+    fake = FakeClient(text="Rubrik <cite index='7-8'>is a data security company.</cite> Done.")
+    fake.create = lambda **kw: (fake.calls.append(kw), SimpleNamespace(
+        content=[SimpleNamespace(text=fake.text)],
+        usage=SimpleNamespace(input_tokens=10, output_tokens=5, cache_read_input_tokens=0, cache_creation_input_tokens=0,
+                              server_tool_use=SimpleNamespace(web_search_requests=2))))[1]
+    r = ai.complete("s", "p", purpose="t", private_dir=pdir, client=fake, web_search=3)
+    assert r.text == "Rubrik is a data security company. Done."
+    assert fake.calls[0]["tools"][0]["max_uses"] == 3 and r.cost > 0.02        # two searches at a cent each
+    assert ai.usage_log(pdir)[-1]["web_searches"] == 2

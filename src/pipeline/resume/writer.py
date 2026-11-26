@@ -40,7 +40,9 @@ _GENERIC = {"http", "https", "api", "apis", "json", "url", "urls", "cli", "ui", 
             "cto", "ceo", "vp", "vps", "poc", "mvp", "okr", "okrs", "kpi", "kpis", "rfc", "rfcs", "prd", "prds",
             "pr", "prs", "oss", "saas", "b2b", "b2c",
             # umbrella terms for things the profile names specifically (Claude API, Gemini)
-            "llm", "llms", "genai", "ai"}
+            "llm", "llms", "genai", "ai",
+            # degrees and school words
+            "ms", "msc", "bs", "bsc", "ba", "btech", "mtech", "phd", "cs", "ece", "gpa", "ta", "cgpa"}
 # Short names for institutions, both ways
 _ALIASES = {"nyu": "new york university", "iit": "indian institute of technology",
             "mit": "massachusetts institute of technology", "cmu": "carnegie mellon university"}
@@ -231,6 +233,8 @@ def supported(line: str, source: str) -> tuple[bool, str]:
             techy = lw in _TECH or any(ch.isdigit() or ch in "+#" for ch in w) or \
                 (any(ch.isupper() for ch in w[1:]) and len(w) > 1)
         if not techy or lw in src_words or lw in _GENERIC:
+            continue
+        if lw in _ALIASES and _ALIASES[lw] in source.lower():            # NYU for New York University
             continue
         if len(lw) >= 3 and any(len(s) >= 3 and (s.startswith(lw) or lw.startswith(s)) for s in src_words):
             continue
