@@ -158,7 +158,9 @@ def find_people(job: dict[str, Any], private_dir: Path | None = None, client: An
     saves the candidates on the outreach record for you to accept or ignore."""
     from pipeline.ai import client as ai
     rec = record(job, private_dir)
-    the_plan = rec.get("plan") or plan(job, private_dir, client).get("plan") or {}
+    if not rec.get("plan"):
+        rec = plan(job, private_dir, client)          # the plan names the team and titles to look for
+    the_plan = rec.get("plan") or {}
     ready, why = ai.status(private_dir)
     if not ready:
         raise RuntimeError(why)

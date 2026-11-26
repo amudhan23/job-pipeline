@@ -208,8 +208,8 @@ def test_find_people_searches_the_web_and_keeps_only_sourced_people(pdir):
         {"name": "Sam Lee", "title": "Technical Recruiter", "url": "https://acme.com/team", "evidence": "Team page",
          "kind": "recruiter", "confidence": "medium"}],
         "note": "Payments team page lists Priya as the lead."}))
-    o.plan(JOB, pdir, client=fake)
-    rec = o.find_people(JOB, pdir, client=fake)
+    rec = o.find_people(JOB, pdir, client=fake)        # plans first when there is no plan yet
+    assert rec["plan"]["titles"] and o.record(JOB, pdir)["plan"]["titles"]     # and keeps it
     people = rec["candidates"]["people"]
     assert [p["name"] for p in people] == ["Priya Raman", "Sam Lee"]          # no URL, no person
     assert people[0]["confidence"] == "high" and rec["candidates"]["note"].startswith("Payments")
