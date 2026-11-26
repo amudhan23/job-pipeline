@@ -61,7 +61,8 @@ jobpipe watch
 | `jobpipe telegram setup` | Connect a Telegram bot for alerts and replies |
 | `jobpipe status` | Latest run's stats and top jobs (`--all` for every saved job) |
 | `jobpipe export jobs.csv` | Export to CSV |
-| `jobpipe resume -j JOB_ID` | Generate tailored resume for a job |
+| `jobpipe resume -j JOB_ID` | Write the resume for a job (`--url` for any posting) |
+| `jobpipe prep -j JOB_ID` | Interview prep pack: research, questions, your checked stories, plan |
 | `jobpipe seed` | Watch every company that has hired new grads or interns (~4,000 boards; the crawler also does this weekly) |
 | `jobpipe seed-h1b` | Seed H-1B database from data/h1b_seed.json |
 | `jobpipe probe SLUG` | Check which ATS a company uses |
@@ -340,6 +341,42 @@ done. From there, **Applied** (Reach out) or the **Outreach** page:
    a single email.
 
 Nothing is ever sent from your accounts.
+
+## Interviews: the prep pack
+
+Offer rates have fallen to under 40% of interview processes (Interview
+Query, 2026) and most lost interviews come down to preparation. So the
+moment you mark an application **Interview** (Applied page), a prep pack is
+written in the background and waits behind the **Prep** button:
+
+- research on public pages (Claude with web search): what the company
+  builds and is doing now, the stack it runs, and how its interview loop for
+  this kind of role is reported to go, with the sources;
+- per round, the questions most likely to come, each with how to approach
+  it or the best story from your career profile told situation / action /
+  result;
+- the gaps the interviewer will probe and an honest answer for each,
+  questions to ask them, and a two-day plan;
+- after a round, a thank-you note drafted from your notes of what was
+  discussed.
+
+Every story fact is checked against your profile the way resume bullets
+are; anything not there is flagged "don't use". About 50¢ a pack with Opus.
+`jobpipe prep -j <id>` or `--url <posting>` does the same from the terminal.
+
+## Your day, and what converts
+
+**Needs you** opens with *Today*: applications and reach-outs against the
+daily targets (10 direct applications, 3 reach-outs: the mix the channel
+data supports), follow-ups due, and whether each interview in play has its
+pack. **Applied** carries the scorecard: applications, reach-outs, replies,
+interviews and offers by week and by where the job was found, so effort
+moves to the channel that converts for you.
+
+Recruiter sourcing is the second-largest way interviews start, and
+recruiters search titles and skills: the **Career profile** page writes your
+LinkedIn headline, About, skills list and Open-to titles from the profile
+(every sentence checked) for you to paste in. Nothing touches your account.
 
 ## Telegram
 
