@@ -300,3 +300,10 @@ textarea { width: 100%; font: inherit; padding: 8px 10px; border: 1px solid var(
 .src-row { display: flex; flex-wrap: wrap; gap: 10px 28px; margin-bottom: 14px; }
 .src-row .note { margin-left: 4px; }
 #ld-settings .grid2 { margin-bottom: 12px; }
+
+/* People found on public pages for outreach */
+.candidates { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 14px; }
+.who.cand { align-items: flex-start; justify-content: space-between; padding: 10px 12px; background: var(--ground); border-radius: var(--radius); }
+.who.cand .sub { font-size: 13px; color: var(--muted); margin-top: 3px; font-weight: 400; }
+.pill { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px; background: var(--line); color: var(--ink); margin-left: 4px; font-weight: 500; }
+.pill.high { background: #d7f0dc; } .pill.medium { background: #fff1c9; } .pill.low { background: #f3d9d9; }

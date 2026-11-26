@@ -265,3 +265,14 @@ def test_handoff_captures_your_answers_and_sees_confirmation(tmp_path):
         browser.close()
     assert report.submitted and "confirmed" in report.submit_note
     assert report.captured == {"Email*": "me@example.com"}
+
+
+def test_scorecard_counts_status_changes_by_source(server):
+    base, t, pdir = server
+    post(f"{base}/api/jobs/gh-acme-1/status", {"status": "applied"})
+    post(f"{base}/api/jobs/gh-acme-1/status", {"status": "interview"})
+    post(f"{base}/api/jobs/gh-acme-2/status", {"status": "applied"})
+    sc = get(f"{base}/api/scorecard")
+    assert sc["week"]["applied"] == 2 and sc["week"]["interview"] == 1 and sc["month"]["applied"] == 2
+    assert sum(v["applied"] for v in sc["week"]["by_source"].values()) == 2
+    assert sc["week"]["outreach"] == {"sent": 0, "replied": 0}

@@ -310,6 +310,17 @@ applied to in the last two weeks with nobody contacted yet, and every
 follow-up that is due, waits under **Needs you** → *Reach out* until it's
 done. From there, **Applied** (Reach out) or the **Outreach** page:
 
+- **Find people** searches public pages with Claude (Anthropic's web-search
+  tool on your key, about 5¢ a job; never your LinkedIn login) for the person
+  one level above the role on the team the posting names, with the page it
+  saw them on and a confidence. Accept one and they become a contact.
+- Your schools' alumni at the company are one click away (LinkedIn's own
+  people search); a referral converts to an interview around 40% of the time
+  against a few percent for a cold application.
+- Drafts say when to send: Tuesday to Thursday, 8-10 am in their time zone.
+- **Applied** has a scorecard: applications, reach-outs, replies, interviews
+  by week and by where the job was found, so you double down on what converts.
+
 1. **Who to contact.** Claude reads the posting and names the team and the
    likely hiring-manager titles (usually one level above the role). Cold notes
    to hiring managers tend to help; at big companies and startups, cold notes

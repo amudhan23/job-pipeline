@@ -230,7 +230,19 @@ def candidates(tracker, settings: dict[str, Any], private_dir: Path | None = Non
         if fit and fit.get("verdict") == "skip":
             continue
         out.append(j)
-    out.sort(key=lambda j: j["fit_score"], reverse=True)
+    # Newest first, in six-hour bands, best fit within a band: an application in
+    # the first hours of a posting is worth several a day later (LinkedIn,
+    # TalentWorks data), and everything here already clears the fit bar.
+    now = datetime.now()
+
+    def band(j):
+        at = j.get("first_seen_at") or j.get("posted_at") or ""
+        try:
+            hours = (now - datetime.fromisoformat(str(at)[:19])).total_seconds() / 3600
+        except ValueError:
+            hours = 24.0
+        return int(max(hours, 0) // 6)
+    out.sort(key=lambda j: (band(j), -j["fit_score"]))
     from pipeline.cli import _one_per_application
     return _one_per_application(out)
 

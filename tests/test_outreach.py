@@ -193,3 +193,47 @@ def test_outreach_api(pdir, tmp_path):
     assert code == 200 and body["records"][0]["company"] == JOB["company"] and body["hunter"] is False
     body, code = h.api_post("/api/career-profile", {"text": PROFILE})
     assert body["ready"] and "Kubernetes" in body["never_claim"] and body["confirm"] == 3
+
+
+def test_find_people_searches_the_web_and_keeps_only_sourced_people(pdir):
+    """The finder asks Claude to search public pages (Anthropic's web-search
+    tool) and keeps only named people with a URL; you accept one to make
+    them a contact. Never touches LinkedIn with your login."""
+    ai.save_key(KEY, pdir)
+    w.save_profile(PROFILE, pdir)
+    fake = FakeClient(text=json.dumps({"people": [
+        {"name": "Priya Raman", "title": "Engineering Manager, Payments", "url": "https://www.linkedin.com/in/priyaraman",
+         "evidence": "Profile: leads Payments Infrastructure at Acme since 2024", "kind": "manager", "confidence": "high"},
+        {"name": "Ghost Person", "title": "CTO", "url": "", "evidence": "", "kind": "manager", "confidence": "low"},
+        {"name": "Sam Lee", "title": "Technical Recruiter", "url": "https://acme.com/team", "evidence": "Team page",
+         "kind": "recruiter", "confidence": "medium"}],
+        "note": "Payments team page lists Priya as the lead."}))
+    o.plan(JOB, pdir, client=fake)
+    rec = o.find_people(JOB, pdir, client=fake)
+    people = rec["candidates"]["people"]
+    assert [p["name"] for p in people] == ["Priya Raman", "Sam Lee"]          # no URL, no person
+    assert people[0]["confidence"] == "high" and rec["candidates"]["note"].startswith("Payments")
+    call = fake.calls[-1]
+    assert call["tools"][0]["type"].startswith("web_search") and call["tools"][0]["max_uses"] == 5
+    assert "Acme" in call["messages"][0]["content"] and "Engineering Manager" in call["messages"][0]["content"]
+    rec = o.accept_candidate(JOB, 0, pdir)
+    c = rec["contacts"][0]
+    assert c["name"] == "Priya Raman" and c["linkedin"] == "https://www.linkedin.com/in/priyaraman" and c["kind"] == "manager"
+    with pytest.raises(KeyError):
+        o.accept_candidate(JOB, 7, pdir)
+
+
+def test_schools_from_details_and_profile(pdir):
+    from pipeline import applicant
+    applicant.save({"school": "New York University"}, pdir)
+    w.save_profile(PROFILE + "\n## Education\n- M.S. Computer Science, New York University (Courant Institute)\n- B.Tech, IIT Mandi\n", pdir)
+    s = o.schools(pdir)
+    assert s[0] == "New York University" and "IIT Mandi" in s and len(s) == len(set(x.lower() for x in s))
+
+
+def test_send_window_is_tue_to_thu_mornings():
+    assert o.send_window(datetime(2026, 11, 25, 9, 0))["now"] is True          # Wednesday 9am
+    w_ = o.send_window(datetime(2026, 11, 27, 15, 0))                           # Friday afternoon
+    assert w_["now"] is False and w_["next"].startswith("2026-12-01T08:30") and "Tuesday" in w_["label"]
+    c = {"drafts": {"email": "hi"}, "sent_at": None, "followups_sent": []}
+    assert "window" in o.next_step(c, datetime(2026, 11, 28, 12, 0))

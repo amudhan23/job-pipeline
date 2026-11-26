@@ -129,6 +129,78 @@ def plan(job: dict[str, Any], private_dir: Path | None = None, client: Any = Non
     return _put(rec, private_dir)
 
 
+_FIND_SYSTEM = """You find the people a job seeker should contact about one opening,
+using web search over public pages (LinkedIn public profiles, company team
+pages, GitHub, conference bios, press). Never invent a person. Rules:
+- The hiring manager is almost always the person one level above the role
+  on the team the posting names; at a company under ~50 people it is often a
+  founder or the CTO/Head of Engineering.
+- Search 3-5 times at most. Useful queries: site:linkedin.com/in "<Company>"
+  "<title>"; "<Company>" engineering team; "<Company>" "<team>" manager.
+- Return at most 4 people, best first. For each give the exact name as the
+  page shows it, their title, the public URL you saw them on, what the page
+  said (one line of evidence), whether they are likely the hiring manager /
+  a recruiter / an engineer on the team, and a confidence: "high" if the
+  page shows them leading exactly that team now, "medium" if the team or
+  current role is inferred, "low" if only the company matches.
+- Skip people who left the company, and anyone whose page you did not see.
+Reply with JSON only:
+{"people": [{"name": "...", "title": "...", "url": "https://...", "evidence": "...",
+             "kind": "manager|recruiter|engineer", "confidence": "high|medium|low"}],
+ "note": "<one sentence on how sure you are overall, or what you could not find>"}"""
+
+
+def find_people(job: dict[str, Any], private_dir: Path | None = None, client: Any = None,
+                searches: int = 5) -> dict[str, Any]:
+    """Named people to contact, found by web search over public pages (no
+    LinkedIn login, nothing scraped with your account). Needs a plan first;
+    saves the candidates on the outreach record for you to accept or ignore."""
+    from pipeline.ai import client as ai
+    rec = record(job, private_dir)
+    the_plan = rec.get("plan") or plan(job, private_dir, client).get("plan") or {}
+    ready, why = ai.status(private_dir)
+    if not ready:
+        raise RuntimeError(why)
+    prompt = (f"Company: {job.get('company', '')}\nRole: {job.get('title', '')}\n"
+              f"Location: {job.get('location', '')}\nPosting URL: {job.get('url', '')}\n"
+              f"Team (from the posting): {the_plan.get('team') or 'not stated'}\n"
+              f"Titles to look for: {', '.join(the_plan.get('titles') or _FALLBACK_TITLES)}\n"
+              f"Company website domain, if known: {rec.get('domain') or 'unknown'}\n\n"
+              f"Posting excerpt:\n{(job.get('description') or '')[:2500]}")
+    reply = ai.complete(_FIND_SYSTEM, prompt, purpose=f"find people: {job.get('company')}", max_tokens=1200,
+                        private_dir=private_dir, client=client, model="sonnet", web_search=searches)
+    m = re.search(r"\{.*\}", reply.text, re.S)
+    try:
+        data = json.loads(m.group(0)) if m else {}
+    except ValueError:
+        data = {}
+    people = []
+    for x in data.get("people") or []:
+        name = " ".join(str(x.get("name", "")).split())[:80]
+        url = str(x.get("url", "")).strip()[:300]
+        if not name or not url.startswith("http"):
+            continue
+        people.append({"name": name, "title": str(x.get("title", ""))[:120], "url": url,
+                       "evidence": str(x.get("evidence", ""))[:300],
+                       "kind": x.get("kind") if x.get("kind") in ("manager", "recruiter", "engineer") else "manager",
+                       "confidence": x.get("confidence") if x.get("confidence") in ("high", "medium", "low") else "low"})
+    rec["candidates"] = {"people": people[:4], "note": str(data.get("note", ""))[:300],
+                         "found_at": _now(), "cost": round(reply.cost, 4)}
+    return _put(rec, private_dir)
+
+
+def accept_candidate(job: dict[str, Any], index: int, private_dir: Path | None = None) -> dict[str, Any]:
+    """Turn a found person into a contact (you decided they're the one)."""
+    rec = record(job, private_dir)
+    people = (rec.get("candidates") or {}).get("people") or []
+    if not 0 <= index < len(people):
+        raise KeyError("no such person")
+    x = people[index]
+    linkedin = x["url"] if "linkedin.com" in x["url"] else ""
+    return add_contact(job, {"name": x["name"], "title": x["title"], "linkedin": linkedin, "kind": x["kind"]},
+                       private_dir)
+
+
 # ── Contacts ───────────────────────────────────────────────────────────
 
 def add_contact(job: dict[str, Any], values: dict[str, Any], private_dir: Path | None = None) -> dict[str, Any]:
@@ -414,6 +486,23 @@ def compose_links(rec: dict[str, Any], c: dict[str, Any], which: str = "email") 
 
 # ── Follow-ups ─────────────────────────────────────────────────────────
 
+def send_window(now: datetime | None = None) -> dict[str, Any]:
+    """When a note to a hiring manager is most likely to be read: Tuesday to
+    Thursday, 8-10 am in their time zone (recruiter-activity data, 2026).
+    Returns whether now is inside that window and, if not, the next one."""
+    now = now or datetime.now()
+    good_days = (1, 2, 3)                       # Tue, Wed, Thu
+    if now.weekday() in good_days and 8 <= now.hour < 11:
+        return {"now": True, "label": "Good time to send: a weekday morning."}
+    nxt = now.replace(hour=8, minute=30, second=0, microsecond=0)
+    for _ in range(8):
+        if nxt > now and nxt.weekday() in good_days:
+            break
+        nxt += timedelta(days=1)
+    return {"now": False, "next": nxt.isoformat(timespec="minutes"),
+            "label": f"Best sent {nxt.strftime('%A')} morning, 8-10 am in their time zone."}
+
+
 def next_step(c: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
     """What's next for one contact: draft, send, follow up (and when), or done."""
     now = now or datetime.now()
@@ -422,7 +511,7 @@ def next_step(c: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
     if not c.get("drafts"):
         return {"step": "draft", "label": "Write the drafts"}
     if not c.get("sent_at"):
-        return {"step": "send", "label": "Send the first message"}
+        return {"step": "send", "label": "Send the first message", "window": send_window(now)}
     n = len(c.get("followups_sent") or [])
     if n >= len(FOLLOW_UP_DAYS):
         return {"step": "done", "label": "Sequence finished"}
@@ -440,6 +529,44 @@ def due_followups(private_dir: Path | None = None, now: datetime | None = None) 
                 out.append({"job_id": rec["job_id"], "company": rec["company"], "title": rec["title"],
                             "contact": c["name"], "contact_id": c["id"], **s})
     return out
+
+
+def stats(private_dir: Path | None = None, days: int = 7, now: datetime | None = None) -> dict[str, int]:
+    """Messages sent and replies received in the last `days`."""
+    now = now or datetime.now()
+    since = (now - timedelta(days=days)).isoformat()
+    sent = replied = 0
+    for rec in load(private_dir).values():
+        for c in rec["contacts"]:
+            if (c.get("sent_at") or "") >= since:
+                sent += 1
+            if (c.get("replied_at") or "") >= since:
+                replied += 1
+    return {"sent": sent, "replied": replied}
+
+
+def schools(private_dir: Path | None = None) -> list[str]:
+    """The schools on your profile: alumni there are the warmest referral path."""
+    from pipeline import applicant
+    from pipeline.resume.writer import load_profile
+    names: list[str] = []
+    try:
+        names.append(applicant.load(private_dir).get("school", "").strip())
+    except Exception:
+        pass
+    prof = ""
+    try:
+        prof = load_profile(private_dir)
+    except Exception:
+        pass
+    for m in re.finditer(r"([A-Z][A-Za-z.&' -]{2,60}?(?:University|Institute of Technology|Institute|College)"
+                         r"(?: of [A-Z][A-Za-z ]{2,30})?|IIT [A-Z][a-z]+|NYU|MIT|UCLA|CMU)", prof):
+        names.append(m.group(1).strip(" ,"))
+    out: list[str] = []
+    for n in names:
+        if n and n.lower() not in {o.lower() for o in out}:
+            out.append(n)
+    return out[:4]
 
 
 def overview(private_dir: Path | None = None) -> list[dict[str, Any]]:

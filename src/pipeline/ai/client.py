@@ -185,9 +185,11 @@ def status(private_dir: Path | None = None) -> tuple[bool, str]:
 
 def complete(system: list[dict] | str, prompt: str | list[dict], purpose: str, max_tokens: int = 600,
              private_dir: Path | None = None, client: Any = None, model: str | None = None,
-             thinking: int = 0, schema: dict | None = None) -> Reply:
+             thinking: int = 0, schema: dict | None = None, web_search: int = 0) -> Reply:
     """One Messages API call, budget-checked and logged. model: "haiku" /
-    "sonnet" / "opus" to override your setting (the fit check uses haiku)."""
+    "sonnet" / "opus" to override your setting (the fit check uses haiku).
+    web_search: let the model run up to that many web searches (Anthropic's
+    server-side tool, $10 per 1,000 searches) — used to find people."""
     ready, why = status(private_dir)
     if not ready:
         raise AIUnavailable(why)
@@ -195,8 +197,8 @@ def complete(system: list[dict] | str, prompt: str | list[dict], purpose: str, m
     model = MODELS[model or settings["model"]]
     # Worst case for this call must still fit the budget
     size = len(prompt) if isinstance(prompt, str) else sum(len(str(b.get("text", ""))) + 2000 for b in prompt)
-    worst = cost_of(model, {"input_tokens": (len(str(system)) + size) // 3,
-                            "output_tokens": max_tokens})
+    worst = cost_of(model, {"input_tokens": (len(str(system)) + size) // 3 + 4000 * web_search,
+                            "output_tokens": max_tokens}) + 0.01 * web_search
     if worst > spend_summary(private_dir)["remaining"]:
         raise AIUnavailable("not enough of this month's AI budget left for this request")
     if client is None:
@@ -214,6 +216,8 @@ def complete(system: list[dict] | str, prompt: str | list[dict], purpose: str, m
     if schema:                     # the API guarantees JSON matching this schema (structured outputs);
         # sent as extra_body so older SDK versions pass it through too
         kw["extra_body"] = {"output_config": {"format": {"type": "json_schema", "schema": schema}}}
+    if web_search:
+        kw["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": int(web_search)}]
     for _ in range(3):
         try:
             msg = client.messages.create(**kw)
@@ -231,8 +235,9 @@ def complete(system: list[dict] | str, prompt: str | list[dict], purpose: str, m
     u = msg.usage
     usage = {k: int(getattr(u, k, 0) or 0) for k in
              ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")}
-    cost = cost_of(model, usage)
+    searches = int(getattr(getattr(u, "server_tool_use", None), "web_search_requests", 0) or 0)
+    cost = cost_of(model, usage) + searches * 0.01
     _record(private_dir, {"at": datetime.now().isoformat(timespec="seconds"), "purpose": purpose,
-                          "model": model, **usage, "cost": round(cost, 6)})
+                          "model": model, **usage, "web_searches": searches, "cost": round(cost, 6)})
     text = "".join(getattr(b, "text", "") for b in msg.content).strip()
     return Reply(text=text, model=model, cost=cost, stop_reason=str(getattr(msg, "stop_reason", "") or ""))

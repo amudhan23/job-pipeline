@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -217,8 +217,34 @@ class Tracker:
             "UPDATE jobs SET status = ?, applied_at = COALESCE(?, applied_at), notes = ? WHERE id = ?",
             (status.value, now, notes, job_id),
         )
+        # Every status change is an event, so the scorecard can count
+        # interviews and rejections by week and by source
+        conn.execute("INSERT INTO job_events (job_id, kind, at, detail) VALUES (?, ?, ?, ?)",
+                     (job_id, f"status:{status.value}", datetime.now().isoformat(), notes or ""))
         conn.commit()
         conn.close()
+
+    def scorecard(self, days: int = 7) -> dict[str, Any]:
+        """What happened in the last `days`: applications, interviews,
+        rejections and offers, each by where the job came from. The point is
+        to see which channel converts for you, not to admire totals."""
+        conn = self._connect()
+        conn.row_factory = sqlite3.Row
+        since = (datetime.now() - timedelta(days=days)).isoformat()
+        rows = conn.execute(
+            "SELECT e.kind, COALESCE(NULLIF(j.source, ''), j.platform, 'unknown') AS src "
+            "FROM job_events e JOIN jobs j ON j.id = e.job_id WHERE e.at >= ? AND e.kind LIKE 'status:%'",
+            (since,)).fetchall()
+        conn.close()
+        out: dict[str, Any] = {"days": days, "applied": 0, "interview": 0, "offer": 0, "rejected": 0, "by_source": {}}
+        for r in rows:
+            kind = r["kind"].split(":", 1)[1]
+            if kind not in ("applied", "interview", "offer", "rejected"):
+                continue
+            out[kind] += 1
+            b = out["by_source"].setdefault(r["src"], {"applied": 0, "interview": 0, "offer": 0, "rejected": 0})
+            b[kind] += 1
+        return out
 
     def set_ai_fit(self, job_id: str, result: dict[str, Any]) -> None:
         import json as _json

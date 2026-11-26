@@ -312,3 +312,29 @@ def test_emailed_code_typed_in_from_your_reply(tmp_path):
         b.close()
     assert asked and "security code" in asked[0]
     assert report.submitted, report.submit_note
+
+
+def test_candidates_go_newest_first_then_best_fit(tmp_path, monkeypatch):
+    """A posting seen an hour ago beats a better-scoring one from this morning:
+    early applications convert several times better."""
+    from datetime import datetime, timedelta
+    from pipeline import autoapply as a
+    now = datetime.now()
+    jobs = [{"id": "old", "status": "new", "fit_score": 95, "company": "A", "title": "SWE", "platform": "greenhouse",
+             "url": "https://boards.greenhouse.io/a/jobs/1", "first_seen_at": (now - timedelta(hours=14)).isoformat()},
+            {"id": "fresh", "status": "new", "fit_score": 70, "company": "B", "title": "SWE", "platform": "greenhouse",
+             "url": "https://boards.greenhouse.io/b/jobs/2", "first_seen_at": (now - timedelta(hours=1)).isoformat()},
+            {"id": "fresh2", "status": "new", "fit_score": 80, "company": "C", "title": "SWE", "platform": "greenhouse",
+             "url": "https://boards.greenhouse.io/c/jobs/3", "first_seen_at": (now - timedelta(hours=2)).isoformat()}]
+
+    class T:
+        def open_jobs(self, max_age_hours):
+            return jobs
+
+        def by_status(self, *a, **k):
+            return []
+    monkeypatch.setattr(a, "recently_applied", lambda *x, **k: set())
+    monkeypatch.setattr(a, "attempted", lambda *x, **k: False)
+    monkeypatch.setattr("pipeline.ai.fitcheck.stored", lambda j: None)
+    settings = {**a.DEFAULTS, "min_score": 65, "fresh_hours": 24}
+    assert [j["id"] for j in a.candidates(T(), settings, tmp_path)] == ["fresh2", "fresh", "old"]

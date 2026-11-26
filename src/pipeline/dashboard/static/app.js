@@ -418,6 +418,33 @@ async function saveAnswers() {
   } catch (e) { toast(e.message, true); }
 }
 
+/* ── Scorecard: which channel converts for you ───────────── */
+
+async function scorecard() {
+  const sc = await api("/api/scorecard");
+  const box = document.createElement("div");
+  box.className = "panel scorecard";
+  const row = (label, w, m) => `<tr><td>${label}</td><td>${w}</td><td>${m}</td></tr>`;
+  const rate = (a, b) => a ? `${Math.round(100 * b / a)}%` : "—";
+  const w = sc.week, m = sc.month;
+  const src = Object.entries(m.by_source || {}).sort((a, b) => b[1].applied - a[1].applied).slice(0, 6);
+  box.innerHTML = `<h2 style="margin-top:0">Scorecard</h2>
+    <p class="note">Interviews come from channels, not totals: a cold application converts a few percent of the time, a referral or a note to the hiring manager far more. Aim for 10 applications and 3 reach-outs a day.</p>
+    <div class="table-wrap"><table><thead><tr><th></th><th>7 days</th><th>30 days</th></tr></thead><tbody>
+      ${row("Applications", w.applied, m.applied)}
+      ${row("Reach-outs sent", w.outreach.sent, m.outreach.sent)}
+      ${row("Replies to reach-outs", `${w.outreach.replied} (${rate(w.outreach.sent, w.outreach.replied)})`, `${m.outreach.replied} (${rate(m.outreach.sent, m.outreach.replied)})`)}
+      ${row("Interviews", `${w.interview} (${rate(w.applied, w.interview)} of applications)`, `${m.interview} (${rate(m.applied, m.interview)})`)}
+      ${row("Offers", w.offer, m.offer)}
+      ${row("Rejections", w.rejected, m.rejected)}
+    </tbody></table></div>
+    ${src.length ? `<p class="note" style="margin-bottom:4px">Last 30 days by where the job was found:</p>
+    <div class="table-wrap"><table><thead><tr><th>Source</th><th>Applied</th><th>Interviews</th><th>Rate</th></tr></thead><tbody>
+      ${src.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v.applied}</td><td>${v.interview}</td><td>${rate(v.applied, v.interview)}</td></tr>`).join("")}
+    </tbody></table></div>` : ""}`;
+  $("#app").before(box);
+}
+
 /* ── Applied ─────────────────────────────────────────────── */
 
 async function pageApplied() {
@@ -429,6 +456,7 @@ async function pageApplied() {
   $("#app-sum").textContent = items.length ?
     `${items.length} applications: ${n("interview")} interviewing, ${n("offer")} offers, ${n("rejected")} rejected.` :
     "Applications you submit, through the bot or yourself, are listed here.";
+  scorecard().catch(() => {});
   if (!items.length) {
     $("#app").innerHTML = `<div class="panel empty"><strong>No applications yet.</strong>Submit one from Needs you, or mark a job Applied on Live jobs.</div>`;
     return;
@@ -994,7 +1022,7 @@ function contactCard(r, c) {
   const step = nx.step === "replied" ? `<span class="tag good">Replied</span>` :
     nx.step === "done" ? `<span class="tag plain">Sequence finished</span>` :
     nx.step?.startsWith("followup") ? `<span class="tag ${nx.overdue ? "stop" : "plain"}">${esc(nx.label)} ${nx.overdue ? "due now" : "on " + due.toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>` :
-    `<span class="tag caution">${esc(nx.label || "")}</span>`;
+    `<span class="tag caution">${esc(nx.label || "")}</span>${nx.window ? ` <span class="note">${esc(nx.window.label)}</span>` : ""}`;
   const draftBlock = (key, title) => !d || !d[key] ? "" : `<div class="draft"><div class="draft-head"><b>${title}</b>
       ${copyBtn((key === "email" ? `Subject: ${d.subject}\n\n` : "") + d[key])}
       ${c.compose && c.compose[key] ? `<a class="btn quiet" href="${esc(c.compose[key].gmail)}" target="_blank" rel="noopener">Open in Gmail</a>
@@ -1032,6 +1060,7 @@ async function pageOutreach() {
 async function drawOutreach() {
   let d;
   try { d = await api("/api/outreach"); } catch (e) { $("#or-list").textContent = e.message; return; }
+  outreachSchools = d.schools || [];
   let apps = [];
   try { apps = (await api("/api/applications")).items; } catch { }
   const started = new Set(d.records.map(r => r.job_id));
@@ -1067,6 +1096,15 @@ async function drawOutreach() {
       ${(p.links || []).length ? `<div class="who-links">${p.links.map(l => `<div class="who"><b>${esc(l.title)}</b>
         <a href="${esc(l.linkedin)}" target="_blank" rel="noopener">Search LinkedIn</a>
         <a href="${esc(l.google)}" target="_blank" rel="noopener">Search Google</a></div>`).join("")}</div>` : ""}
+      ${alumniLinks(r.company)}
+      <div class="bar" style="margin:8px 0"><button class="primary" data-o="find">${r.candidates ? "Find people again" : "Find people (web search)"}</button>
+        <span class="note">Searches public pages with Claude; about 5¢ a job. Never uses your LinkedIn login.</span></div>
+      ${r.candidates ? `<div class="candidates">${(r.candidates.people || []).length ? r.candidates.people.map((x, i) => `<div class="who cand">
+        <div><b>${esc(x.name)}</b> · ${esc(x.title)} <span class="pill ${esc(x.confidence)}">${esc(x.confidence)}</span> <span class="pill">${esc(x.kind)}</span>
+        <div class="sub">${esc(x.evidence)} · <a href="${esc(x.url)}" target="_blank" rel="noopener">source</a></div></div>
+        <div><button data-accept="${i}">Add as contact</button></div></div>`).join("") :
+        `<p class="note">Nobody could be found on public pages${r.candidates.note ? `: ${esc(r.candidates.note)}` : "."} Use the LinkedIn searches above.</p>`}
+        ${(r.candidates.people || []).length && r.candidates.note ? `<p class="note">${esc(r.candidates.note)}</p>` : ""}</div>` : ""}
       <form class="add-contact" autocomplete="off"><div class="grid2">
         <div class="field"><label>Name</label><input type="text" name="name" required style="width:100%" placeholder="Priya Raman"></div>
         <div class="field"><label>Their title</label><input type="text" name="title" style="width:100%" placeholder="Engineering Manager, Payments"></div>
@@ -1088,6 +1126,16 @@ async function drawOutreach() {
       try { await api(`/api/outreach/${job}/plan`, {}); } catch (err) { toast(err.message, true); }
       drawOutreach();
     };
+    $("[data-o=find]", sec).onclick = async e => {
+      e.target.disabled = true; e.target.textContent = "Searching public pages… (about a minute)";
+      try { await api(`/api/outreach/${job}/find`, {}); } catch (err) { toast(err.message, true); }
+      drawOutreach();
+    };
+    $$("[data-accept]", sec).forEach(b => b.onclick = async () => {
+      b.disabled = true;
+      try { await api(`/api/outreach/${job}/accept`, { index: Number(b.dataset.accept) }); toast("Added. Find their email, then draft."); drawOutreach(); }
+      catch (err) { toast(err.message, true); b.disabled = false; }
+    });
     $("form", sec).onsubmit = async e => {
       e.preventDefault();
       const body = Object.fromEntries(new FormData(e.target).entries());
@@ -1112,6 +1160,14 @@ async function drawOutreach() {
       });
     });
   });
+}
+
+let outreachSchools = [];
+function alumniLinks(company) {
+  // A referral beats a cold note: your schools' alumni at this company (LinkedIn people search, you click it)
+  if (!outreachSchools.length || !company) return "";
+  return `<div class="who-links">${outreachSchools.map(s => `<div class="who"><b>${esc(s)} alumni at ${esc(company)}</b>
+    <a href="https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(s + " " + company)}" target="_blank" rel="noopener">Find on LinkedIn</a></div>`).join("")}</div>`;
 }
 
 /* ── Gmail security codes ───────────────────────────────── */

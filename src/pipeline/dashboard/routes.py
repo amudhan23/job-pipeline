@@ -152,6 +152,11 @@ class ApiMixin:
             return self._attention(), 200
         if path == "/api/applications":
             return self._applications(), 200
+        if path == "/api/scorecard":
+            from pipeline import outreach
+            pdir = self._pdir()
+            return {"week": {**self._tracker().scorecard(7), "outreach": outreach.stats(pdir, 7)},
+                    "month": {**self._tracker().scorecard(30), "outreach": outreach.stats(pdir, 30)}}, 200
         if path == "/api/autoapply":
             return self._autoapply(), 200
         if path == "/api/crawler":
@@ -167,7 +172,8 @@ class ApiMixin:
         if path == "/api/outreach":
             from pipeline import outreach
             return {"records": outreach.overview(self._pdir()), "hunter": bool(outreach.hunter_key(self._pdir())),
-                    "ai": __import__("pipeline.ai.client", fromlist=["status"]).status(self._pdir())[0]}, 200
+                    "ai": __import__("pipeline.ai.client", fromlist=["status"]).status(self._pdir())[0],
+                    "schools": outreach.schools(self._pdir())}, 200
         if path == "/api/leads":
             from pipeline import leads
             store = leads.LeadStore()
@@ -585,7 +591,7 @@ class ApiMixin:
             except ValueError as e:
                 return {"error": str(e)}, 400
             return {"hunter": bool(outreach.hunter_key(pdir))}, 200
-        m = re.fullmatch(r"/api/outreach/([A-Za-z0-9_.:-]+)/(plan|contacts|domain)", path)
+        m = re.fullmatch(r"/api/outreach/([A-Za-z0-9_.:-]+)/(plan|find|accept|contacts|domain)", path)
         m2 = re.fullmatch(r"/api/outreach/([A-Za-z0-9_.:-]+)/contacts/([a-f0-9]{8})/(\w+)", path)
         job_id = (m or m2).group(1) if (m or m2) else None
         job = self._tracker().get_job(job_id) if job_id else None
@@ -594,6 +600,12 @@ class ApiMixin:
         try:
             if m and m.group(2) == "plan":
                 return outreach.plan(job, pdir), 200
+            if m and m.group(2) == "find":
+                if not ai_client.status(pdir)[0]:
+                    return {"error": "Finding people needs your Anthropic key (My details, AI)."}, 400
+                return outreach.find_people(job, pdir), 200
+            if m and m.group(2) == "accept":
+                return outreach.accept_candidate(job, int(data.get("index", -1)), pdir), 200
             if m and m.group(2) == "contacts":
                 return outreach.add_contact(job, data, pdir), 200
             if m and m.group(2) == "domain":
@@ -612,7 +624,7 @@ class ApiMixin:
             return {"error": str(e).strip("'")}, 404
         except ValueError as e:
             return {"error": str(e)}, 400
-        except ai_client.AIUnavailable as e:
+        except (ai_client.AIUnavailable, RuntimeError) as e:
             return {"error": str(e)}, 400
 
     def _resume_info(self, job_id: str) -> dict:
