@@ -373,7 +373,10 @@ class ApiMixin:
         interviews = [j for j in t.by_status(("interview",)) if not j.get("closed_at")]
         unread = [{"id": j["id"], "company": j["company"], "title": j["title"], "has_pack": bool(interview.load(_folder(pdir, j["id"])))}
                   for j in interviews]
+        from pipeline import autoapply
+        auto = autoapply.load_settings(pdir)
         return {"applied": day["applied"], "applied_target": 10,
+                "auto_on": bool(auto.get("enabled")), "auto_mode": auto.get("mode", "prepare"),
                 "reach_outs": sent["sent"], "reach_target": 3,
                 "to_approve": len(items), "followups_due": len(reach["due"]), "to_contact": len(reach["waiting"]),
                 "interviews": unread, "window": outreach.send_window()}

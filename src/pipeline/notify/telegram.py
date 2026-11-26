@@ -317,8 +317,16 @@ class Telegram:
         applied = [j for j in tracker.by_status(("applied",)) if (j.get("applied_at") or "") >= day]
         from pipeline import outreach
         due = outreach.due_followups(self.dir)
-        self.send(f"☀️ <b>Last 24 hours</b>\n{len(new)} new matching postings\n{len(applied)} applications sent\n"
+        sent = outreach.stats(self.dir, 1)
+        waiting = [j for j in tracker.by_status(("applied",)) if (j.get("applied_at") or "") >= day]
+        window = outreach.send_window()
+        interviews = tracker.by_status(("interview",))
+        self.send(f"☀️ <b>Last 24 hours</b>\n{len(new)} new matching postings\n{len(applied)} of 10 applications sent\n"
+                  f"{sent['sent']} of 3 reach-outs sent\n"
                   + "".join(f"\n• {html.escape(j['company'])}: {html.escape(j['title'][:60])}" for j in applied[:10])
+                  + (f"\n\n🎯 <b>Today</b>\n{window['label']}"
+                     + (f"\n{len(waiting)} recent application(s) still need a note to the hiring manager." if waiting else "")
+                     + (f"\n{len(interviews)} interview(s) in play: read the prep pack on Applied." if interviews else ""))
                   + (f"\n\n📬 <b>Follow-ups due ({len(due)})</b>" + "".join(
                       f"\n• {html.escape(d['contact'])} at {html.escape(d['company'])}: {d['label']}"
                       for d in due[:10]) + "\nOpen Outreach on the dashboard for the drafts." if due else ""))

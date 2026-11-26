@@ -329,7 +329,9 @@ async function pageAttention() {
   const today = td.applied_target ? `<div class="panel today"><h2 style="margin-top:0">Today</h2>
     <div class="today-grid">
       <div><b>${td.applied}</b> of ${td.applied_target} applications ${meter(td.applied, td.applied_target)}
-        <div class="sub">${td.to_approve ? `${td.to_approve} filled and waiting for your OK below.` : "Auto-apply fills the rest as postings open."}</div></div>
+        <div class="sub">${td.to_approve ? `${td.to_approve} filled and waiting for your OK below. ` : ""}${td.auto_on ?
+          `Auto-apply is on (${esc(td.auto_mode)} mode): fresh postings are filled within the hour.` :
+          `<a href="#/auto">Auto-apply is off</a>: turn it on in prepare mode, and fresh postings are filled within the hour for you to approve.`}</div></div>
       <div><b>${td.reach_outs}</b> of ${td.reach_target} reach-outs ${meter(td.reach_outs, td.reach_target)}
         <div class="sub">${td.to_contact ? `${td.to_contact} application${td.to_contact > 1 ? "s" : ""} with nobody contacted yet. ` : ""}${esc(td.window?.label || "")}</div></div>
       <div><b>${td.followups_due}</b> follow-up${td.followups_due === 1 ? "" : "s"} due<div class="sub">${td.followups_due ? "Listed under Reach out." : "None overdue."}</div></div>
