@@ -237,3 +237,44 @@ def test_send_window_is_tue_to_thu_mornings():
     assert w_["now"] is False and w_["next"].startswith("2026-12-01T08:30") and "Tuesday" in w_["label"]
     c = {"drafts": {"email": "hi"}, "sent_at": None, "followups_sent": []}
     assert "window" in o.next_step(c, datetime(2026, 11, 28, 12, 0))
+
+
+def test_email_ladder_hunter_then_apollo_then_verified_pattern(pdir):
+    """Low-confidence Hunter guess → Apollo → company pattern, each verified
+    when it can be; the runner-up forms are kept for you to decide."""
+    o.save_hunter_key("a" * 40, pdir)
+    o.save_apollo_key("apollo-key-1234567890", pdir)
+    rec = o.add_contact(JOB, {"name": "Priya Raman"}, pdir)
+    cid = rec["contacts"][0]["id"]
+
+    def apollo_reveals(req):
+        if req.url.path == "/v2/email-finder":
+            return httpx.Response(200, json={"data": {"email": "p.raman@acme.com", "score": 35}})
+        if req.url.path == "/api/v1/people/match":
+            assert req.headers["x-api-key"].startswith("apollo") and b"priya" in req.content
+            return httpx.Response(200, json={"person": {"email": "priya.r@acme.com", "email_status": "verified"}})
+        if req.url.path == "/v2/email-verifier":
+            return httpx.Response(200, json={"data": {"status": "valid"}})
+        return httpx.Response(404)
+    c = o.find_email(JOB, cid, pdir, client=_hunter(apollo_reveals), domain="acme.com")["contacts"][0]
+    assert c["email"] == "priya.r@acme.com" and c["email_status"] == "verified"
+    assert "35%" in c["email_note"] and "Apollo" in c["email_note"] and c["email_alternates"] == ["p.raman@acme.com"]
+
+    def apollo_masked(req):
+        if req.url.path == "/v2/email-finder":
+            return httpx.Response(200, json={"data": {"email": None}})
+        if req.url.path == "/api/v1/people/match":
+            return httpx.Response(200, json={"person": {"email": "email_not_unlocked@domain.com"}})
+        if req.url.path == "/v2/domain-search":
+            return httpx.Response(200, json={"data": {"pattern": "{first}.{last}"}})
+        if req.url.path == "/v2/email-verifier":
+            ok = req.url.params["email"] == "priya.raman@acme.com"
+            return httpx.Response(200, json={"data": {"status": "valid" if ok else "invalid"}})
+        return httpx.Response(404)
+    c = o.find_email(JOB, cid, pdir, client=_hunter(apollo_masked))["contacts"][0]
+    assert c["email"] == "priya.raman@acme.com" and c["email_status"] == "verified"
+    assert "masked" in c["email_note"] and "Hunter verified it" in c["email_note"]
+    assert "priya@acme.com" in c["email_alternates"]
+
+    with pytest.raises(ValueError):
+        o.save_apollo_key("nope", pdir)

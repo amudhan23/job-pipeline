@@ -31,6 +31,7 @@ import httpx
 
 FILE = "outreach.json"
 HUNTER_FILE = "hunter_key"
+APOLLO_FILE = "apollo_key"
 FOLLOW_UP_DAYS = (4, 9)          # after the first message
 
 
@@ -337,6 +338,67 @@ def save_hunter_key(key: str, private_dir: Path | None = None) -> None:
     os.chmod(p, 0o600)
 
 
+def apollo_key(private_dir: Path | None = None) -> str:
+    env = os.environ.get("APOLLO_API_KEY", "").strip()
+    if env:
+        return env
+    try:
+        return (_pdir(private_dir) / APOLLO_FILE).read_text().strip()
+    except OSError:
+        return ""
+
+
+def save_apollo_key(key: str, private_dir: Path | None = None) -> None:
+    key = key.strip()
+    p = _pdir(private_dir) / APOLLO_FILE
+    if not key:
+        p.unlink(missing_ok=True)
+        return
+    if not re.fullmatch(r"[A-Za-z0-9_-]{16,80}", key):
+        raise ValueError("That doesn't look like an Apollo API key.")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(key)
+    os.chmod(p, 0o600)
+
+
+_APOLLO = "https://api.apollo.io/api/v1"
+
+
+def apollo_match(first: str, last: str, domain: str, company: str, key: str, client: httpx.Client) -> tuple[str, str]:
+    """Apollo's people-match for one person: (email, note). Free keys get a
+    masked address back (email_not_unlocked@…), which counts as not found."""
+    try:
+        r = client.post(f"{_APOLLO}/people/match", headers={"x-api-key": key, "Content-Type": "application/json"},
+                        json={"first_name": first, "last_name": last, "domain": domain,
+                              "organization_name": company, "reveal_personal_emails": False})
+    except httpx.HTTPError as e:
+        return "", f"Couldn't reach Apollo ({type(e).__name__})."
+    if r.status_code in (401, 403):
+        return "", "Apollo rejected the key."
+    if r.status_code == 429:
+        return "", "Apollo's credits are used up for now."
+    if r.status_code != 200:
+        return "", f"Apollo answered {r.status_code}."
+    person = (r.json() or {}).get("person") or {}
+    email = str(person.get("email") or "").strip()
+    if not email or "not_unlocked" in email or email.startswith("email_") or "@" not in email:
+        return "", "Apollo has no revealed address for them (a free key returns masked results)."
+    status = str(person.get("email_status") or "")
+    return email, f"Apollo{', ' + status if status else ''}"
+
+
+def hunter_verify(email: str, key: str, client: httpx.Client) -> str:
+    """Hunter's verdict on an address: valid / accept_all / invalid / unknown
+    (half a credit)."""
+    try:
+        r = client.get(f"{_HUNTER}/email-verifier", params={"email": email, "api_key": key})
+    except httpx.HTTPError:
+        return ""
+    if r.status_code != 200:
+        return ""
+    return str((r.json().get("data") or {}).get("status") or "")
+
+
 _HUNTER = "https://api.hunter.io/v2"
 _PAT_MAP = {"{first}": "{first}", "{last}": "{last}", "{f}": "{f}", "{l}": "{l}"}
 
@@ -351,9 +413,14 @@ def hunter_pattern(domain: str, key: str, client: httpx.Client) -> str:
 
 def find_email(job: dict[str, Any], cid: str, private_dir: Path | None = None,
                client: httpx.Client | None = None, domain: str | None = None) -> dict[str, Any]:
-    """Fill a contact's email: Hunter's finder if you saved a key (verified or
-    with its confidence), else the company's Hunter pattern, else the most
-    common pattern. Guesses are always marked unverified."""
+    """Fill a contact's email, climbing a ladder until one is trustworthy:
+    1. Hunter's finder (stops here when it is verified or 70%+ confident);
+    2. Apollo's people match, if you saved a key;
+    3. the company's email pattern from Hunter, applied to the name;
+    4. the most common pattern.
+    Any guess from steps 3-4 is checked with Hunter's verifier when a key is
+    there; the next-best forms are kept as alternates so you can decide.
+    Guesses that could not be verified are marked unverified."""
     rec = record(job, private_dir)
     if domain:
         rec["domain"] = clean_domain(domain)
@@ -363,36 +430,76 @@ def find_email(job: dict[str, Any], cid: str, private_dir: Path | None = None,
         raise ValueError("Set the company's email domain first (e.g. stripe.com).")
     first, last = name_parts(c["name"])
     key = hunter_key(private_dir)
-    found, note, status = "", "", "guessed"
+    akey = apollo_key(private_dir)
+    http = client or httpx.Client(timeout=20)
+    found, status, notes, alternates = "", "", [], []
+
+    def verify(addr: str) -> str:
+        return hunter_verify(addr, key, http) if key and addr else ""
+
+    # 1. Hunter finder
     if key:
-        http = client or httpx.Client(timeout=20)
         try:
             r = http.get(f"{_HUNTER}/email-finder", params={"domain": dom, "first_name": first,
                                                              "last_name": last, "api_key": key})
             if r.status_code == 200:
                 d = r.json().get("data") or {}
                 if d.get("email"):
-                    found = d["email"]
                     v = (d.get("verification") or {}).get("status") or ""
-                    status = "verified" if v == "valid" else "found"
-                    note = f"Hunter, {d.get('score', '?')}% confidence" + (f", {v}" if v else "")
+                    score = int(d.get("score") or 0)
+                    if v == "valid" or score >= 70:
+                        found, status = d["email"], "verified" if v == "valid" else "found"
+                        notes.append(f"Hunter, {score}% confidence" + (f", {v}" if v else ""))
+                    else:
+                        alternates.append(d["email"])
+                        notes.append(f"Hunter's best guess was only {score}% confident")
             elif r.status_code in (401, 403):
-                note = "Hunter rejected the key. "
+                notes.append("Hunter rejected the key")
             elif r.status_code == 429:
-                note = "Hunter's free searches are used up for now. "
-            if not found:
+                notes.append("Hunter's free credits are used up for now")
+        except httpx.HTTPError as e:
+            notes.append(f"Couldn't reach Hunter ({type(e).__name__})")
+    # 2. Apollo
+    if not found and akey:
+        email, note = apollo_match(first, last, dom, rec.get("company", ""), akey, http)
+        if email:
+            v = verify(email)
+            found, status = email, "verified" if v == "valid" else "found"
+            notes.append(note + (f"; Hunter says {v}" if v else ""))
+        else:
+            notes.append(note.rstrip("."))
+    # 3. the company's pattern, 4. the common pattern — each checked when possible
+    if not found:
+        candidates: list[tuple[str, str]] = []
+        if key:
+            try:
                 pat = hunter_pattern(dom, key, http)
                 if pat:
-                    found = from_pattern(pat, first, last, dom)
-                    note += f"Built from {dom}'s pattern on Hunter ({pat}); not verified."
-        except httpx.HTTPError as e:
-            note = f"Couldn't reach Hunter ({type(e).__name__}). "
-    if not found:
-        g = guesses(c["name"], dom)
-        found = g[0] if g else ""
-        note += ("Most common pattern; not verified. Other likely forms: " + ", ".join(g[1:4])) if g else \
-            "Couldn't form a guess from that name."
-    c["email"], c["email_status"], c["email_note"] = found, status if found else "", note.strip()
+                    built = from_pattern(pat, first, last, dom)
+                    if built:
+                        candidates.append((built, f"built from {dom}'s pattern on Hunter ({pat})"))
+            except httpx.HTTPError:
+                pass
+        for g in guesses(c["name"], dom):
+            if g not in [x for x, _ in candidates]:
+                candidates.append((g, "common pattern"))
+        for addr, how in candidates[:2]:          # at most one credit of verification
+            v = verify(addr)
+            if v == "valid":
+                found, status = addr, "verified"
+                notes.append(f"{how}; Hunter verified it")
+                break
+            if v == "invalid":
+                notes.append(f"{addr} is invalid per Hunter")
+                continue
+            if not found:
+                found, status = addr, "guessed"
+                notes.append(f"{how}; not verified" + (f" (Hunter: {v})" if v else ""))
+                break
+        alternates += [a for a, _ in candidates if a != found][:3]
+    c["email"], c["email_status"] = found, status if found else ""
+    c["email_note"] = ("; ".join(n for n in notes if n) or "Couldn't form a guess from that name.").strip()
+    c["email_alternates"] = [a for a in dict.fromkeys(alternates) if a and a != found][:3]
     return _put(rec, private_dir)
 
 

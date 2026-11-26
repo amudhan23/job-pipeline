@@ -172,6 +172,7 @@ class ApiMixin:
         if path == "/api/outreach":
             from pipeline import outreach
             return {"records": outreach.overview(self._pdir()), "hunter": bool(outreach.hunter_key(self._pdir())),
+                    "apollo": bool(outreach.apollo_key(self._pdir())),
                     "ai": __import__("pipeline.ai.client", fromlist=["status"]).status(self._pdir())[0],
                     "schools": outreach.schools(self._pdir())}, 200
         if path == "/api/leads":
@@ -591,6 +592,12 @@ class ApiMixin:
             except ValueError as e:
                 return {"error": str(e)}, 400
             return {"hunter": bool(outreach.hunter_key(pdir))}, 200
+        if path == "/api/outreach/apollo-key":
+            try:
+                outreach.save_apollo_key(str(data.get("key", "")), pdir)
+            except ValueError as e:
+                return {"error": str(e)}, 400
+            return {"apollo": bool(outreach.apollo_key(pdir))}, 200
         m = re.fullmatch(r"/api/outreach/([A-Za-z0-9_.:-]+)/(plan|find|accept|contacts|domain)", path)
         m2 = re.fullmatch(r"/api/outreach/([A-Za-z0-9_.:-]+)/contacts/([a-f0-9]{8})/(\w+)", path)
         job_id = (m or m2).group(1) if (m or m2) else None

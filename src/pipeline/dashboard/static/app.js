@@ -1032,7 +1032,8 @@ function contactCard(r, c) {
   return `<div class="contact" data-cid="${esc(c.id)}">
     <div class="top"><div><div class="name">${esc(c.name)} <span class="tag plain">${esc(c.kind)}</span></div>
       <div class="sub">${esc(c.title || "")}${c.linkedin ? ` · <a href="${esc(c.linkedin.startsWith("http") ? c.linkedin : "https://" + c.linkedin)}" target="_blank" rel="noopener">LinkedIn</a>` : ""}</div>
-      <div class="sub">${c.email ? `${esc(c.email)} ${emailTag(c)}` : "No email yet"}${c.email_note ? `<br><span class="note">${esc(c.email_note)}</span>` : ""}</div></div>
+      <div class="sub">${c.email ? `${esc(c.email)} ${emailTag(c)}` : "No email yet"}${c.email_note ? `<br><span class="note">${esc(c.email_note)}</span>` : ""}
+        ${(c.email_alternates || []).length ? `<br><span class="note">Other likely forms: ${c.email_alternates.map(a => `<a href="#" data-use-email="${esc(a)}">${esc(a)}</a>`).join(", ")}</span>` : ""}</div></div>
       <div>${step}</div></div>
     <div class="bar">
       <button data-c="email">${c.email ? "Find email again" : "Find email"}</button>
@@ -1071,17 +1072,25 @@ async function drawOutreach() {
         "<option value=''>No other applications yet</option>"}</select>
       <div class="hint">Or press Reach out on any row under Applied.</div></div>
     <div class="field"><label for="or-hunter">Hunter API key (optional)</label>
-      <input type="password" id="or-hunter" style="width:100%" placeholder="${d.hunter ? "Saved. Paste a new one to replace it" : "Free plan: 25 searches a month"}" autocomplete="off">
-      <div class="hint">With a key, emails come from Hunter with a confidence score. Without one, they're pattern guesses marked unverified.</div></div>
+      <input type="password" id="or-hunter" style="width:100%" placeholder="${d.hunter ? "Saved. Paste a new one to replace it" : "Free plan: 50 credits a month"}" autocomplete="off">
+      <div class="hint">Emails are found in order: Hunter's finder, then Apollo, then the company's pattern, each verified when possible. Without keys they're pattern guesses marked unverified.</div></div>
+    <div class="field"><label for="or-apollo">Apollo API key (optional)</label>
+      <input type="password" id="or-apollo" style="width:100%" placeholder="${d.apollo ? "Saved. Paste a new one to replace it" : "Settings → Integrations → API in Apollo"}" autocomplete="off">
+      <div class="hint">Second source when Hunter is unsure. A free Apollo key returns masked addresses, which are ignored; a paid seat reveals them.</div></div>
     </div><div class="bar"><button class="primary" id="or-start" ${options.length ? "" : "disabled"}>Plan outreach</button>
-      <button class="quiet" id="or-key">Save key</button>${d.hunter ? `<button class="quiet" id="or-key-del">Remove key</button>` : ""}
+      <button class="quiet" id="or-key">Save keys</button>${d.hunter || d.apollo ? `<button class="quiet" id="or-key-del">Remove keys</button>` : ""}
       ${d.ai ? "" : `<span class="note warn">Add your Anthropic key on My details to get team-specific titles and drafts.</span>`}</div></div>`;
   $("#or-start").onclick = () => $("#or-job").value && startOutreach($("#or-job").value, $("#or-start")).then(drawOutreach);
   $("#or-key").onclick = async () => {
-    try { await api("/api/outreach/hunter-key", { key: $("#or-hunter").value }); toast("Hunter key saved."); drawOutreach(); }
-    catch (e) { toast(e.message, true); }
+    try {
+      if ($("#or-hunter").value) await api("/api/outreach/hunter-key", { key: $("#or-hunter").value });
+      if ($("#or-apollo").value) await api("/api/outreach/apollo-key", { key: $("#or-apollo").value });
+      toast("Saved."); drawOutreach();
+    } catch (e) { toast(e.message, true); }
   };
-  if ($("#or-key-del")) $("#or-key-del").onclick = async () => { await api("/api/outreach/hunter-key", { key: "" }); toast("Removed."); drawOutreach(); };
+  if ($("#or-key-del")) $("#or-key-del").onclick = async () => {
+    await api("/api/outreach/hunter-key", { key: "" }); await api("/api/outreach/apollo-key", { key: "" }); toast("Removed."); drawOutreach();
+  };
 
   const box = $("#or-list");
   if (!d.records.length) { box.innerHTML = `<div class="panel empty"><strong>No outreach yet.</strong>Pick a job above to see whom to contact.</div>`; return; }
@@ -1154,6 +1163,11 @@ async function drawOutreach() {
           if (act === "sent") toast("Marked sent. Follow-up 1 is due in 4 days.");
           drawOutreach();
         } catch (err) { toast(err.message, true); if (busy) { b.disabled = false; b.textContent = "Try again"; } }
+      });
+      $$("[data-use-email]", card).forEach(a => a.onclick = async e => {
+        e.preventDefault();
+        try { await api(`/api/outreach/${job}/contacts/${cid}/edit`, { email: a.dataset.useEmail }); toast("Using that address (marked yours)."); drawOutreach(); }
+        catch (err) { toast(err.message, true); }
       });
       $$("[data-copy]", card).forEach(b => b.onclick = async () => {
         try { await navigator.clipboard.writeText(b.dataset.copy); toast("Copied."); } catch { toast("Couldn't copy; select the text instead.", true); }
