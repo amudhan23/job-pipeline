@@ -741,8 +741,14 @@ def render(resume: dict[str, Any], details: dict[str, str], pt: int = 10) -> str
     if resume.get("skills"):
         out.append(r"\section{Technical Skills}")
         out.append(r" \\ ".join(rf"\textbf{{{e(s['label'])}:}} {e(s['items'])}" for s in resume["skills"]))
-    for x in resume.get("extras") or []:
-        out.append(rf"\section{{{e(x.get('label', ''))}}}{e(x.get('text', ''))}")
+    extras = [x for x in (resume.get("extras") or []) if x.get("text")]
+    if extras:
+        # One section for all of them, one labelled line each: three separate
+        # sections cost three headings and were the first thing trimmed
+        labels = [x.get("label", "").strip() for x in extras]
+        title = labels[0] if len(labels) == 1 else " \\& ".join(e(lb) for lb in labels[:3])
+        out.append(rf"\section{{{title if len(labels) > 1 else e(title)}}}")
+        out.append("\\\\[-2pt]\n".join(rf"{{\small\textbf{{{e(x.get('label', ''))}:}} {e(x.get('text', ''))}}}" for x in extras))
     out.append(r"\end{document}")
     return "\n".join(out)
 
