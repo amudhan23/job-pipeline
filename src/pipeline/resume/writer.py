@@ -375,7 +375,7 @@ HOW TO WRITE A BULLET.
   services end to end) than for a data team (query tuning, batch jobs).
 - A project's "stack" shows only the 2-4 technologies this job cares about,
   never every tool used. Skills list only what's relevant to this job.
-- One to two lines each: 120-200 characters, never more. Cut the why-story;
+- One line where possible, two at most: 100-170 characters. Cut the why-story;
   keep what, how and the result. Bold 2-3 short terms per bullet, the ones a
   recruiter scans for (**Spring Boot**, **40%**, **10K+ daily requests**);
   never a whole phrase.
@@ -452,7 +452,7 @@ Check, and fix what fails:
 - Skills hold only what's relevant here; drop the rest.
 - Terms from the plan's keyword list that the applicant honestly has are
   present.
-- Bullets are 120-200 characters, specific, with the profile's numbers, the
+- Bullets are 100-170 characters, specific, with the profile's numbers, the
   2-3 scan terms bolded (never a whole phrase), no filler, no em dashes. About 20-22 in total.
 - Every bullet carries the profile's number for that fact when there is one
   (before→after timings, counts, sizes); add the ones the draft left out.
@@ -622,7 +622,7 @@ _PREAMBLE = r"""\documentclass[letterpaper,SIZEpt]{article}
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
 \usepackage{lmodern}
-\usepackage[letterpaper,top=0.45in,bottom=0.4in,left=0.5in,right=0.5in]{geometry}
+\usepackage[letterpaper,top=0.4in,bottom=0.35in,left=0.5in,right=0.5in]{geometry}
 \usepackage{titlesec}
 \usepackage{enumitem}
 \usepackage[hidelinks]{hyperref}
@@ -633,12 +633,15 @@ _PREAMBLE = r"""\documentclass[letterpaper,SIZEpt]{article}
 \hyphenpenalty=10000          % no words split across lines: parsers read them whole
 \setlength{\parindent}{0pt}
 \titleformat{\section}{\scshape\raggedright\large}{}{0em}{}[\vspace{-3pt}\titlerule]
-\titlespacing*{\section}{0pt}{7pt}{3pt}
+\titlespacing*{\section}{0pt}{5pt}{2pt}
 % Title (bold) with dates at the right; employer and place (italic) below
-\newcommand{\role}[4]{\par\vspace{3pt}{\textbf{#1}\hfill #2\par\textit{#3}\hfill\textit{#4}\par}\vspace{-1pt}}
+\newcommand{\role}[4]{\par\vspace{2.5pt}{\textbf{#1}\hfill #2\par\textit{#3}\hfill\textit{#4}\par}\vspace{-2pt}}
 % Project: name | stack, with the link at the right
-\newcommand{\proj}[2]{\par\vspace{3pt}{#1\hfill #2\par}\vspace{-1pt}}
-\setlist[itemize]{leftmargin=0.22in, label=\textbullet, itemsep=0.5pt, topsep=1pt, parsep=0pt, partopsep=0pt}
+\newcommand{\proj}[2]{\par\vspace{2.5pt}{#1\hfill #2\par}\vspace{-2pt}}
+% Bullet text one size down with tight leading: the usual resume setting,
+% and the difference between 15 bullets on a page and 22
+\setlist[itemize]{leftmargin=0.2in, label=\textbullet, itemsep=0pt, topsep=1pt, parsep=0pt, partopsep=0pt,
+  before=\small\setlength{\baselineskip}{1.08em}, after=\vspace{-1pt}}
 \begin{document}
 """
 
@@ -675,10 +678,13 @@ def render(resume: dict[str, Any], details: dict[str, str], pt: int = 10) -> str
         return bool(a) and k(a) == k(b)
     website = "" if _same(details.get("website", ""), details.get("github", "")) else details.get("website", "")
     links = [(details.get("linkedin", ""), "LinkedIn"), (details.get("github", ""), "GitHub"), (website, "")]
+    # LinkedIn and GitHub as labelled links (the URL is in the link), the
+    # website as its domain: one line, the way a recruiter expects it
     head = r" $\cdot$ ".join([e(c) for c in contact if c] +
-                            [r"\underline{" + _href(u) + "}" for u, _ in links if u])
-    plain = len(" . ".join([c for c in contact if c] + [u for u, _ in links if u]))
-    size = r"\small" if plain <= 125 else r"\footnotesize"     # keep contact details on one line
+                            [r"\underline{" + _href(u, lab or re.sub(r"^https?://(www\.)?", "", u).rstrip("/")) + "}"
+                             for u, lab in links if u])
+    plain = len(" . ".join([c for c in contact if c] + [lab or u for u, lab in links if u]))
+    size = r"\small" if plain <= 110 else r"\footnotesize"     # keep contact details on one line
     out = [_PREAMBLE.replace("SIZEpt", f"{pt}pt"), rf"\begin{{center}}{{\huge \textbf{{{e(name)}}}}}\\[2pt]{size} {head}\end{{center}}",
            r"\vspace{-10pt}"]
 
@@ -794,11 +800,13 @@ def fit_one_page(resume: dict[str, Any], details: dict[str, str], out: Path) -> 
             return pdf, trimmed
         projects = resume.get("projects") or []
         others = [x for x in resume.get("experience") or [] if x is not main]
-        # A third project bullet goes before a patent, award or publication:
-        # those are one line each and carry weight the bullet doesn't.
+        # A third project bullet, then the main job's sixth, go before a patent,
+        # award or publication: those are one line each and carry weight.
         if [p for p in projects if len(p["bullets"]) > 2]:
             target = max(projects, key=lambda x: len(x["bullets"]))
             trimmed.append(target["bullets"].pop())
+        elif main and len(main["bullets"]) > 5:
+            trimmed.append(main["bullets"].pop())
         elif len(resume.get("skills") or []) > 3:
             trimmed.append(f"skills line {resume['skills'].pop()['label']}")
         elif resume.get("extras"):
