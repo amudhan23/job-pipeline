@@ -471,10 +471,11 @@ def test_experience_renders_newest_first_whatever_the_writer_sent():
     recruiters read reverse-chronological, emphasis belongs in the bullets."""
     resume = {"experience": [
         {"title": "Software Engineer", "company": "IBM", "dates": "Jan 2021 -- Jul 2024", "bullets": ["a"]},
-        {"title": "Intern", "company": "Sahara", "dates": "Jun 2025 -- Aug 2025", "bullets": ["b"]},
+        {"title": "Intern", "company": "Sahara", "dates": "Jun 2025 -- Aug 2025 (11-week internship)", "bullets": ["b"]},
+        {"title": "Blockchain Developer", "company": "Tokenizer", "dates": "Dec 2019 -- Jun 2020", "bullets": ["d"]},
         {"title": "Research Affiliate", "company": "NYU", "dates": "Jul 2026 -- Present", "bullets": ["c"]}]}
     tex = w.render(resume, {"first_name": "A", "last_name": "B"})
-    assert tex.index("Research Affiliate") < tex.index("Intern") < tex.index("Software Engineer")
+    assert tex.index("Research Affiliate") < tex.index("Intern") < tex.index("Software Engineer") < tex.index("Blockchain Developer")
     # two project links render as repo · live
     tex = w.render({"projects": [{"name": "Commentator", "stack": "TypeScript", "bullets": ["x"],
                                   "link": "https://github.com/a/commentator | https://commentator.onrender.com"}]},

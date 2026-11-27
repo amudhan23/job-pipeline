@@ -657,15 +657,17 @@ _MONTHS = {m: i for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun",
 
 def _role_end(x: dict[str, Any]) -> tuple[int, int, int]:
     """Sort key for a role's end date: present first, then newest. Dates
-    read like "Jan 2021 -- Jul 2024", "2025 - Present", "Sep 2024 – May 2026"."""
+    read like "Jan 2021 -- Jul 2024", "2025 - Present", "Jun 2025 – Aug 2025
+    (11-week internship)": the last month-year in the string is the end."""
     d = str(x.get("dates") or "")
-    end = re.split(r"\s*(?:--|–|—|-|to)\s*", d)[-1].strip().lower() if d else ""
-    if not end or "present" in end or "now" in end or "current" in end:
+    if re.search(r"\b(present|now|current)\b", d, re.I):
         start = re.search(r"(20\d\d|19\d\d)", d)
         return (1, int(start.group(1)) if start else 0, 12)
-    y = re.search(r"(20\d\d|19\d\d)", end)
-    m = next((v for k, v in _MONTHS.items() if k in end), 6)
-    return (0, int(y.group(1)) if y else 0, m)
+    found = re.findall(r"(?:([A-Za-z]{3})[a-z]*\.?\s+)?((?:20|19)\d\d)", d)
+    if not found:
+        return (0, 0, 0)
+    mon, year = found[-1]
+    return (0, int(year), _MONTHS.get(mon.lower(), 6) if mon else 6)
 
 
 def render(resume: dict[str, Any], details: dict[str, str], pt: int = 10) -> str:
