@@ -481,3 +481,20 @@ def test_experience_renders_newest_first_whatever_the_writer_sent():
                                   "link": "https://github.com/a/commentator | https://commentator.onrender.com"}]},
                    {"first_name": "A", "last_name": "B"})
     assert "{repo}" in tex and "{live}" in tex and "commentator.onrender.com" in tex
+
+
+def test_rules_persist_and_bind_every_build(tmp_path):
+    """The chat got better because corrections stayed in its context; here
+    they stay in resume_rules.md and go into every plan/write/review call."""
+    w.save_profile(PROFILE, tmp_path)
+    ai.save_key(KEY, tmp_path)
+    assert w.load_rules(tmp_path) == ""
+    rules = w.add_rule("Never mention Angular", tmp_path)
+    rules = w.add_rule("  Lead with  req-guard for Rust roles ", tmp_path)
+    assert rules.count("\n") == 2 and "Never mention Angular" in rules and "Lead with req-guard" in rules
+    sysb = w._system(PROFILE, "instr", tmp_path)
+    assert sysb[0]["text"].startswith("<career_profile>") and "<applicant_rules>" in sysb[1]["text"] \
+        and "Never mention Angular" in sysb[1]["text"] and sysb[2]["text"] == "instr"
+    assert w.add_rule("   ", tmp_path) == rules                      # blank adds nothing
+    w.save_rules("", tmp_path)
+    assert len(w._system(PROFILE, "instr", tmp_path)) == 2            # no rules, no block

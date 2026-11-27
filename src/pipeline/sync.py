@@ -16,7 +16,7 @@ from typing import Any
 
 # What a cloud copy needs to work on its own.
 FILES = [
-    "applicant.json", "resume.pdf", "career_profile.md", "reference_resume.pdf", "answers.json", "pending_questions.json",
+    "applicant.json", "resume.pdf", "career_profile.md", "reference_resume.pdf", "resume_rules.md", "answers.json", "pending_questions.json",
     "ai_drafts.json", "autoapply.json", "approvals.json", "ai_settings.json", "telegram.json",
     "telegram_state.json", "mail.json", "outreach.json", "searches.json", "leads.json", "hirebase.json",
 ]

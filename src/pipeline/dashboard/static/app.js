@@ -724,6 +724,10 @@ async function showResume(jobId, title) {
           aimed at the title only. Paste the description below and rebuild.</p>` : ""}
         ${r.had_description === false ? `<textarea id="rb-jd" class="profile-text" style="min-height:120px"
           placeholder="Paste the job description here"></textarea>` : ""}
+        <div class="field" style="margin-top:10px"><label for="rb-rule">What should change? (kept as a rule for every resume from now on)</label>
+          <div class="bar"><input id="rb-rule" type="text" class="grow" placeholder="e.g. Lead with req-guard for Rust roles; never list Angular; keep the IBM Azure bullet">
+          <button data-rule>Save rule and rebuild</button></div>
+          <div class="hint">Your rules so far are on the Career profile page.</div></div>
         ${r.plan ? `<h2>What the job needs</h2><p class="note">${esc(r.plan.job_summary || "")}</p>
           ${(r.plan.requirements || []).map(q => `<div class="change"><div class="before"><b>${q.must ? "Must" : "Nice"}:</b>
             ${esc(q.need)}</div><div class="${q.strength === "none" ? "kept-no" : "after"}">${esc(q.strength)}: ${esc(q.evidence)}</div></div>`).join("")}
@@ -748,6 +752,14 @@ async function showResume(jobId, title) {
           <textarea id="rb-jd" class="profile-text" style="min-height:120px" placeholder="Paste the job description here"></textarea></details>
         <div class="bar"><button class="primary" data-rb="1">${r.last_error ? "Try again" : "Build resume"}</button>
         <button class="quiet" data-close>Close</button></div>`}`;
+    const ruleBtn = $("[data-rule]", body);
+    if (ruleBtn) ruleBtn.onclick = async () => {
+      const text = ($("#rb-rule", body).value || "").trim();
+      if (!text) { toast("Write what should change first.", true); return; }
+      try { await api("/api/resume-rules", { add: text }); toast("Rule saved. Rebuilding with it."); }
+      catch (e) { toast(e.message, true); return; }
+      $("[data-rb='1']", body).click();
+    };
     $$("[data-rb]", body).forEach(b => b.onclick = async () => {
       b.disabled = true;
       const t0 = Date.now();
@@ -1028,11 +1040,19 @@ async function pageCareer() {
       <div class="bar"><label class="btn file-btn">Upload a reference resume (PDF)<input type="file" id="cp-ref" accept="application/pdf" hidden></label></div>
       <p class="note">A resume whose look and writing you like. New resumes copy its style: bullets per role, length, tone,
       what it bolds. Never its facts; those only come from your profile.</p></div>
+    <div class="panel"><h2>Resume rules</h2>
+      <p class="note">Your standing instructions for how resumes are written: what you corrected before, so it's never
+      repeated. One per line. They bind every build (never the facts rule). Add one from any resume's dialog too.</p>
+      <textarea id="cp-rules" class="profile-text" style="min-height:140px" placeholder="- Lead with the Rust projects for Rust roles&#10;- Never mention Angular&#10;- Keep bullets to one line where possible">${esc(d.rules || "")}</textarea>
+      <div class="bar"><button id="cp-rules-save">Save rules</button></div></div>
     <div class="panel" id="cp-li"><h2>LinkedIn profile text</h2>
       <p class="note">Recruiter sourcing is the second biggest way interviews start, and recruiters search titles and skills.
       This writes your headline, About and skills list from the profile, aimed at your target roles, every sentence checked.
       You paste them in; nothing here touches your account.</p><div id="cp-li-body">Loading…</div></div>`;
   linkedinPanel();
+  $("#cp-rules-save").onclick = async () => {
+    try { await api("/api/resume-rules", { text: $("#cp-rules").value }); toast("Rules saved."); } catch (e) { toast(e.message, true); }
+  };
   const ta = $("#cp-text");
   const stats = d => {
     $("#cp-stats").innerHTML = d.ready ? `<span><b>${d.roles.length}</b> sections found</span>

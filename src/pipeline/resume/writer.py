@@ -20,6 +20,7 @@ with pdflatex and trimmed bullet by bullet until it fits on one page.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 import re
 import shutil
 import subprocess
@@ -30,6 +31,7 @@ from typing import Any
 from pipeline.resume.tailor import _NUM, _TECH, _WORD
 
 PROFILE_FILE = "career_profile.md"
+RULES_FILE = "resume_rules.md"       # your standing corrections: how you want resumes written
 _CASE_SENSITIVE = {"go", "c", "rest", "r"}     # only tech when written "Go", "C", "REST", "R"
 # Plain words of the trade, not claims of a skill: "HTTP proxy", "REST APIs", "on-call"
 _GENERIC = {"http", "https", "api", "apis", "json", "url", "urls", "cli", "ui", "ux", "io", "cpu", "cpus", "gpu",
@@ -60,6 +62,35 @@ def load_profile(private_dir: Path | None = None) -> str:
         return p.read_text()
     except OSError:
         return ""
+
+
+def load_rules(private_dir: Path | None = None) -> str:
+    """Your standing rules for how resumes are written (what you corrected
+    in the past), kept across builds so every resume obeys them."""
+    try:
+        return (_pdir(private_dir) / RULES_FILE).read_text()
+    except OSError:
+        return ""
+
+
+def save_rules(text: str, private_dir: Path | None = None) -> None:
+    import os
+    p = _pdir(private_dir) / RULES_FILE
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text[:30_000])
+    os.chmod(p, 0o600)
+
+
+def add_rule(text: str, private_dir: Path | None = None) -> str:
+    """Append one correction as a dated rule; returns the rules text."""
+    text = " ".join(text.split())[:600]
+    if not text:
+        return load_rules(private_dir)
+    current = load_rules(private_dir).rstrip()
+    stamp = datetime.now().strftime("%Y-%m-%d")
+    new = (current + "\n" if current else "") + f"- ({stamp}) {text}\n"
+    save_rules(new, private_dir)
+    return new
 
 
 def save_profile(text: str, private_dir: Path | None = None) -> None:
@@ -497,12 +528,19 @@ def _resume_model(private_dir: Path | None) -> str:
     return "sonnet" if model == "haiku" else model
 
 
-def _system(profile: str, instructions: str) -> list[dict]:
+def _system(profile: str, instructions: str, private_dir: Path | None = None) -> list[dict]:
     # The profile goes first and is cached, so the plan, write and review
-    # calls all reuse it (cache is by prefix)
-    return [{"type": "text", "text": f"<career_profile>\n{profile[:60000]}\n</career_profile>",
-             "cache_control": {"type": "ephemeral"}},
-            {"type": "text", "text": instructions}]
+    # calls all reuse it (cache is by prefix). The applicant's standing rules
+    # (their corrections from past builds) come right after it and bind.
+    blocks = [{"type": "text", "text": f"<career_profile>\n{profile[:60000]}\n</career_profile>",
+               "cache_control": {"type": "ephemeral"}}]
+    rules = load_rules(private_dir).strip()
+    if rules:
+        blocks.append({"type": "text", "text": "<applicant_rules>\nThe applicant's standing instructions, from "
+                       "corrections they made to earlier resumes. They override the general guidance below "
+                       "(never the facts rule).\n" + rules[:12000] + "\n</applicant_rules>"})
+    blocks.append({"type": "text", "text": instructions})
+    return blocks
 
 
 def _job_and_style(job: dict[str, Any], private_dir: Path | None) -> str:
@@ -522,7 +560,7 @@ def plan(job: dict[str, Any], profile: str, private_dir: Path | None = None, cli
     """Read the job like a recruiter and decide what the resume should say."""
     from pipeline.ai import client as ai
     from pipeline.ai.context import job_block
-    reply = ai.complete(_system(profile, _PLAN_SYSTEM), job_block(job, limit=12000),
+    reply = ai.complete(_system(profile, _PLAN_SYSTEM, private_dir), job_block(job, limit=12000),
                         purpose=f"resume plan: {job.get('company')} — {job.get('title', '')[:50]}",
                         max_tokens=9000, private_dir=private_dir, client=client, thinking=4000,
                         schema=PLAN_SCHEMA, model=_resume_model(private_dir))
@@ -551,7 +589,7 @@ def draft(job: dict[str, Any], profile: str, private_dir: Path | None = None, cl
     prompt = _job_and_style(job, private_dir)
     if the_plan:
         prompt += f"\n\n<plan>\n{json.dumps(the_plan, indent=1)[:12000]}\n</plan>"
-    reply = ai.complete(_system(profile, _SYSTEM), prompt,
+    reply = ai.complete(_system(profile, _SYSTEM, private_dir), prompt,
                         purpose=f"resume: {job.get('company')} — {job.get('title', '')[:50]}",
                         max_tokens=12000, private_dir=private_dir, client=client,
                         thinking=0 if the_plan else 4000, schema=RESUME_SCHEMA, model=_resume_model(private_dir))
@@ -567,7 +605,7 @@ def review(job: dict[str, Any], profile: str, the_plan: dict[str, Any] | None, r
     if the_plan:
         prompt += f"\n\n<plan>\n{json.dumps(the_plan, indent=1)[:12000]}\n</plan>"
     prompt += f"\n\n<draft>\n{json.dumps(resume, indent=1)}\n</draft>"
-    reply = ai.complete(_system(profile, _REVIEW_SYSTEM), prompt,
+    reply = ai.complete(_system(profile, _REVIEW_SYSTEM, private_dir), prompt,
                         purpose=f"resume review: {job.get('company')} — {job.get('title', '')[:50]}",
                         max_tokens=12000, private_dir=private_dir, client=client, thinking=3000,
                         schema=RESUME_SCHEMA, model=_resume_model(private_dir))

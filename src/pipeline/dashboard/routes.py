@@ -573,6 +573,12 @@ class ApiMixin:
             return self._search_save(data)
         if path.startswith("/api/telegram"):
             return self._telegram_post(path, data)
+        if path == "/api/resume-rules":
+            from pipeline.resume import writer as pw
+            if data.get("add"):
+                return {"rules": pw.add_rule(str(data["add"]), pdir)}, 200
+            pw.save_rules(str(data.get("text", "")), pdir)
+            return {"rules": pw.load_rules(pdir)}, 200
         if path == "/api/career-profile":
             from pipeline.resume import writer as pw
             text = str(data.get("text", ""))
@@ -709,6 +715,7 @@ class ApiMixin:
                           ("_top", "Rules", "Experience", "Projects", "Skills by level", "Education")][:20],
                 "never_claim": pw.never_claim(text) if text else [],
                 "has_reference": (self._pdir() / pw.REFERENCE_FILE).exists(),
+                "rules": pw.load_rules(self._pdir()),
                 "resume_model": __import__("pipeline.ai.client", fromlist=["x"]).load_settings(self._pdir())
                 .get("resume_model", "opus")}
 
