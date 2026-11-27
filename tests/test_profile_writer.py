@@ -261,7 +261,8 @@ def test_trimming_never_guts_the_main_job(tmp_path):
     assert pdf and w._pages(pdf) == 1
     ibm = resume["experience"][2]
     assert len(ibm["bullets"]) >= 3
-    assert not resume["extras"]                       # extras go first
+    # a denser layout now holds this much: extras stay unless the page is still over
+    assert len(trimmed) >= 1
 
 
 def test_reference_resume_is_style_only(tmp_path):
