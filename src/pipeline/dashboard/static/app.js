@@ -58,6 +58,12 @@ const fitTag = j => {
   const tip = [j.ai_summary, ...(j.ai_dealbreakers || []).map(d => `${d.rule}: “${d.quote}”`)].join("\n");
   return `<span class="tag ${cls}" title="${esc(tip)}">${label}</span>`;
 };
+const oddsTag = j => {
+  const o = j.odds; if (!o) return "";
+  const cls = o.label === "good" ? "good" : o.label === "fair" ? "fair" : "low";
+  return `<span class="odds ${cls}" title="${esc((o.why || []).join("; "))}">${esc(o.label)}</span>`;
+};
+
 const statusTag = s => {
   const map = { applied: "good", interview: "good", offer: "good", rejected: "plain", skipped: "plain" };
   return s && s !== "scraped" ? `<span class="tag ${map[s] || "plain"}">${esc(s)}</span>` : "";
@@ -90,8 +96,9 @@ async function setStatus(id, status) {
 
 /* ── Live jobs ───────────────────────────────────────────── */
 
-const feedState = Object.assign({ hours: "all", minScore: 0, fit: "any", sponsor: "any", q: "", hideDone: true, sort: "age" },
+const feedState = Object.assign({ hours: "all", minScore: 0, fit: "any", sponsor: "any", q: "", hideDone: true, sort: "odds" },
   store("feed") || {});
+if (!store("feed_v3")) { feedState.sort = "odds"; localStorage.setItem("feed_v3", "1"); }    // best bets first, once
 // "Today" used to be the default; it only lists roles that opened since the
 // crawler started, so on a fresh install it looks almost empty
 if (!feedState.v) { feedState.hours = "all"; feedState.v = 2; }
@@ -119,8 +126,9 @@ async function pageJobs() {
       <input type="search" id="q" class="grow" placeholder="Search company, title, location" value="${esc(feedState.q)}">
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th></th><th data-sort="age" class="sorted">Opened</th><th data-sort="title">Job</th>
-        <th class="hide-sm">Location</th><th data-sort="score">Score</th><th class="hide-sm">AI fit</th>
+      <thead><tr><th></th><th data-sort="age">Opened</th><th data-sort="title">Job</th>
+        <th class="hide-sm">Location</th><th data-sort="odds" class="sorted" title="How likely an application is to be read and answered: age, company size, level, sponsorship">Odds</th>
+        <th data-sort="score">Score</th><th class="hide-sm">AI fit</th>
         <th class="hide-sm">H-1B</th><th></th></tr></thead>
       <tbody id="rows"></tbody></table></div>`;
   $("#fit").value = feedState.fit; $("#sponsor").value = feedState.sponsor;
@@ -188,6 +196,7 @@ function filtered() {
   });
   const by = {
     age: (a, b) => (a.age_min ?? 1e9) - (b.age_min ?? 1e9),
+    odds: (a, b) => ((b.odds || {}).score || 0) - ((a.odds || {}).score || 0) || b.fit_score - a.fit_score,
     score: (a, b) => b.fit_score - a.fit_score,
     title: (a, b) => `${a.company}${a.title}`.localeCompare(`${b.company}${b.title}`),
   }[feedState.sort];
@@ -221,7 +230,7 @@ function renderRows(fresh = new Set()) {
   $$("th[data-sort]").forEach(th => th.classList.toggle("sorted", th.dataset.sort === feedState.sort));
   const jobs = filtered();
   if (!jobs.length) {
-    rows.innerHTML = `<tr><td colspan="8"><div class="empty"><strong>No jobs match these filters.</strong>
+    rows.innerHTML = `<tr><td colspan="9"><div class="empty"><strong>No jobs match these filters.</strong>
       Widen the time window or lower the score.</div></td></tr>`;
     return;
   }
@@ -232,6 +241,7 @@ function renderRows(fresh = new Set()) {
       <td class="title-cell"><a href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a>
         <div class="co">${esc(j.company)} ${statusTag(j.status)}${j.jd_blocked ? ' <span class="tag stop">JD: no sponsorship</span>' : ""}</div></td>
       <td class="loc hide-sm" title="${esc(j.location)}">${esc(j.location)}</td>
+      <td>${oddsTag(j)}</td>
       <td><span class="score ${scoreClass(j.fit_score)}">${j.fit_score}</span></td>
       <td class="hide-sm">${fitTag(j)}</td>
       <td class="hide-sm">${j.sponsorship && j.sponsorship !== "unknown" ? `<span class="tag plain" title="${j.h1b_filings_count || 0} H-1B filings">${esc(j.sponsorship)}</span>` : ""}</td>
@@ -331,7 +341,8 @@ async function pageAttention() {
       <div><b>${td.applied}</b> of ${td.applied_target} applications ${meter(td.applied, td.applied_target)}
         <div class="sub">${td.to_approve ? `${td.to_approve} filled and waiting for your OK below. ` : ""}${td.auto_on ?
           `Auto-apply is on (${esc(td.auto_mode)} mode): fresh postings are filled within the hour.` :
-          `<a href="#/auto">Auto-apply is off</a>: turn it on in prepare mode, and fresh postings are filled within the hour for you to approve.`}</div></div>
+          `Auto-apply is off, so nothing goes out while you're away. <button class="primary small" id="auto-on">Turn it on (prepare mode)</button>
+           <span class="note">It fills the best-odds fresh postings and waits here for your OK; nothing is sent by itself.</span>`}</div></div>
       <div><b>${td.reach_outs}</b> of ${td.reach_target} reach-outs ${meter(td.reach_outs, td.reach_target)}
         <div class="sub">${td.to_contact ? `${td.to_contact} application${td.to_contact > 1 ? "s" : ""} with nobody contacted yet. ` : ""}${esc(td.window?.label || "")}</div></div>
       <div><b>${td.followups_due}</b> follow-up${td.followups_due === 1 ? "" : "s"} due<div class="sub">${td.followups_due ? "Listed under Reach out." : "None overdue."}</div></div>
@@ -349,6 +360,14 @@ async function pageAttention() {
       ${questions}<div class="bar"><button class="primary" id="saveAns">Save answers</button><span class="note" id="saveNote"></span></div>` :
       `<div class="panel empty"><strong>No open questions.</strong>Every question the bot has met so far has an answer.</div>`}`;
 
+  if ($("#auto-on")) $("#auto-on").onclick = async () => {
+    $("#auto-on").disabled = true;
+    try {
+      const r = await api("/api/autoapply", { enabled: true, mode: "prepare" });
+      toast(r.settings && r.settings.enabled ? "Auto-apply is on in prepare mode." : "Couldn't turn it on; see the Auto-apply page.");
+    } catch (e) { toast(e.message, true); }
+    pageAttention();
+  };
   $$("[data-or-plan]").forEach(b => b.onclick = () => startOutreach(b.closest("[data-or]").dataset.or, b));
   $$("[data-or-open]").forEach(b => b.onclick = () => { location.hash = "#/outreach"; });
   $$(".job-block button[data-act]").forEach(b => b.onclick = async () => {

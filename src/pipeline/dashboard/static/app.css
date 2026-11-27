@@ -319,3 +319,11 @@ textarea { width: 100%; font: inherit; padding: 8px 10px; border: 1px solid var(
 .today-grid .sub { font-size: 13px; color: var(--muted); margin-top: 4px; }
 .meter { display: inline-block; width: 70px; height: 6px; background: var(--line-soft); border-radius: 3px; vertical-align: middle; margin-left: 6px; overflow: hidden; }
 .meter i { display: block; height: 100%; background: var(--accent, #2f6fed); }
+
+/* Interview odds */
+.odds { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 10px; font-weight: 600; white-space: nowrap; cursor: help; }
+.odds.good { background: #d7f0dc; color: #1d5a2a; }
+.odds.fair { background: #fff1c9; color: #6b4e00; }
+.odds.low { background: #eee; color: #666; }
+
+button.small { padding: 3px 10px; font-size: 13px; }

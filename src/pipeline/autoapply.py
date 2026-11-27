@@ -242,7 +242,17 @@ def candidates(tracker, settings: dict[str, Any], private_dir: Path | None = Non
         except ValueError:
             hours = 24.0
         return int(max(hours, 0) // 6)
-    out.sort(key=lambda j: (band(j), -j["fit_score"]))
+    # Interview odds first (age, company size, level, sponsorship), then fit:
+    # the day's allowance goes where an application is most likely to be read
+    from pipeline.odds import odds
+    from pipeline.filters.sponsorship import check_jd_blocks_sponsorship
+    try:
+        from pipeline.utils.config import load_config
+        years = float((load_config().get("profile") or {}).get("years_experience") or 3)
+    except Exception:
+        years = 3.0
+    out.sort(key=lambda j: (-odds({**j, "jd_blocked": check_jd_blocks_sponsorship(j.get("description") or "")},
+                                  years=years, now=now)["score"], band(j), -j["fit_score"]))
     from pipeline.cli import _one_per_application
     return _one_per_application(out)
 

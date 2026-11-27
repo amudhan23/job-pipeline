@@ -86,10 +86,26 @@ def job_card(job: dict, pdir: Path | None = None) -> dict:
     card["jd_blocked"] = check_jd_blocks_sponsorship(job.get("description") or "")
     card["apply_supported"] = bool(application_url(job))
     card["age_min"], card["age_basis"] = _age(job)
+    from pipeline.odds import odds
+    card["odds"] = odds({**job, "jd_blocked": card["jd_blocked"]}, years=_years())
     card["detect_delay_min"] = _delay(job)
     if pdir is not None:
         card["attempted"] = (_folder(pdir, job["id"]) / "report.json").exists()
     return card
+
+
+_YEARS: list[float] = []
+
+
+def _years() -> float:
+    """Years of experience from config (profile.years_experience), read once."""
+    if not _YEARS:
+        try:
+            from pipeline.utils.config import load_config
+            _YEARS.append(float((load_config().get("profile") or {}).get("years_experience") or 3))
+        except Exception:
+            _YEARS.append(3.0)
+    return _YEARS[0]
 
 
 def _parse(ts: str | None) -> datetime | None:
@@ -306,6 +322,8 @@ class ApiMixin:
         jobs = t.open_jobs(max_age_hours=max_age, limit=1500)
         pdir = self._pdir()
         cards = [job_card(j, pdir) for j in jobs]
+        # Best bets first: odds of an answer, then fit
+        cards.sort(key=lambda c: (-(c.get("odds") or {}).get("score", 0), -(c.get("fit_score") or 0)))
         counts = {"open": t.count_open(), "today": t.count_open(24), "shown": len(cards)}
         return {"jobs": cards, "now": datetime.now().isoformat(timespec="seconds"), "counts": counts,
                 "crawler": self._crawler_status(), "can_open_browser": can_open_browser()}
