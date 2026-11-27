@@ -384,6 +384,7 @@ class ApiMixin:
         """Fills in progress, with the step they are on, read from the run
         log: a fill is a fit check, then a resume written for the job (two or
         three minutes), then the form."""
+        from pipeline import autoapply
         runner = autoapply.Runner(self._pdir())
         out = []
         for meta in runner.list(limit=6):
