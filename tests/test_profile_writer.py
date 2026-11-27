@@ -389,8 +389,8 @@ def test_first_real_build_lessons():
     """From the first resume written with the real API (Nov 24)."""
     # 'PMs' is people, not a technology claim: the lead IBM bullet must not be dropped for it
     assert w.supported("Owned **3 backend services** with PMs and designers", "Owned 3 backend services with product managers")[0]
-    # bold is capped at two terms per bullet
-    assert w._cap_bold("Cut **API** times **40%** in **Java** with **Redis**") == "Cut **API** times **40%** in Java with Redis"
+    # bold is capped at three terms per bullet
+    assert w._cap_bold("Cut **API** times **40%** in **Java** with **Redis**") == "Cut **API** times **40%** in **Java** with Redis"
     # LaTeX's curly apostrophe doesn't fail the parse check
     assert w._plain("Built the team’s stack – fast") == "built the team's stack - fast"
 
@@ -463,3 +463,19 @@ def test_trim_takes_the_main_jobs_fifth_bullet_before_a_projects_second(monkeypa
     _, trimmed = w.fit_one_page(resume, {}, Path("/tmp/x.pdf"))
     assert trimmed == ["IBM 5", "IBM 4", "P2 1"]
     assert all(len(p["bullets"]) >= 1 for p in resume["projects"]) and len(resume["experience"][0]["bullets"]) == 4
+
+
+def test_experience_renders_newest_first_whatever_the_writer_sent():
+    """A real build led with IBM (2021-24) over the current research role:
+    recruiters read reverse-chronological, emphasis belongs in the bullets."""
+    resume = {"experience": [
+        {"title": "Software Engineer", "company": "IBM", "dates": "Jan 2021 -- Jul 2024", "bullets": ["a"]},
+        {"title": "Intern", "company": "Sahara", "dates": "Jun 2025 -- Aug 2025", "bullets": ["b"]},
+        {"title": "Research Affiliate", "company": "NYU", "dates": "Jul 2026 -- Present", "bullets": ["c"]}]}
+    tex = w.render(resume, {"first_name": "A", "last_name": "B"})
+    assert tex.index("Research Affiliate") < tex.index("Intern") < tex.index("Software Engineer")
+    # two project links render as repo · live
+    tex = w.render({"projects": [{"name": "Commentator", "stack": "TypeScript", "bullets": ["x"],
+                                  "link": "https://github.com/a/commentator | https://commentator.onrender.com"}]},
+                   {"first_name": "A", "last_name": "B"})
+    assert "{repo}" in tex and "{live}" in tex and "commentator.onrender.com" in tex

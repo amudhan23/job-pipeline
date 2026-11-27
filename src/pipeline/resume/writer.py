@@ -203,8 +203,8 @@ _BOLD = re.compile(r"\*\*(.+?)\*\*")
 _IDIOM = re.compile(r"\b(0|zero)[\s-]*(to|→|-)[\s-]*(1|one)\b|\b24/7\b|\b(first|1st)[\s-]+(pass|time|class)\b", re.I)
 
 
-def _cap_bold(line: str, keep: int = 2) -> str:
-    """At most `keep` bold terms per bullet: bold is for the two words a
+def _cap_bold(line: str, keep: int = 3) -> str:
+    """At most `keep` bold terms per bullet: bold is for the few terms a
     recruiter scans for, and a line that is half bold has none."""
     n = 0
 
@@ -347,15 +347,16 @@ bullet counts, angles, facts and the technologies to show. The rules below
 fill in anything it leaves open.
 
 WHAT TO PICK.
-- Work experience newest first: always the main full-time job (4-5
-  bullets) and internships (2-3 bullets); research roles when they fit the
-  job (2 bullets). Teaching, grading and advisory roles only if the page has
+- Work experience in date order, newest first, always (a current research
+  or part-time role comes before an older full-time job; emphasis goes into
+  the bullets, never the order): the main full-time job (4-5 bullets),
+  internships (2-3 bullets), research roles (2 bullets). Teaching, grading and advisory roles only if the page has
   room after the projects. Never drop the main full-time job.
 - 3-5 projects, the ones closest to this job's stack and problems first;
   1-2 bullets each.
-- About 18-20 bullets in total, which fills one page. Don't write many
-  more expecting them to be cut: overflow is trimmed from the end, not by
-  quality.
+- About 20-22 bullets in total, which fills one page at 10pt. Don't write
+  many more expecting them to be cut: overflow is trimmed from the end, not
+  by quality.
 - Skills: 3-4 lines led by the job's stack, only skills the profile has, at
   the level it states (coursework stays labelled as coursework).
 - Education with relevant coursework; publications or awards if the profile
@@ -375,9 +376,12 @@ HOW TO WRITE A BULLET.
 - A project's "stack" shows only the 2-4 technologies this job cares about,
   never every tool used. Skills list only what's relevant to this job.
 - One to two lines each: 120-200 characters, never more. Cut the why-story;
-  keep what, how and the result. Bold at most 2 short terms per bullet, the
-  ones a recruiter scans for (**Spring Boot**, **40%**); a line that is half
-  bold reads as no bold at all.
+  keep what, how and the result. Bold 2-3 short terms per bullet, the ones a
+  recruiter scans for (**Spring Boot**, **40%**, **10K+ daily requests**);
+  never a whole phrase.
+- NUMBERS. Every bullet whose profile fact has a number carries that number
+  (sizes, counts, speedups, before→after timings, test counts, languages
+  served). A bullet without a number when the profile has one is wrong.
 - No em dashes. No summary section unless the Rules allow one.
 
 Reply with JSON only:
@@ -433,7 +437,7 @@ great coach does in a long conversation with the applicant.
    the profile has. Leave out unrelated ones (blockchain tooling for a
    non-blockchain role, say) unless the job asks for them.
 6. Extras (publications, awards): only if they help for this job.
-About 18-20 bullets in total fills one page. Use only the career profile;
+About 20-22 bullets in total fills one page. Use only the career profile;
 follow its Rules section."""
 
 _REVIEW_SYSTEM = """You are the hiring manager for this job. You have 30 seconds with this
@@ -449,7 +453,13 @@ Check, and fix what fails:
 - Terms from the plan's keyword list that the applicant honestly has are
   present.
 - Bullets are 120-200 characters, specific, with the profile's numbers, the
-  at most 2 scan terms bolded (never a whole phrase), no filler, no em dashes. About 18-20 in total.
+  2-3 scan terms bolded (never a whole phrase), no filler, no em dashes. About 20-22 in total.
+- Every bullet carries the profile's number for that fact when there is one
+  (before→after timings, counts, sizes); add the ones the draft left out.
+- Roles are in date order, newest first, whatever the plan says about
+  emphasis; emphasis goes into the bullets, not the order.
+- Publications, patents and awards from the profile are present as extras
+  when the profile has them.
 
 Facts: only from the career profile, each under its own role or project;
 follow its Rules. Return the full improved resume. In "note", say in one or
@@ -639,6 +649,22 @@ def _href(url: str, label: str = "") -> str:
     return "\\href{" + full.replace("%", "\\%").replace("#", "\\#") + "}{" + tex_escape(shown) + "}"
 
 
+_MONTHS = {m: i for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"), 1)}
+
+
+def _role_end(x: dict[str, Any]) -> tuple[int, int, int]:
+    """Sort key for a role's end date: present first, then newest. Dates
+    read like "Jan 2021 -- Jul 2024", "2025 - Present", "Sep 2024 – May 2026"."""
+    d = str(x.get("dates") or "")
+    end = re.split(r"\s*(?:--|–|—|-|to)\s*", d)[-1].strip().lower() if d else ""
+    if not end or "present" in end or "now" in end or "current" in end:
+        start = re.search(r"(20\d\d|19\d\d)", d)
+        return (1, int(start.group(1)) if start else 0, 12)
+    y = re.search(r"(20\d\d|19\d\d)", end)
+    m = next((v for k, v in _MONTHS.items() if k in end), 6)
+    return (0, int(y.group(1)) if y else 0, m)
+
+
 def render(resume: dict[str, Any], details: dict[str, str], pt: int = 10) -> str:
     e = tex_escape
     name = f"{details.get('first_name', '')} {details.get('last_name', '')}".strip() or "Your Name"
@@ -662,7 +688,7 @@ def render(resume: dict[str, Any], details: dict[str, str], pt: int = 10) -> str
 
     if resume.get("experience"):
         out.append(r"\section{Experience}")
-        for x in resume["experience"]:
+        for x in sorted(resume["experience"], key=_role_end, reverse=True):
             out.append(rf"\role{{{e(x.get('title', ''))}}}{{{e(x.get('dates', ''))}}}"
                        rf"{{{e(x.get('company', ''))}}}{{{e(x.get('location', ''))}}}")
             out.append(bullets(x["bullets"]))
@@ -681,11 +707,14 @@ def render(resume: dict[str, Any], details: dict[str, str], pt: int = 10) -> str
             link = p.get("link", "")
             # One line: name | stack — context, link at the right. The context is
             # dropped (never cut mid-phrase) when the line would wrap.
-            # The writer sometimes gives two links ("live | repo"): keep the first
-            links = [x for x in re.split(r"\s*[|,]\s*|\s+", link.strip()) if x]
+            # Up to two links ("repo | live"): repo and a live site
+            links = [x for x in re.split(r"\s*[|,]\s*|\s+", link.strip()) if x.startswith("http")][:2]
             link = links[0] if links else ""
-            label = (re.sub(r"^https?://(www\.)?", "", link).rstrip("/") if "github.com" in link
-                     else re.sub(r"^https?://(www\.)?([^/]+).*$", r"\2", link)) if link else ""
+            if len(links) == 2:
+                label = " $\\cdot$ ".join("repo" if "github.com" in u or "gitlab.com" in u else "live" for u in links)
+            else:
+                label = (re.sub(r"^https?://(www\.)?", "", link).rstrip("/") if "github.com" in link
+                         else re.sub(r"^https?://(www\.)?([^/]+).*$", r"\2", link)) if link else ""
             # One line only (about 95 characters at this size): the context goes
             # first, then the link shrinks to its host, rather than wrapping
             budget = 95 - len(p.get("name", "")) - len(stack) - 6
@@ -695,7 +724,10 @@ def render(resume: dict[str, Any], details: dict[str, str], pt: int = 10) -> str
                 label = re.sub(r"^([^/]+).*$", r"\1", label)
             left = rf"\textbf{{{e(p.get('name', ''))}}}" + (rf" $|$ \emph{{{e(stack)}}}" if stack else "") \
                 + (rf" --- {e(context)}" if context else "")
-            right = _href(link, label) if link else ""
+            if len(links) == 2:
+                right = " $\\cdot$ ".join(_href(u, "repo" if "github.com" in u or "gitlab.com" in u else "live") for u in links)
+            else:
+                right = _href(link, label) if link else ""
             out.append(rf"\proj{{{left}}}{{{right}}}")
             out.append(bullets(p["bullets"]))
     if resume.get("skills"):
@@ -751,9 +783,11 @@ def fit_one_page(resume: dict[str, Any], details: dict[str, str], out: Path) -> 
     the main job never below three. Returns (pdf, what was trimmed)."""
     trimmed: list[str] = []
     main = _main_role(resume)
-    pdf = build_pdf(resume, details, out, pt=11)      # roomy type when the content allows it
-    if pdf and _pages(pdf) <= 1:
-        return pdf, trimmed
+    n_bullets = sum(len(x["bullets"]) for x in (resume.get("experience") or []) + (resume.get("projects") or []))
+    if n_bullets <= 13:                                # thin content: roomier type rather than white space
+        pdf = build_pdf(resume, details, out, pt=11)
+        if pdf and _pages(pdf) <= 1:
+            return pdf, trimmed
     for _ in range(30):
         pdf = build_pdf(resume, details, out)
         if not pdf or _pages(pdf) <= 1:
