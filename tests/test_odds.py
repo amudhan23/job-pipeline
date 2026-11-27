@@ -47,3 +47,8 @@ def test_no_sponsorship_is_a_long_shot_and_remote_costs_a_little():
 def test_baseline_without_a_company_date_has_unknown_age():
     o = odds(_job(baseline=1, first_seen_at=(NOW - timedelta(days=30)).isoformat()), years=3.5, now=NOW)
     assert "age unknown" in o["why"]
+
+
+def test_a_lead_title_is_docked_at_three_years():
+    lead = odds(_job(title="Full Stack Software Engineering Team Lead", description="Own the stack."), years=3.5, now=NOW)
+    assert any("lead/senior title" in w for w in lead["why"]) and lead["score"] < odds(_job(), years=3.5, now=NOW)["score"]

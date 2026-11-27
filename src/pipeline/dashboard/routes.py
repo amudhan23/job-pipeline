@@ -377,7 +377,33 @@ class ApiMixin:
         ready, why = ai_client.status(pdir)
         reach = self._outreach_queue()
         return {"items": items, "pending": pending, "ai_ready": ready, "ai_why": why,
-                "can_open_browser": can_open_browser(), "outreach": reach, "today": self._today(items, reach)}
+                "can_open_browser": can_open_browser(), "outreach": reach, "today": self._today(items, reach),
+                "working": self._working()}
+
+    def _working(self) -> list[dict]:
+        """Fills in progress, with the step they are on, read from the run
+        log: a fill is a fit check, then a resume written for the job (two or
+        three minutes), then the form."""
+        runner = autoapply.Runner(self._pdir())
+        out = []
+        for meta in runner.list(limit=6):
+            if meta.get("status") != "running":
+                continue
+            text, _ = runner.log(meta["id"], 0)
+            tail = text[-6000:]
+            if "📎 resume attached" in tail or "filled" in tail.split("tailored resume")[-1]:
+                phase = "filling the form"
+            elif "tailored resume" in tail:
+                phase = "filling the form"
+            elif "fit check" in tail:
+                phase = "writing the resume for this job (2-3 minutes)"
+            else:
+                phase = "checking fit"
+            if "needs you" in tail or "Your turn" in tail:
+                phase = "waiting for you in the browser" if "Your turn" in tail else "done, saving"
+            out.append({"id": meta["id"], "label": meta.get("label", ""), "phase": phase,
+                        "started": meta.get("started_at", "")})
+        return out
 
     def _today(self, items: list, reach: dict) -> dict:
         """The day's plan against the targets that produce interviews: ten

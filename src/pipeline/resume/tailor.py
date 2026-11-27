@@ -93,10 +93,14 @@ def ai_config(job: dict[str, Any], config: dict[str, Any], private_dir: Path | N
     ), str(data.get("note", ""))[:300]
 
 
-def resume_filename(details: dict[str, str]) -> str:
+def resume_filename(details: dict[str, str], company: str = "") -> str:
+    """Name_Resume_Company.pdf: the company in the name says, to you and to
+    them, that it was written for this job."""
     name = f"{details.get('first_name', '')}_{details.get('last_name', '')}".strip("_")
     name = re.sub(r"[^A-Za-z0-9_-]", "", name)
-    return f"{name}_Resume.pdf" if name else "Resume.pdf"
+    co = re.sub(r"[^A-Za-z0-9]+", "", re.sub(r"\b(inc|llc|ltd|corp|co)\b\.?", "", company, flags=re.I))[:24]
+    base = f"{name}_Resume" if name else "Resume"
+    return f"{base}_{co}.pdf" if co else f"{base}.pdf"
 
 
 def can_build() -> tuple[bool, str]:
@@ -226,10 +230,15 @@ def tailored_resume(job: dict[str, Any], config: dict[str, Any], details: dict[s
       3. build the PDF; if rewording pushed it past one page, rebuild without it.
     Returns (pdf, note); pdf None on failure."""
     from pipeline.resume.generator import ResumeGenerator
-    name = resume_filename(details)
+    name = resume_filename(details, job.get("company") or "")
     pdf, info = folder / name, folder / "tailor.json"
-    if pdf.exists() and info.exists():
-        return pdf, json.loads(info.read_text()).get("note", "")
+    if info.exists():
+        # built before (possibly under the older Name_Resume.pdf name)
+        old = folder / json.loads(info.read_text()).get("pdf_name", "")
+        if pdf.exists():
+            return pdf, json.loads(info.read_text()).get("note", "")
+        if old.name and old.exists():
+            return old, json.loads(info.read_text()).get("note", "")
     ok, why = can_build()
     if not ok:
         return None, why

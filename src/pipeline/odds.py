@@ -25,6 +25,7 @@ _SMALL = {"ashby", "lever", "workable", "rippling", "wellfound"}
 _LARGE = {"workday", "taleo", "successfactors", "icims", "smartrecruiters", "eightfold"}
 _MASS = re.compile(r"\b(new grad|new graduate|university grad|early career|entry[- ]level|graduate program|"
                    r"campus|class of 20\d\d)\b", re.I)
+_LEAD = re.compile(r"\b(lead|senior|sr\.?|staff|principal|head|manager)\b", re.I)
 _II = re.compile(r"\b(ii|2|iii|3|mid[- ]level|software engineer, (?:product|platform|infrastructure))\b", re.I)
 
 
@@ -100,6 +101,9 @@ def odds(job: dict[str, Any], years: float = 3.0, now: datetime | None = None) -
     elif _II.search(title):
         score += 8
         why.append("mid-level title: fewer applicants, your level")
+    if _LEAD.search(title) and years < 6:
+        score -= 12
+        why.append("lead/senior title: above your years")
 
     # Sponsorship: the hard stop and the proven path
     if job.get("jd_blocked") or str(job.get("sponsorship") or "") == "blocked":

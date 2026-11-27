@@ -77,7 +77,7 @@ async function runApply(jobIds, mode, label) {
   try {
     await api("/api/apply/run", { job_ids: jobIds, mode, label });
     toast({
-      practice: "Filling the form in the background. It shows up under Needs you when it's done.",
+      practice: "Started: fit check, then a resume written for this job, then the form. Three to five minutes; watch it under Needs you.",
       handoff: "A browser is opening with the form filled in. Finish it there and press Submit.",
       submit: "Submitting in the background. Watch it under Auto-apply.",
     }[mode]);
@@ -349,8 +349,14 @@ async function pageAttention() {
       <div><b>${(td.interviews || []).length}</b> interview${(td.interviews || []).length === 1 ? "" : "s"} in play
         <div class="sub">${(td.interviews || []).map(i => `${esc(i.company)}: ${i.has_pack ? "prep pack ready" : "no prep pack yet"}`).join(" · ") || "Mark a job Interview on Applied and the prep pack is written."}</div></div>
     </div></div>` : "";
+  const working = (data.working || []).length ? `<div class="panel working"><h2 style="margin-top:0">Working now</h2>
+    ${data.working.map(w => `<div class="job-block"><div class="top"><div><div class="name">${esc(w.label)}</div>
+      <div class="sub">${esc(w.phase)} · started ${esc((w.started || "").replace("T", " ").slice(0, 16))}</div></div>
+      <div><a href="#/auto" class="btn quiet">Watch the log</a></div></div></div>`).join("")}
+    <p class="note">A fill is three steps: the AI fit check, a resume written for this job, then the form. Three to five minutes each.</p></div>` : "";
   $("#att").innerHTML = `
     ${today}
+    ${working}
     ${data.items.length ? jobs : `<div class="panel empty"><strong>Nothing waiting on you.</strong>
       Use Fill form on a job, or turn on Auto-apply in prepare mode, and filled applications will wait here.</div>`}
     ${reach}

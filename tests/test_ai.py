@@ -372,7 +372,7 @@ def test_tailored_resume_builds_and_is_reused(pdir, tmp_path):
     folder = tmp_path / "app"
     pdf, note = tailor.tailored_resume(job, _config(), {"first_name": "Amudhan", "last_name": "Muthaiah"},
                                        folder, private_dir=pdir, client=fake)
-    assert pdf.name == "Amudhan_Muthaiah_Resume.pdf" and pdf.read_bytes()[:4] == b"%PDF"
+    assert pdf.name.startswith("Amudhan_Muthaiah_Resume_") and pdf.name.endswith(".pdf") and pdf.read_bytes()[:4] == b"%PDF"
     from pipeline.applicant import resume_text
     text = resume_text(pdf.read_bytes())
     assert text.index("Commentator") < text.index("req-guard")           # AI's lead project first
