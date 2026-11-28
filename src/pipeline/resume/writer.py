@@ -895,6 +895,123 @@ def fit_one_page(resume: dict[str, Any], details: dict[str, str], out: Path) -> 
     return build_pdf(resume, details, out), trimmed
 
 
+# ── orphan words ───────────────────────────────────────────────────────
+# A bullet whose last line is "40%." or "in Rust" alone wastes a line and
+# looks careless. Measure the set PDF, find those bullets, and have the model
+# cut a few words — never a number, never a named tool — then set it again.
+
+_ORPHAN_PT = 62          # a continuation line narrower than this (~12 characters) is an orphan
+_CID = re.compile(r"\(cid:\d+\)")
+
+
+def orphans(pdf: Path) -> list[tuple[str, str, int]]:
+    """Bullets set with an orphan: (bullet text as set, the orphan line,
+    characters to cut). Needs pdfminer's layout; otherwise nothing."""
+    try:
+        from pdfminer.high_level import extract_pages
+        from pdfminer.layout import LTTextContainer, LTTextLine
+    except ImportError:
+        return []
+    rows: list[tuple[float, float, float, str]] = []
+    try:
+        for n, page in enumerate(extract_pages(str(pdf))):
+            for box in page:
+                if isinstance(box, LTTextContainer):
+                    for ln in box:
+                        if isinstance(ln, LTTextLine):
+                            text = _CID.sub("", ln.get_text()).strip().lstrip("\u2022 ")
+                            rows.append((n * 10000 - ln.y1, ln.x0, ln.x1, text))
+    except Exception:
+        return []
+    rows.sort(key=lambda r: (round(r[0]), r[1]))          # top to bottom, then left to right
+    lines = [(x0, x1, text) for _y, x0, x1, text in rows]
+    out: list[tuple[str, str, int]] = []
+    i = 0
+    while i < len(lines):
+        x0, x1, text = lines[i]
+        # a bullet starts with the bullet glyph (stripped above) and hangs 8–14pt left of its text
+        group = [text]
+        j = i + 1
+        while j < len(lines) and 6 <= lines[j][0] - x0 <= 16 and lines[j][2]:
+            group.append(lines[j][2])
+            j += 1
+        if len(group) > 1:
+            lx0, lx1, last = lines[j - 1]
+            if lx1 - lx0 < _ORPHAN_PT:
+                cut = max(3, int((lx1 - lx0) / 4.6) + 2)
+                out.append((" ".join(group), last, cut))
+        i = j if j > i + 1 else i + 1
+    return out
+
+
+def _bullet_key(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", _plain(text.replace("**", "")))[:28]
+
+
+def _match_bullets(resume: dict[str, Any], found: list[tuple[str, str, int]]) -> list[tuple[list, int, int]]:
+    """(bullet list, index, characters to cut) for each orphaned bullet."""
+    hits = []
+    for x in (resume.get("experience") or []) + (resume.get("projects") or []):
+        for k, b in enumerate(x.get("bullets") or []):
+            key = _bullet_key(b)
+            for text, _last, cut in found:
+                if key and _bullet_key(text) == key:
+                    hits.append((x["bullets"], k, cut))
+    return hits
+
+
+_TIGHTEN = """Shorten each resume bullet by about the number of characters asked, so that
+it sets one line shorter. Keep every number, every named tool or technology, every
+**bold** term and the meaning; cut filler words, split verbs, a weaker clause or an
+article. Do not add anything. Return the bullets in the same order."""
+_TIGHTEN_SCHEMA = {"type": "object", "properties": {"bullets": {"type": "array", "items": {"type": "string"}}},
+                   "required": ["bullets"], "additionalProperties": False}
+
+
+def fix_orphans(pdf: Path | None, resume: dict[str, Any], details: dict[str, str], out: Path,
+                private_dir: Path | None = None, client: Any = None, rounds: int = 2) -> tuple[Path | None, list[str]]:
+    """Tighten bullets whose last line is a word or two, rebuild, repeat once.
+    Returns (pdf, what was tightened). Every rewrite must keep the old
+    bullet's numbers and tools (checked with `supported`) and be shorter."""
+    fixed: list[str] = []
+    if not pdf or client is None and not _can_call(private_dir):
+        return pdf, fixed
+    from pipeline.ai import client as ai
+    for _ in range(rounds):
+        hits = _match_bullets(resume, orphans(pdf))
+        if not hits:
+            break
+        prompt = json.dumps([{"bullet": lst[k], "cut_characters": cut} for lst, k, cut in hits], indent=1)
+        try:
+            reply = ai.complete(_TIGHTEN, prompt, purpose="resume: orphan words", max_tokens=2000,
+                                private_dir=private_dir, client=client, schema=_TIGHTEN_SCHEMA, model="sonnet")
+            new = parse_json(reply.text, private_dir, client).get("bullets") or []
+        except Exception:
+            break
+        changed = False
+        for (lst, k, _cut), nb in zip(hits, new):
+            nb = str(nb).strip()
+            old = lst[k]
+            if nb and len(nb) < len(old) and supported(nb, old)[0] and len(_BOLD.findall(nb)) >= len(_BOLD.findall(old)):
+                lst[k] = nb
+                fixed.append(old)
+                changed = True
+        if not changed:
+            break
+        pdf, _ = fit_one_page(resume, details, out)
+        if not pdf:
+            break
+    return pdf, fixed
+
+
+def _can_call(private_dir: Path | None) -> bool:
+    try:
+        from pipeline.ai import client as ai
+        return bool(ai.status(private_dir)[0])
+    except Exception:
+        return False
+
+
 def write_resume(job: dict[str, Any], details: dict[str, str], folder: Path, filename: str,
                  private_dir: Path | None = None, client: Any = None) -> tuple[Path | None, dict[str, Any]]:
     """Draft → check against the profile → fit one page. Returns (pdf, info)."""
@@ -922,10 +1039,13 @@ def write_resume(job: dict[str, Any], details: dict[str, str], folder: Path, fil
     if not clean["experience"]:
         return None, {"error": "nothing in the draft passed the profile check", "dropped": dropped}
     pdf, trimmed = fit_one_page(clean, details, folder / filename)
+    pdf, tightened = fix_orphans(pdf, clean, details, folder / filename, private_dir, client)
+    if tightened:
+        steps.append(f"tightened {len(tightened)} bullet(s) with orphan words")
     parse_problems = ats_check(pdf, clean, details) if pdf else []
     if pdf and not parse_problems:
         steps.append("parses as text")
-    return pdf, {"note": clean.get("note", ""), "dropped": dropped, "trimmed": trimmed, "resume": clean,
+    return pdf, {"note": clean.get("note", ""), "dropped": dropped, "trimmed": trimmed, "tightened": tightened, "resume": clean,
                  "plan": the_plan, "steps": steps, "had_description": bool((job.get("description") or "").strip()),
                  "parse_problems": parse_problems}
 

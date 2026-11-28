@@ -517,3 +517,26 @@ def test_writer_can_set_header_location_projects_title_and_role_links():
     # the check keeps those fields
     clean, _ = w.check({**resume, "skills": [], "education": [], "extras": []}, PROFILE)
     assert clean["header_location"] == "San Francisco, CA" and clean["projects_title"] == "AI Agent Projects"
+
+
+def test_orphan_words_get_tightened_without_new_facts(tmp_path):
+    """A bullet ending with "40%." alone on its last line is shortened by the
+    model; a rewrite that adds a number or drops a tool is refused."""
+    ai.save_key(KEY, tmp_path)
+    orphan = ("Built the team's observability stack from scratch (distributed tracing, metrics, alerting), "
+              "cutting production incidents 40%.")
+    resume = {"experience": [{"company": "IBM", "title": "Engineer", "location": "India", "dates": "Jan 2021 - Jul 2024",
+                              "bullets": [orphan, "Tuned PostgreSQL queries and added Redis caching, p95 down 60%."]}],
+              "projects": [], "skills": [{"label": "Languages", "items": "Java"}], "education": [], "extras": []}
+    pdf, _ = w.fit_one_page(resume, {"first_name": "T", "last_name": "U"}, tmp_path / "r.pdf")
+    found = w.orphans(pdf)
+    assert found and found[0][1].startswith("40%")
+    good = "Built the team's observability stack (distributed tracing, metrics, alerting), cutting incidents 40%."
+    bad = "Built the observability stack with Datadog, cutting production incidents 45%."
+    fake = FakeClient(text=json.dumps({"bullets": [bad]}))
+    pdf2, fixed = w.fix_orphans(pdf, resume, {"first_name": "T", "last_name": "U"}, tmp_path / "r.pdf", tmp_path, fake)
+    assert fixed == [] and resume["experience"][0]["bullets"][0] == orphan     # new tool + new number: refused
+    fake = FakeClient(text=json.dumps({"bullets": [good]}))
+    pdf2, fixed = w.fix_orphans(pdf, resume, {"first_name": "T", "last_name": "U"}, tmp_path / "r.pdf", tmp_path, fake)
+    assert fixed == [orphan] and resume["experience"][0]["bullets"][0] == good
+    assert not w.orphans(pdf2)
