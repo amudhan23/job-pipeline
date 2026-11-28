@@ -763,13 +763,6 @@ def render(resume: dict[str, Any], details: dict[str, str], pt: int = 10) -> str
             out.append(rf"\role{{{e(x.get('title', ''))}}}{{{e(x.get('dates', ''))}}}"
                        rf"{{{employer}}}{{{e(x.get('location', ''))}}}")
             out.append(bullets(x["bullets"]))
-    if resume.get("education"):
-        out.append(r"\section{Education}")
-        for ed in resume["education"]:
-            out.append(rf"\role{{{e(ed.get('school', ''))}}}{{{e(ed.get('dates', ''))}}}"
-                       rf"{{{e(ed.get('degree', ''))}}}{{{e(ed.get('location', ''))}}}")
-            if ed.get("detail"):
-                out.append(bullets([ed["detail"]]))
     if resume.get("projects"):
         out.append(rf"\section{{{e((resume.get('projects_title') or '').strip() or 'Projects')}}}")
         for p in resume["projects"]:
@@ -790,6 +783,13 @@ def render(resume: dict[str, Any], details: dict[str, str], pt: int = 10) -> str
             right = " ".join(parts)
             out.append(rf"\proj{{{left}}}{{{right}}}")
             out.append(bullets(p["bullets"]))
+    if resume.get("education"):
+        out.append(r"\section{Education}")
+        for ed in resume["education"]:
+            out.append(rf"\role{{{e(ed.get('school', ''))}}}{{{e(ed.get('dates', ''))}}}"
+                       rf"{{{e(ed.get('degree', ''))}}}{{{e(ed.get('location', ''))}}}")
+            if ed.get("detail"):
+                out.append(bullets([ed["detail"]]))
     if resume.get("skills"):
         out.append(r"\section{Technical Skills}")
         out.append(r" \\ ".join(rf"\textbf{{{e(s['label'])}:}} {e(s['items'])}" for s in resume["skills"]))
