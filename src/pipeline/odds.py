@@ -118,6 +118,11 @@ def odds(job: dict[str, Any], years: float = 3.0, now: datetime | None = None) -
             score += 3
             why.append("has sponsored before")
 
+    # A PERM labour-certification ad is not a real opening
+    if re.search(r"#LI-DNI|labor certification|PERM\b", desc) or re.search(r"\b\d+ years of experience in each of\b", desc, re.I):
+        score -= 45
+        why.append("looks like a PERM ad: not a real opening")
+
     # Remote draws the whole country; a city posting draws the city
     loc = str(job.get("location") or "").lower()
     if "remote" in loc and not re.search(r"new york|san francisco|bay area|nyc", loc):

@@ -291,7 +291,9 @@ def check(resume: dict[str, Any], profile: str) -> tuple[dict[str, Any], list[di
 
     dropped: list[dict] = []
     clean: dict[str, Any] = {"experience": [], "projects": [], "skills": [], "education": [],
-                             "extras": [], "note": str(resume.get("note", ""))[:300]}
+                             "extras": [], "note": str(resume.get("note", ""))[:300],
+                             "header_location": str(resume.get("header_location") or "")[:60],
+                             "projects_title": str(resume.get("projects_title") or "")[:40]}
     for e in resume.get("experience") or []:
         # Company and title together tell apart two roles at one employer
         src = _find(secs, f"{e.get('company', '')} {e.get('title', '')}", "role") or \
@@ -416,8 +418,10 @@ HOW TO WRITE A BULLET.
 - No em dashes. No summary section unless the Rules allow one.
 
 Reply with JSON only:
-{"experience": [{"company": "...", "title": "...", "location": "...", "dates": "...", "bullets": ["..."]}],
- "projects": [{"name": "...", "stack": "...", "link": "...", "context": "e.g. NYU, 4-person team", "bullets": ["..."]}],
+{"header_location": "<city on the header line for this job, or empty for the applicant's default>",
+ "projects_title": "<section title for projects, e.g. Projects, AI Agent Projects, Rust Projects>",
+ "experience": [{"company": "...", "title": "...", "location": "...", "dates": "...", "links": "<repo URLs for this role, space-separated, or empty>", "bullets": ["..."]}],
+ "projects": [{"name": "...", "stack": "...", "link": "<repo and/or live URLs, space-separated>", "context": "e.g. ETHDenver 2026, solo", "bullets": ["..."]}],
  "skills": [{"label": "Languages", "items": "Java, Python, ..."}],
  "education": [{"school": "...", "degree": "...", "dates": "...", "location": "...", "detail": "Coursework: ..."}],
  "extras": [{"label": "Publications", "text": "..."}],
@@ -431,9 +435,11 @@ def _obj(props: dict, required: list[str]) -> dict:
 _STR = {"type": "string"}
 _BULLETS = {"type": "array", "items": _STR}
 RESUME_SCHEMA = _obj({
+    "header_location": _STR,
+    "projects_title": _STR,
     "experience": {"type": "array", "items": _obj(
-        {"company": _STR, "title": _STR, "location": _STR, "dates": _STR, "bullets": _BULLETS},
-        ["company", "title", "location", "dates", "bullets"])},
+        {"company": _STR, "title": _STR, "location": _STR, "dates": _STR, "links": _STR, "bullets": _BULLETS},
+        ["company", "title", "location", "dates", "links", "bullets"])},
     "projects": {"type": "array", "items": _obj(
         {"name": _STR, "stack": _STR, "link": _STR, "context": _STR, "bullets": _BULLETS},
         ["name", "stack", "link", "context", "bullets"])},
@@ -443,7 +449,7 @@ RESUME_SCHEMA = _obj({
         ["school", "degree", "dates", "location", "detail"])},
     "extras": {"type": "array", "items": _obj({"label": _STR, "text": _STR}, ["label", "text"])},
     "note": _STR,
-}, ["experience", "projects", "skills", "education", "extras", "note"])
+}, ["header_location", "projects_title", "experience", "projects", "skills", "education", "extras", "note"])
 
 
 _PLAN_SYSTEM = """You are a senior technical recruiter and the hiring manager for this job,
@@ -684,6 +690,21 @@ _PREAMBLE = r"""\documentclass[letterpaper,SIZEpt]{article}
 """
 
 
+def _repo_name(url: str) -> str:
+    """github.com/a/bulletProofRust → bulletProofRust."""
+    tail = re.sub(r"[/?#].*$", "", re.sub(r"^https?://(www\.)?[^/]+/", "", url.rstrip("/")).split("/")[-1])
+    return tail or re.sub(r"^https?://(www\.)?([^/]+).*$", r"\2", url)
+
+
+def _link_label(url: str) -> str:
+    u = url.lower()
+    if "github.com" in u or "gitlab.com" in u:
+        return "repo"
+    if u.endswith(".pdf") or "report" in u or "paper" in u or "arxiv" in u:
+        return "report"
+    return "live"
+
+
 def _href(url: str, label: str = "") -> str:
     full = url if url.startswith("http") else "https://" + url
     shown = label or re.sub(r"^https?://(www\.)?", "", url).rstrip("/")
@@ -711,7 +732,7 @@ def _role_end(x: dict[str, Any]) -> tuple[int, int, int]:
 def render(resume: dict[str, Any], details: dict[str, str], pt: int = 10) -> str:
     e = tex_escape
     name = f"{details.get('first_name', '')} {details.get('last_name', '')}".strip() or "Your Name"
-    where = details.get("resume_location") or details.get("city", "")
+    where = (resume.get("header_location") or "").strip() or details.get("resume_location") or details.get("city", "")
     contact = [where, details.get("phone", ""), details.get("email", "")]
     def _same(a: str, b: str) -> bool:
         k = lambda u: re.sub(r"^https?://(www\.)?", "", u or "").rstrip("/").lower()
@@ -735,8 +756,12 @@ def render(resume: dict[str, Any], details: dict[str, str], pt: int = 10) -> str
     if resume.get("experience"):
         out.append(r"\section{Experience}")
         for x in sorted(resume["experience"], key=_role_end, reverse=True):
+            employer = e(x.get("company", ""))
+            urls = [u for u in re.split(r"[\s|,]+", str(x.get("links") or "")) if u.startswith("http")][:2]
+            if urls:                                   # repo links on the organisation line, [name]
+                employer += " " + " ".join("[" + _href(u, _repo_name(u)) + "]" for u in urls)
             out.append(rf"\role{{{e(x.get('title', ''))}}}{{{e(x.get('dates', ''))}}}"
-                       rf"{{{e(x.get('company', ''))}}}{{{e(x.get('location', ''))}}}")
+                       rf"{{{employer}}}{{{e(x.get('location', ''))}}}")
             out.append(bullets(x["bullets"]))
     if resume.get("education"):
         out.append(r"\section{Education}")
@@ -746,34 +771,23 @@ def render(resume: dict[str, Any], details: dict[str, str], pt: int = 10) -> str
             if ed.get("detail"):
                 out.append(bullets([ed["detail"]]))
     if resume.get("projects"):
-        out.append(r"\section{Projects}")
+        out.append(rf"\section{{{e((resume.get('projects_title') or '').strip() or 'Projects')}}}")
         for p in resume["projects"]:
             stack = ", ".join([t.strip() for t in (p.get("stack") or "").split(",") if t.strip()][:5])
             context = (p.get("context") or "").strip().rstrip(".")
-            link = p.get("link", "")
-            # One line: name | stack — context, link at the right. The context is
-            # dropped (never cut mid-phrase) when the line would wrap.
-            # Up to two links ("repo | live"): repo and a live site
-            links = [x for x in re.split(r"\s*[|,]\s*|\s+", link.strip()) if x.startswith("http")][:2]
-            link = links[0] if links else ""
-            if len(links) == 2:
-                label = " $\\cdot$ ".join("repo" if "github.com" in u or "gitlab.com" in u else "live" for u in links)
-            else:
-                label = (re.sub(r"^https?://(www\.)?", "", link).rstrip("/") if "github.com" in link
-                         else re.sub(r"^https?://(www\.)?([^/]+).*$", r"\2", link)) if link else ""
-            # One line only (about 95 characters at this size): the context goes
-            # first, then the link shrinks to its host, rather than wrapping
-            budget = 95 - len(p.get("name", "")) - len(stack) - 6
-            if context and len(context) + len(label) > budget:
+            # Name | stack on the left; on the right the links as [repo] [live]
+            # [report], then the event, "solo" or the team size. One line only
+            # (about 95 characters): the context goes first when it won't fit.
+            urls = [u for u in re.split(r"[\s|,]+", str(p.get("link") or "")) if u.startswith("http")][:3]
+            labels = [_link_label(u) for u in urls]
+            budget = 95 - len(p.get("name", "")) - len(stack) - 4 - sum(len(lb) + 3 for lb in labels)
+            if context and len(context) > budget:
                 context = ""
-            if label and len(label) > budget:
-                label = re.sub(r"^([^/]+).*$", r"\1", label)
-            left = rf"\textbf{{{e(p.get('name', ''))}}}" + (rf" $|$ \emph{{{e(stack)}}}" if stack else "") \
-                + (rf" --- {e(context)}" if context else "")
-            if len(links) == 2:
-                right = " $\\cdot$ ".join(_href(u, "repo" if "github.com" in u or "gitlab.com" in u else "live") for u in links)
-            else:
-                right = _href(link, label) if link else ""
+            left = rf"\textbf{{{e(p.get('name', ''))}}}" + (rf" $|$ \emph{{{e(stack)}}}" if stack else "")
+            parts = ["[" + _href(u, lb) + "]" for u, lb in zip(urls, labels)]
+            if context:
+                parts.append(e(context))
+            right = " ".join(parts)
             out.append(rf"\proj{{{left}}}{{{right}}}")
             out.append(bullets(p["bullets"]))
     if resume.get("skills"):

@@ -498,3 +498,22 @@ def test_rules_persist_and_bind_every_build(tmp_path):
     assert w.add_rule("   ", tmp_path) == rules                      # blank adds nothing
     w.save_rules("", tmp_path)
     assert len(w._system(PROFILE, "instr", tmp_path)) == 2            # no rules, no block
+
+
+def test_writer_can_set_header_location_projects_title_and_role_links():
+    """From the applicant's rules: SF header for Bay Area roles, 'AI Agent
+    Projects' as the section title, repo links on the research role's line,
+    [repo] [live] then the event on a project's right side."""
+    resume = {"header_location": "San Francisco, CA", "projects_title": "AI Agent Projects",
+              "experience": [{"title": "Research Affiliate", "company": "NYU Courant", "dates": "Jul 2026 -- Present",
+                              "links": "https://github.com/a/bulletProofRust https://github.com/a/golden-dkg", "bullets": ["x"]}],
+              "projects": [{"name": "IntentGuard", "stack": "Rust", "context": "Raingentic Hackathon 2026, solo",
+                            "link": "https://github.com/a/intentguard https://intentguard.live", "bullets": ["y"]}]}
+    tex = w.render(resume, {"first_name": "A", "last_name": "B", "resume_location": "New York, NY"})
+    assert "San Francisco, CA" in tex and "New York, NY" not in tex
+    assert r"\section{AI Agent Projects}" in tex
+    assert "{bulletProofRust}" in tex and "{golden-dkg}" in tex
+    assert tex.index("{repo}") < tex.index("{live}") < tex.index("Raingentic Hackathon 2026, solo")
+    # the check keeps those fields
+    clean, _ = w.check({**resume, "skills": [], "education": [], "extras": []}, PROFILE)
+    assert clean["header_location"] == "San Francisco, CA" and clean["projects_title"] == "AI Agent Projects"

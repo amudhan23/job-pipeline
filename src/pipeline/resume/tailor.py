@@ -94,13 +94,14 @@ def ai_config(job: dict[str, Any], config: dict[str, Any], private_dir: Path | N
 
 
 def resume_filename(details: dict[str, str], company: str = "") -> str:
-    """Name_Resume_Company.pdf: the company in the name says, to you and to
-    them, that it was written for this job."""
-    name = f"{details.get('first_name', '')}_{details.get('last_name', '')}".strip("_")
-    name = re.sub(r"[^A-Za-z0-9_-]", "", name)
+    """firstLast_Company.pdf (amudhanMuthaiah_Clera.pdf): the company in the
+    name says, to you and to them, that it was written for this job."""
+    first = re.sub(r"[^A-Za-z0-9]", "", details.get("first_name", "")).lower()
+    last = re.sub(r"[^A-Za-z0-9]", "", details.get("last_name", ""))
+    name = first + (last[:1].upper() + last[1:] if last else "")
     co = re.sub(r"[^A-Za-z0-9]+", "", re.sub(r"\b(inc|llc|ltd|corp|co)\b\.?", "", company, flags=re.I))[:24]
-    base = f"{name}_Resume" if name else "Resume"
-    return f"{base}_{co}.pdf" if co else f"{base}.pdf"
+    base = name or "Resume"
+    return f"{base}_{co}.pdf" if co else f"{base}_Resume.pdf"
 
 
 def can_build() -> tuple[bool, str]:
